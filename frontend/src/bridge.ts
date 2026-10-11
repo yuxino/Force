@@ -1,6 +1,6 @@
 import type { Backend, Geometry, Kind, Log, Session, Snapshot, Tag, WeekStats } from './types';
 
-export const fallbackGeometry: Geometry = { gap: 0, top: 22, collapsedWidth: 210, expandedWidth: 432, expandedHeight: 480, hasNotch: true };
+export const fallbackGeometry: Geometry = { compactWidth: 280, compactHeight: 54, panelWidth: 368, panelHeight: 456 };
 
 // Local fixture server for browser QA only. Production requires the Wails native bridge.
 function localBackend(): Backend {
@@ -16,6 +16,8 @@ function localBackend(): Backend {
   };
   return {
     GetGeometry: async () => fallbackGeometry, SetExpanded: async () => {}, ReadState: state,
+    HideToMenu: async () => {}, UpdateMenu: async () => {},
+    ShowDetails: async view => { window.open(`/?fixture&window=details&view=${view}`, 'force-details', 'width=660,height=620'); },
     async SetTagRunning(tag: string, running: boolean) {
       await request(running ? '/focus/start' : '/focus/stop', { userId: 'dog', tag });
       return state();
@@ -32,4 +34,8 @@ export function backend(): Backend {
   if (window.go?.main.App) return window.go.main.App;
   if (import.meta.env.DEV && new URLSearchParams(location.search).has('fixture')) return localBackend();
   throw new Error('请在 Force 应用中打开');
+}
+
+export function readBackend(): Pick<Backend, 'ReadState' | 'ReadHistory' | 'ReadWeek'> {
+  return window.forceDetailsBackend ?? backend();
 }

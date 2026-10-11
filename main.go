@@ -18,14 +18,16 @@ var assets embed.FS
 
 func main() {
 	base := flag.String("api-base-url", focus.DefaultURL, "Nichijou API address (HTTPS or localhost test server)")
+	inspectWindow := flag.Bool("inspect-window", false, "Print native window geometry for development")
+	initialView := flag.String("view", "", "Open history or week records")
 	flag.Parse()
 	client, err := focus.NewClient(*base)
 	if err != nil {
 		log.Fatal(err)
 	}
-	app := &App{client: client}
+	app := &App{client: client, initialView: *initialView, inspectWindow: *inspectWindow}
 	err = wails.Run(&options.App{
-		Title: "Force", Width: 456, Height: 500, Frameless: true, DisableResize: true,
+		Title: "Force", Width: 368, Height: 456, Frameless: true, DisableResize: true,
 		AlwaysOnTop: true, StartHidden: true, BackgroundColour: &options.RGBA{R: 0, G: 0, B: 0, A: 0},
 		AssetServer: &assetserver.Options{Assets: assets},
 		OnStartup:   app.startup, OnDomReady: app.ready, OnShutdown: app.shutdown,

@@ -6,8 +6,10 @@
 - 专注任务与 Nichijou 共用记录。计时口径见 `docs/plans/2026-10-12-force-design.md`；不要擅自改为单任务、睡眠自动暂停或并行去重。
 - 不为测试修改真实专注记录。写入验收使用 `scripts/fixture_server.py`；真实服务只读验证。
 - 保持 `app.yuxino.force`、稳定安装路径和现有私钥签名身份。只运行经过项目构建脚本签名的原生包。
-- `internal/notch` 是 AppKit 桥。保持 WailsWindow 的运行时类，不对 NSWindow 使用 object_setClass；macOS 27 的计算属性元数据会因此在启动时断言失败。
+- `internal/desktop` 是 AppKit 桥。保持 WailsWindow 的运行时类，不对 NSWindow 使用 object_setClass；macOS 27 的计算属性元数据会因此在启动时断言失败。
 - 界面状态成功同步后才允许写入；停止操作是明确的停止意图，不能根据远端最新状态反向启动任务。
-- UI 验收使用 ego-browser / ego-lite；原生刘海和窗口行为须在实际签名包里验收。
-- 刘海布局先核对官方演示与实现，具体依据见 `docs/notch-interaction-research.md`。保持轮廓连续变形与菜单栏避让，不用矩形跳变代替衔接。
+- UI 验收使用 ego-browser / ego-lite；原生拖动、窗口尺寸和位置恢复须在实际签名包里验收。
+- 当前形态为悬浮计时条、展开面板与独立记录窗口，依据见 `docs/floating-interaction-research.md`。原生窗口跟随实际可见尺寸，不恢复大块透明画布或鼠标采样穿透。
+- 在 macOS 27 无边框窗口中，直接在鼠标监视器内调用 performWindowDragWithEvent 会立即结束并产生 “Window move completed without beginning”。当前用原生 down/dragged/up 事件相对初始坐标移动，仅手柄和标题可拖动；新实现必须在签名应用中验证位置变化与重启恢复。
+- 记录窗口使用独立只读桥，不转发主窗口 Wails 命令，也不提供任务写入接口。
 - 不提交用户记录、凭据、安装包、node_modules 或构建输出。完成后清理本次一次性环境和过期产物，保留源码、当前应用及必要证据。
