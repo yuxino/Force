@@ -31,8 +31,8 @@ cd frontend && npm ci && cd ..
 检查与签名构建：
 
 ```sh
-go test -race ./...
 cd frontend && npm test && npm run build && cd ..
+go test -race ./...
 FORCE_SIGN_IDENTITY='已有签名身份的名称或 SHA-1' zsh scripts/build-macos.sh
 ```
 
