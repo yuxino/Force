@@ -1,0 +1,6 @@
+/target/
+/build/
+.DS_Store
+*.log
+*.sqlite3*
+.env*
