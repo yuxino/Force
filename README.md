@@ -1,52 +1,38 @@
+<p align="center"><img src="assets/icon.svg" width="88" alt="Force" /></p>
+
 # Force
 
-把时间放在眼前。
+一个使用 Rust + GPUI 构建的悬浮专注计时器。轻巧常驻，离线可用，数据保存在本机。
 
-一个贴在 Mac 刘海下沿的专注计时应用。标签、正在进行的任务和历史记录与 Nichijou 共用。
-
-- 收起时显示任务和时间，点击或悬停展开
-- 按标签记录时间，支持同时记录多项任务
-- 今日 5 小时目标只累计正向标签
-- 查看日历记录和本周统计
-- 未计时或负向计时过久时展开提醒，可关闭或调整间隔
-- 没有刘海的屏幕使用顶部小条
-
-点击正在计时的标签，会结束这一段并保存记录。退出应用和电脑睡眠不会停止服务器计时；结束前请先停止任务。
-
-首版面向个人使用，固定连接 Nichijou 现有专注记录。支持 Apple Silicon、macOS 13 及以上。
+- 悬浮计时条，点开设置任务、时长和标签。
+- 倒计时与自由计时，支持暂停、继续和重启恢复。
+- 同一任务可分多轮专注，到时可继续或休息。
+- 每日记录、专注统计与 CSV 导出；macOS 和 Windows 支持置顶。
 
 ## 开发
 
-Wails 2.15.0、Go 1.25+、Node.js 22.12+ 和 Xcode 命令行工具。
+安装 Rust stable，然后运行：
 
 ```sh
-go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
-cd frontend && npm ci && cd ..
+cargo run --bin force --locked
+./scripts/check.sh
 ```
 
-检查与签名构建：
+| 平台 | 要求 |
+| --- | --- |
+| macOS 15+ | Xcode Command Line Tools、有效代码签名身份 |
+| Windows 64 位 | MSVC C++ 工具链、Windows SDK、CMake、DirectX 11 GPU |
+| Linux 64 位 | X11 或 Wayland、Vulkan 驱动；Debian / Ubuntu 先运行 `./scripts/linux-deps.sh` |
+
+macOS 开发应用：
 
 ```sh
-go test -race ./internal/focus
-cd frontend && npm test && npm run build && cd ..
-FORCE_SIGN_IDENTITY='已有签名身份的名称或 SHA-1' zsh scripts/build-macos.sh
+./scripts/build-macos.sh
+open 'build/Force Dev.app'
 ```
 
-构建脚本要求已有私钥签名身份，产物在 `build/bin/Force.app`。退出旧版本后复制到固定的 `/Applications/Force.app` 再运行。本地开发包未做公证。
+可用 `FORCE_SIGN_IDENTITY` 选择现有签名身份，`--release` 开启优化。开发包与正式安装隔离，本地包未公证。
 
-用合成数据验收界面：
+CI 配置覆盖 macOS、Windows 和 Ubuntu。Windows 与 Linux 尚未完成实机交互验收，最低系统版本仍待验证；Linux 置顶由窗口管理器控制。
 
-```sh
-python3 scripts/fixture_server.py
-# 另一个终端
-cd frontend && npm run dev
-# 打开 http://127.0.0.1:3415/?fixture
-```
-
-已签名的原生应用也可连接本地测试服务：
-
-```sh
-build/bin/Force.app/Contents/MacOS/Force --api-base-url http://127.0.0.1:3459
-```
-
-[验收记录](docs/verification.md) · [计时口径与设计](docs/plans/2026-10-12-force-design.md) · [刘海交互研究](docs/notch-interaction-research.md)
+[MIT License](LICENSE)
