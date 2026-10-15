@@ -7,6 +7,121 @@ fn database() -> (tempfile::TempDir, Store) {
 }
 
 #[test]
+fn repeating_break_reuses_the_same_round_and_pauses_focus_atomically() {
+    let (_directory, mut store) = database();
+    let task = store.create_task("Write", 1, 100).unwrap();
+    let focus = store.start_task(task.id, 100, Some(1500)).unwrap();
+    let first = store.start_break(4, 130, 300).unwrap();
+    let repeated = store.start_break(4, 140, 600).unwrap();
+    assert_eq!(repeated.id, first.id);
+    assert_eq!(repeated.target_seconds, Some(300));
+    assert_eq!(repeated.intervals.len(), 1);
+    assert_eq!(repeated.elapsed_at(140), 10);
+    let active = store.active_sessions().unwrap();
+    assert_eq!(active.len(), 2);
+    assert!(
+        active
+            .iter()
+            .find(|s| s.id == focus.id)
+            .unwrap()
+            .is_paused()
+    );
+    assert_eq!(
+        active
+            .iter()
+            .find(|s| s.id == focus.id)
+            .unwrap()
+            .elapsed_at(140),
+        30
+    );
+    store.pause(first.id, 150).unwrap();
+    let resumed = store.start_break(4, 200, 300).unwrap();
+    assert_eq!(resumed.id, first.id);
+    assert_eq!(resumed.elapsed_at(210), 30);
+    let continued = store.start_task(task.id, 220, Some(1500)).unwrap();
+    assert_eq!(continued.id, focus.id);
+    assert_eq!(store.active_sessions().unwrap().len(), 1);
+    assert_eq!(store.stats(0, 300, 230).unwrap().focus_seconds, 40);
+}
+
+#[test]
+fn a_new_break_settles_expired_timers_and_previous_duplicate_breaks() {
+    let (_directory, mut store) = database();
+    let focus = store.create_task("Read", 1, 100).unwrap();
+    let focus = store.start_task(focus.id, 100, Some(60)).unwrap();
+    let expired_rest = store.start_timed("Old rest", 4, 100, 60).unwrap();
+    let older_rest = store.start_timed("Earlier rest", 4, 170, 300).unwrap();
+    let current_rest = store.start_timed("Current rest", 4, 180, 300).unwrap();
+    let selected = store.start_break(4, 200, 300).unwrap();
+    assert_eq!(selected.id, current_rest.id);
+    assert_eq!(store.active_sessions().unwrap().len(), 1);
+    let records = store.sessions().unwrap();
+    for id in [focus.id, expired_rest.id] {
+        let session = records.iter().find(|s| s.id == id).unwrap();
+        assert_eq!(session.finished_at, Some(160));
+        assert_eq!(session.elapsed_at(200), 60);
+    }
+    assert_eq!(
+        records
+            .iter()
+            .find(|s| s.id == older_rest.id)
+            .unwrap()
+            .elapsed_at(200),
+        30
+    );
+    let next = store.start_break(4, 600, 300).unwrap();
+    assert_ne!(next.id, selected.id);
+    assert_eq!(store.active_sessions().unwrap().len(), 1);
+    assert_eq!(
+        store
+            .sessions()
+            .unwrap()
+            .iter()
+            .find(|s| s.id == selected.id)
+            .unwrap()
+            .finished_at,
+        Some(480)
+    );
+}
+
+#[test]
+fn failed_break_keeps_focus_and_existing_rest_unchanged() {
+    let (_directory, mut store) = database();
+    let task = store.create_task("Write", 1, 100).unwrap();
+    store.start_task(task.id, 100, None).unwrap();
+    store.start_timed("Future rest", 4, 200, 300).unwrap();
+    let before = store.active_sessions().unwrap();
+    assert!(matches!(
+        store.start_break(4, 150, 300),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(store.active_sessions().unwrap(), before);
+    assert!(store.sessions().unwrap().is_empty());
+    assert!(matches!(
+        store.start_break(1, 210, 300),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(store.active_sessions().unwrap(), before);
+    assert!(store.sessions().unwrap().is_empty());
+}
+
+#[test]
+fn failed_break_insert_rolls_back_focus_pause_and_expired_rest_completion() {
+    let (_directory, mut store) = database();
+    let task = store.create_task("Write", 1, 100).unwrap();
+    store.start_task(task.id, 100, None).unwrap();
+    store.start_timed("Expired rest", 4, 100, 60).unwrap();
+    let before = store.active_sessions().unwrap();
+    store.connection.execute_batch("CREATE TRIGGER reject_break BEFORE INSERT ON sessions BEGIN SELECT RAISE(ABORT, 'test rejection'); END;").unwrap();
+    assert!(matches!(
+        store.start_break(4, 200, 300),
+        Err(Error::Database(_))
+    ));
+    assert_eq!(store.active_sessions().unwrap(), before);
+    assert!(store.sessions().unwrap().is_empty());
+}
+
+#[test]
 fn saved_tasks_survive_days_and_restart_without_starting_a_timer() {
     let (directory, mut store) = database();
     let task = store.create_task("  Write  ", 1, 100).unwrap();

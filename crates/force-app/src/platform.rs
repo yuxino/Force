@@ -1,5 +1,5 @@
-pub(crate) const STRIP_WIDTH: f32 = 352.;
-pub(crate) const STRIP_HEIGHT: f32 = 76.;
+pub(crate) const STRIP_WIDTH: f32 = 328.;
+pub(crate) const STRIP_HEIGHT: f32 = 68.;
 pub(crate) const PANEL_HEIGHT: f32 = 440.;
 
 #[cfg(target_os = "macos")]

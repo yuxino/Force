@@ -76,7 +76,12 @@ impl ForceView {
             &task_input,
             window,
             |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { secondary: false }) {
+                if matches!(event, InputEvent::PressEnter { secondary: false })
+                    && !this.compact
+                    && this.page == Page::Focus
+                    && this.completed.is_none()
+                    && (this.preparing || this.active.is_empty())
+                {
                     this.start(window, cx);
                 }
             },
@@ -85,7 +90,10 @@ impl ForceView {
             &tag_input,
             window,
             |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { secondary: false }) {
+                if matches!(event, InputEvent::PressEnter { secondary: false })
+                    && !this.compact
+                    && this.page == Page::Settings
+                {
                     this.save_tag(window, cx);
                 }
             },
@@ -205,6 +213,10 @@ impl ForceView {
         {
             view.selected_task = session.task_id;
             view.selected_tag = session.tag_id;
+            if session.tag_kind == TagKind::Focus {
+                view.return_task = session.task_id;
+                view.return_target_seconds = session.target_seconds;
+            }
             view.task_input
                 .update(cx, |input, cx| input.set_value(session.title, window, cx));
         }
@@ -308,8 +320,14 @@ impl ForceView {
                 self.today = today;
                 self.record_stats = record_stats;
                 self.storage_failed = false;
-                if !self.tags.iter().any(|tag| tag.id == self.selected_tag) {
-                    self.selected_tag = self.tags.first().map_or(0, |tag| tag.id);
+                if !self.tags.iter().any(|tag| {
+                    tag.id == self.selected_tag && (!self.preparing || tag.kind == TagKind::Focus)
+                }) {
+                    self.selected_tag = self
+                        .tags
+                        .iter()
+                        .find(|tag| tag.kind == TagKind::Focus)
+                        .map_or(0, |tag| tag.id);
                 }
                 if !self.preparing
                     && !self
@@ -324,9 +342,14 @@ impl ForceView {
                         self.return_task = completed.task_id;
                         self.return_target_seconds = completed.target_seconds;
                     }
-                    self.completed = Some(completed);
-                    self.preparing = false;
-                    self.toast = None;
+                    if self.preparing {
+                        // Finishing the previous timer must not replace an
+                        // unfinished task draft, its tag, or its chosen duration.
+                        self.notify("上一段计时已结束并记录。", cx);
+                    } else {
+                        self.completed = Some(completed);
+                        self.toast = None;
+                    }
                     if self.sound_enabled {
                         crate::platform::play_completion_sound();
                     }
@@ -390,6 +413,10 @@ impl ForceView {
     }
 
     pub(crate) fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.storage_failed {
+            self.notify("请先重试打开本地数据。", cx);
+            return;
+        }
         let title = self.task_input.read(cx).value().trim().to_owned();
         if title.is_empty() {
             self.notify("先写下这次要做的事。", cx);
@@ -503,7 +530,7 @@ impl ForceView {
                 .take(2)
                 .count();
             match recent {
-                0 => 360.,
+                0 => 400.,
                 1 => 420.,
                 _ => PANEL_HEIGHT,
             }
@@ -574,7 +601,7 @@ impl ForceView {
             .selected_session
             .filter(|id| self.active.iter().any(|session| session.id == *id))
             .or_else(|| {
-                if self.compact {
+                if self.compact || self.preparing {
                     self.active
                         .iter()
                         .find(|session| session.is_running())
@@ -620,11 +647,23 @@ impl ForceView {
     }
 
     pub(crate) fn start_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(completed) = &self.completed
-            && completed.tag_kind == TagKind::Focus
+        if let Some(focus) = self
+            .completed
+            .as_ref()
+            .filter(|session| session.tag_kind == TagKind::Focus)
+            .or_else(|| {
+                self.active.iter().find(|session| {
+                    Some(session.id) == self.selected_session && session.tag_kind == TagKind::Focus
+                })
+            })
+            .or_else(|| {
+                self.active
+                    .iter()
+                    .find(|session| session.is_running() && session.tag_kind == TagKind::Focus)
+            })
         {
-            self.return_task = completed.task_id;
-            self.return_target_seconds = completed.target_seconds;
+            self.return_task = focus.task_id;
+            self.return_target_seconds = focus.target_seconds;
         }
         if write_return_context(&self.data_dir, self.return_task, self.return_target_seconds)
             .is_err()
@@ -637,14 +676,7 @@ impl ForceView {
         if self.write(
             |store| {
                 let tag = rest_tag(store)?;
-                for session in store
-                    .active_sessions()?
-                    .into_iter()
-                    .filter(|session| session.is_running() && session.tag_kind == TagKind::Focus)
-                {
-                    store.pause(session.id, now)?;
-                }
-                started = Some(store.start_timed("休息", tag.id, now, 300)?);
+                started = Some(store.start_break(tag.id, now, 300)?);
                 Ok(())
             },
             cx,
@@ -831,15 +863,19 @@ impl ForceView {
                 self.return_task = session.task_id;
                 self.return_target_seconds = session.target_seconds;
             }
-            self.completed = Some(session);
-            self.preparing = false;
             self.selected_session = None;
-            self.toast = None;
+            if self.preparing {
+                self.notify("上一段计时已结束并记录。", cx);
+            } else {
+                self.completed = Some(session);
+                self.toast = None;
+            }
             cx.notify();
         }
     }
 
-    pub(crate) fn navigate(&mut self, page: Page, cx: &mut Context<Self>) {
+    pub(crate) fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        window.focus(&self.focus_handle);
         self.page = page;
         self.toast = None;
         self.refresh(cx);

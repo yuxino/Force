@@ -242,6 +242,74 @@ impl Store {
         transaction.commit()?;
         Ok(session)
     }
+
+    /// Starts one dedicated break, or resumes the existing break without
+    /// resetting its duration. The focus-to-break transition is atomic.
+    pub fn start_break(&mut self, tag_id: i64, now: i64, target: i64) -> Result<Session> {
+        if !(MIN_TARGET_SECONDS..=MAX_TARGET_SECONDS).contains(&target) {
+            return Err(Error::Validation(
+                "Timer duration must be between 1 minute and 24 hours",
+            ));
+        }
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tag = available_tag(&transaction, tag_id)?;
+        if tag.kind != TagKind::Rest {
+            return Err(Error::InvalidTransition);
+        }
+        let active = load_sessions_in_snapshot(&transaction, "WHERE finished_at IS NULL", [])?;
+        let existing = active
+            .iter()
+            .filter(|session| {
+                session.tag_kind == TagKind::Rest
+                    && session.task_id.is_none()
+                    && session
+                        .target_seconds
+                        .is_some_and(|limit| session.elapsed_at(now) < limit)
+            })
+            .max_by_key(|session| (session.is_running(), session.id));
+        for session in &active {
+            if now < last_boundary(session) {
+                return Err(Error::InvalidTransition);
+            }
+            if existing.is_some_and(|current| current.id == session.id) {
+                continue;
+            }
+            if session.tag_kind == TagKind::Rest
+                || session
+                    .target_seconds
+                    .is_some_and(|limit| session.elapsed_at(now) >= limit)
+            {
+                end_session(&transaction, session, now)?;
+            } else if session.is_running() {
+                close_open_interval(&transaction, session, now)?;
+            }
+        }
+        let id = if let Some(existing) = existing {
+            if existing.is_paused() {
+                transaction.execute(
+                    "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
+                    params![existing.id, now],
+                )?;
+            }
+            existing.id
+        } else {
+            transaction.execute(
+                "INSERT INTO sessions (title, tag_id, tag_name, tag_kind, started_at, target_seconds) VALUES ('休息', ?1, ?2, 'rest', ?3, ?4)",
+                params![tag.id, tag.name, now, target],
+            )?;
+            let id = transaction.last_insert_rowid();
+            transaction.execute(
+                "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
+                params![id, now],
+            )?;
+            id
+        };
+        let session = load_session(&transaction, id)?;
+        transaction.commit()?;
+        Ok(session)
+    }
 }
 
 fn available_tag(connection: &Connection, id: i64) -> Result<Tag> {

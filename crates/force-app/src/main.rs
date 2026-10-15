@@ -114,6 +114,15 @@ fn main() -> anyhow::Result<()> {
             theme.popover = rgb(0xfdfdfc).into();
             theme.popover_foreground = rgb(0x202020).into();
             theme.foreground = rgb(0x202020).into();
+            theme.muted_foreground = rgb(0x70706c).into();
+            theme.border = rgb(0xe5e5e1).into();
+            theme.input = rgb(0xe5e5e1).into();
+            theme.secondary = rgb(0xf3f3f0).into();
+            theme.secondary_hover = rgb(0xeaeae6).into();
+            theme.secondary_active = rgb(0xe2e2de).into();
+            theme.accent = rgb(0xf1f1ee).into();
+            theme.accent_foreground = rgb(0x202020).into();
+            theme.selection = rgb(0xdcdcd7).into();
             theme.font_size = px(14.);
             theme.shadow = false;
             if cfg!(target_os = "windows") {
@@ -165,8 +174,13 @@ fn main() -> anyhow::Result<()> {
                 }
             })
             .detach();
-            let bounds = platform::restored_bounds(&data_dir, cx)
-                .unwrap_or_else(|| Bounds::centered(None, size(px(352.), px(76.)), cx));
+            let bounds = platform::restored_bounds(&data_dir, cx).unwrap_or_else(|| {
+                Bounds::centered(
+                    None,
+                    size(px(platform::STRIP_WIDTH), px(platform::STRIP_HEIGHT)),
+                    cx,
+                )
+            });
             let result = cx.open_window(
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(bounds)),
@@ -176,7 +190,10 @@ fn main() -> anyhow::Result<()> {
                     is_resizable: false,
                     window_background: WindowBackgroundAppearance::Transparent,
                     window_decorations: Some(WindowDecorations::Client),
-                    window_min_size: Some(size(px(352.), px(76.))),
+                    window_min_size: Some(size(
+                        px(platform::STRIP_WIDTH),
+                        px(platform::STRIP_HEIGHT),
+                    )),
                     app_id: Some("app.yuxino.force".into()),
                     ..Default::default()
                 },
@@ -203,7 +220,16 @@ fn main() -> anyhow::Result<()> {
                     });
                     cx.on_action(move |_: &FinishSegment, cx| {
                         with_force(handle, cx, |this, _, cx| {
-                            if let Some(id) = this.selected_session {
+                            if this.completed.is_some() {
+                                return;
+                            }
+                            if let Some(id) = this.selected_session.or_else(|| {
+                                this.active
+                                    .iter()
+                                    .find(|session| session.is_running())
+                                    .or_else(|| this.active.last())
+                                    .map(|session| session.id)
+                            }) {
                                 this.finish(id, cx);
                             }
                         })
@@ -216,7 +242,7 @@ fn main() -> anyhow::Result<()> {
                             if this.compact {
                                 this.compact(window, cx);
                             }
-                            this.navigate(model::Page::Records, cx);
+                            this.navigate(model::Page::Records, window, cx);
                         })
                     });
                     cx.on_action(move |_: &ShowSettings, cx| {
@@ -224,7 +250,7 @@ fn main() -> anyhow::Result<()> {
                             if this.compact {
                                 this.compact(window, cx);
                             }
-                            this.navigate(model::Page::Settings, cx);
+                            this.navigate(model::Page::Settings, window, cx);
                         })
                     });
                     cx.on_action(move |_: &ClosePanel, cx| {
