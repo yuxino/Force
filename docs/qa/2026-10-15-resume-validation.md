@@ -32,11 +32,17 @@ launcher was pinned to its data directory because a UI observation after quittin
 can automatically relaunch a bundle without its original arguments. One such
 relaunch opened the existing development store; no timer or record action was
 performed in that instance, and it was stopped before continuing isolation checks.
-The installed development and preview apps remained running.
+The installed development and preview apps remained running during that QA pass.
+They were later removed at the user's request, after confirming they had exited.
 
 ## Boundaries
 
 Windows/Linux runtime interaction, minimum macOS version, external displays and
-long-duration real usage were not tested. The repository has no configured remote;
-this work was not pushed, merged or released. The cross-platform CI configuration
-exists but has not run for this local commit.
+long-duration real usage were not tested. The initial QA pass was local only;
+the completed GPUI branch was subsequently pushed to the existing private
+repository at the user's request. Its first CI run exposed a Linux dependency
+incompatibility: `xattr 0.2.3` still uses `libc::ENOATTR`, removed in `libc 0.2.190`.
+The Linux manifest now pins `libc 0.2.189` until that upstream dependency changes.
+Local checks passed again; cross-platform CI must pass on the final integration
+commit before merging. No release or replacement of the formal installation
+is part of this source integration.
