@@ -13,7 +13,10 @@ pub const HISTORY_LIMIT: usize = 500;
 pub const MAX_GOAL_MINUTES: u32 = 24 * 60;
 pub const MIN_TARGET_SECONDS: i64 = 60;
 pub const MAX_TARGET_SECONDS: i64 = 24 * 60 * 60;
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 4;
+
+mod task;
+pub use task::Task;
 
 pub type Result<T> = std::result::Result<T, Error>;
 
@@ -27,6 +30,8 @@ pub enum Error {
     UnsupportedSchema,
     #[error("The requested record no longer exists")]
     NotFound,
+    #[error("This task's tag is archived; choose another tag")]
+    ArchivedTag,
     #[error("{0}")]
     Validation(&'static str),
     #[error("This action is no longer available, or the clock moved backwards")]
@@ -74,6 +79,7 @@ pub struct Interval {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Session {
     pub id: i64,
+    pub task_id: Option<i64>,
     pub title: String,
     pub tag_id: i64,
     pub tag_name: String,
@@ -140,7 +146,16 @@ impl Store {
         let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
         match version {
             0 => initialize(&mut connection)?,
-            1 => migrate_v1(&mut connection)?,
+            1 => {
+                migrate_v1(&mut connection)?;
+                task::migrate_v2(&mut connection)?;
+                migrate_v3(&mut connection)?;
+            }
+            2 => {
+                task::migrate_v2(&mut connection)?;
+                migrate_v3(&mut connection)?;
+            }
+            3 => migrate_v3(&mut connection)?,
             SCHEMA_VERSION => (),
             _ => return Err(Error::UnsupportedSchema),
         }
@@ -224,6 +239,10 @@ impl Store {
         transaction.execute("UPDATE tags SET name = ?1 WHERE id = ?2", params![name, id])?;
         transaction.execute(
             "UPDATE sessions SET tag_name = ?1 WHERE tag_id = ?2 AND finished_at IS NULL",
+            params![name, id],
+        )?;
+        transaction.execute(
+            "UPDATE tasks SET tag_name = ?1 WHERE tag_id = ?2 AND completed_at IS NULL AND deleted = 0",
             params![name, id],
         )?;
         transaction.commit()?;
@@ -435,6 +454,27 @@ impl Store {
         Ok(())
     }
 
+    pub fn completion_sound(&self) -> Result<bool> {
+        Ok(self.connection.query_row(
+            "SELECT completion_sound FROM preferences WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?)
+    }
+
+    pub fn set_completion_sound(&mut self, enabled: bool) -> Result<()> {
+        let transaction = self.connection.transaction()?;
+        if transaction.execute(
+            "UPDATE preferences SET completion_sound = ?1 WHERE id = 1",
+            [enabled],
+        )? != 1
+        {
+            return Err(Error::InvalidData);
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
     /// Clips intervals to `[start, min(end, now))`. Completed events at `now`
     /// are included if they also belong to the requested `[start, end)` window.
     pub fn stats(&self, start: i64, end: i64, now: i64) -> Result<Stats> {
@@ -561,6 +601,7 @@ fn initialize(connection: &mut Connection) -> Result<()> {
         CREATE UNIQUE INDEX active_tag_name ON tags(name COLLATE NOCASE) WHERE archived = 0;
         CREATE TABLE sessions (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            task_id INTEGER REFERENCES tasks(id) ON DELETE RESTRICT,
             title TEXT NOT NULL,
             tag_id INTEGER NOT NULL REFERENCES tags(id),
             tag_name TEXT NOT NULL,
@@ -581,12 +622,14 @@ fn initialize(connection: &mut Connection) -> Result<()> {
         CREATE INDEX completed_history ON sessions(finished_at DESC, id DESC);
         CREATE TABLE preferences (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            goal_minutes INTEGER NOT NULL CHECK (goal_minutes BETWEEN 1 AND 1440)
+            goal_minutes INTEGER NOT NULL CHECK (goal_minutes BETWEEN 1 AND 1440),
+            completion_sound INTEGER NOT NULL DEFAULT 1 CHECK (completion_sound IN (0, 1))
         );
         INSERT INTO preferences (id, goal_minutes) VALUES (1, 300);
         INSERT INTO tags (name, kind) VALUES ('工作', 'focus'), ('学习', 'focus'), ('阅读', 'focus'), ('休息', 'rest');
-        PRAGMA user_version = 2;",
+        PRAGMA user_version = 4;",
     )?;
+    transaction.execute_batch(task::SCHEMA)?;
     transaction.commit()?;
     Ok(())
 }
@@ -601,7 +644,22 @@ fn migrate_v1(connection: &mut Connection) -> Result<()> {
              CREATE INDEX interval_time_window ON intervals(ended_at, started_at);
              PRAGMA user_version = 2;",
         )?,
-        SCHEMA_VERSION => (), // Another process completed the same migration.
+        2 | 3 | SCHEMA_VERSION => (), // Another process completed the same migration.
+        _ => return Err(Error::UnsupportedSchema),
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+fn migrate_v3(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    match version {
+        3 => {
+            transaction.execute_batch("ALTER TABLE preferences ADD COLUMN completion_sound INTEGER NOT NULL DEFAULT 1 CHECK (completion_sound IN (0, 1));")?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -626,13 +684,14 @@ fn load_sessions_in_snapshot(
 ) -> Result<Vec<Session>> {
     // `suffix` is always a fixed internal query, never user-provided SQL.
     let mut statement = connection.prepare(&format!(
-        "SELECT id, title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds FROM sessions {suffix}"
+        "SELECT id, title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds, task_id FROM sessions {suffix}"
     ))?;
     let mut rows = statement.query(parameters)?;
     let mut sessions = Vec::new();
     while let Some(row) = rows.next()? {
         sessions.push(Session {
             id: row.get(0)?,
+            task_id: row.get(8)?,
             title: row.get(1)?,
             tag_id: row.get(2)?,
             tag_name: row.get(3)?,
@@ -662,8 +721,8 @@ fn load_sessions_in_snapshot(
 
 fn load_session(connection: &Connection, id: i64) -> Result<Session> {
     let session = connection.query_row(
-        "SELECT title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds FROM sessions WHERE id = ?1", [id],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, Option<i64>>(5)?, row.get::<_, Option<i64>>(6)?)),
+        "SELECT title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds, task_id FROM sessions WHERE id = ?1", [id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, Option<i64>>(5)?, row.get::<_, Option<i64>>(6)?, row.get::<_, Option<i64>>(7)?)),
     ).optional()?.ok_or(Error::NotFound)?;
     let mut statement = connection.prepare(
         "SELECT started_at, ended_at FROM intervals WHERE session_id = ?1 ORDER BY started_at, id",
@@ -678,6 +737,7 @@ fn load_session(connection: &Connection, id: i64) -> Result<Session> {
         .collect::<std::result::Result<_, _>>()?;
     Ok(Session {
         id,
+        task_id: session.7,
         title: session.0,
         tag_id: session.1,
         tag_name: session.2,

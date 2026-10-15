@@ -4,6 +4,7 @@ Force is a local-first desktop focus timer built with Rust and GPUI. Keep all us
 
 - `crates/force-core`: SQLite persistence, timer intervals, goals, history, CSV export and statistics. Keep it independent of GPUI and OS APIs.
 - `crates/force-app`: native GPUI interface and platform integration. Support macOS, Windows and Linux without duplicating business logic.
+- Force is a floating utility: a compact timer strip by default, with a same-width panel for task setup, records and settings. Do not turn it into a dashboard or introduce a large app shell.
 - Use black, white and neutral gray, with semantic colors only for errors. Keep controls compact and keyboard accessible.
 - Active sessions survive restart. Use absolute timestamps, not tick counts. Pauses exclude time; computer sleep does not implicitly pause. Sum parallel task investment separately from merged focus time.
 - Write changes transactionally. Preserve user data on errors. Never recover a damaged database by overwriting it with a blank one.

@@ -32,8 +32,8 @@ func iconPNG(size: Int) throws -> Data {
     context.scaleBy(x: 12.5, y: 12.5)
     context.setFillColor(CGColor(srgbRed: 250 / 255, green: 250 / 255, blue: 248 / 255, alpha: 1))
     let vertices: [(CGFloat, CGFloat)] = [
-        (14, 14), (56, 14), (44, 26), (26, 26), (26, 32),
-        (46, 32), (34, 44), (26, 44), (26, 54), (14, 54),
+        (11, 12), (53, 12), (41, 24), (23, 24), (23, 30),
+        (43, 30), (31, 42), (23, 42), (23, 52), (11, 52),
     ]
     context.move(to: CGPoint(x: vertices[0].0, y: vertices[0].1))
     for vertex in vertices.dropFirst() { context.addLine(to: CGPoint(x: vertex.0, y: vertex.1)) }
