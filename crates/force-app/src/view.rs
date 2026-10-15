@@ -17,9 +17,11 @@ use crate::{
 };
 
 const INK: u32 = 0x202020;
-const MUTED: u32 = 0x70706c;
-const LINE: u32 = 0xe8e8e4;
-const PAPER: u32 = 0xfdfdfc;
+const MUTED: u32 = 0x737373;
+const LINE: u32 = 0xe7e7e7;
+const PAPER: u32 = 0xfdfdfd;
+const SURFACE: u32 = 0xf2f2f2;
+const DESTRUCTIVE: u32 = 0x963f3f;
 
 impl ForceView {
     fn current_session(&self) -> Option<&Session> {
@@ -170,7 +172,9 @@ impl ForceView {
                                 div()
                                     .text_size(px(12.))
                                     .font_weight(FontWeight::MEDIUM)
-                                    .truncate()
+                                    .w_full()
+                                    .text_ellipsis()
+                                    .line_clamp(1)
                                     .child(title),
                             )
                             .child(
@@ -182,7 +186,9 @@ impl ForceView {
                                     } else {
                                         MUTED
                                     }))
-                                    .truncate()
+                                    .w_full()
+                                    .text_ellipsis()
+                                    .line_clamp(1)
                                     .tooltip(move |window, cx| {
                                         Tooltip::new(state_help.clone()).build(window, cx)
                                     })
@@ -191,15 +197,17 @@ impl ForceView {
                     ),
             )
             .child(
-                Button::new("bar-primary")
-                    .primary()
+                primary_button("bar-primary")
                     .size(px(30.))
                     .rounded_full()
-                    .icon(if current.is_none() && completed.is_some() {
-                        Icon::new(IconName::ArrowRight).size(px(15.))
-                    } else {
-                        action_icon(symbol).size(px(15.))
-                    })
+                    .icon(control_icon(
+                        if current.is_none() && completed.is_some() {
+                            Icon::new(IconName::ArrowRight).size(px(15.))
+                        } else {
+                            action_icon(symbol).size(px(15.))
+                        },
+                        0xffffff,
+                    ))
                     .tooltip(shortcut(help, "P", "P"))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         if let Some(id) = active_id {
@@ -211,26 +219,27 @@ impl ForceView {
             )
             .children(current.map(|session| {
                 let id = session.id;
-                Button::new("bar-finish")
+                button("bar-finish")
                     .ghost()
-                    .size(px(26.))
-                    .icon(action_icon("stop").size(px(14.)))
+                    .size(px(28.))
+                    .icon(control_icon(action_icon("stop").size(px(14.)), INK))
                     .tooltip(shortcut("结束本段", "⇧P", "Shift P"))
                     .on_click(cx.listener(move |this, _, _, cx| this.finish(id, cx)))
             }))
             .child(
-                Button::new("bar-expand")
+                button("bar-expand")
                     .ghost()
-                    .size(px(24.))
+                    .size(px(28.))
                     .text_color(rgb(MUTED))
-                    .icon(
+                    .icon(control_icon(
                         Icon::new(if self.compact != self.panel_above {
                             IconName::ChevronDown
                         } else {
                             IconName::ChevronUp
                         })
                         .size(px(14.)),
-                    )
+                        INK,
+                    ))
                     .tooltip(shortcut(
                         if self.compact { "展开" } else { "收起" },
                         "⇧M",
@@ -258,48 +267,31 @@ impl ForceView {
                 ]
                 .into_iter()
                 .map(|(id, label, page)| {
-                    div()
-                        .relative()
-                        .h_full()
-                        .flex()
-                        .items_center()
-                        .child(
-                            Button::new(id)
-                                .ghost()
-                                .small()
-                                .text_size(px(12.))
-                                .text_color(rgb(if self.page == page { INK } else { MUTED }))
-                                .font_weight(if self.page == page {
-                                    FontWeight::SEMIBOLD
-                                } else {
-                                    FontWeight::NORMAL
-                                })
-                                .label(label)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.navigate(page, window, cx)
-                                })),
+                    button(id)
+                        .ghost()
+                        .small()
+                        .h(px(28.))
+                        .px(px(10.))
+                        .text_color(rgb(if self.page == page { INK } else { MUTED }))
+                        .font_weight(FontWeight::MEDIUM)
+                        .selected(self.page == page)
+                        .child(control_label(label, INK))
+                        .on_click(
+                            cx.listener(move |this, _, window, cx| this.navigate(page, window, cx)),
                         )
-                        .when(self.page == page, |tab| {
-                            tab.child(
-                                div()
-                                    .absolute()
-                                    .bottom(px(-1.))
-                                    .left(px(10.))
-                                    .right(px(10.))
-                                    .h(px(2.))
-                                    .bg(rgb(INK)),
-                            )
-                        })
                 }),
             )
             .child(div().flex_1())
             .child(
-                Button::new("pin-window")
+                button("pin-window")
                     .ghost()
                     .size(px(28.))
                     .text_color(rgb(if self.pinned { INK } else { MUTED }))
-                    .icon(Icon::default().path("force-icons/pin.svg").size(px(15.)))
-                    .disabled(!cfg!(any(target_os = "macos", target_os = "windows")))
+                    .icon(control_icon(
+                        Icon::default().path("force-icons/pin.svg").size(px(15.)),
+                        INK,
+                    ))
+                    .unavailable(!cfg!(any(target_os = "macos", target_os = "windows")))
                     .tooltip(if !cfg!(any(target_os = "macos", target_os = "windows")) {
                         "置顶由窗口管理器控制"
                     } else if self.pinned {
@@ -318,10 +310,13 @@ impl ForceView {
                     })),
             )
             .child(
-                Button::new("settings-tab")
+                button("settings-tab")
                     .ghost()
                     .size(px(28.))
-                    .icon(Icon::new(IconName::Settings2).size(px(15.)))
+                    .icon(control_icon(
+                        Icon::new(IconName::Settings2).size(px(15.)),
+                        INK,
+                    ))
                     .selected(self.page == Page::Settings)
                     .tooltip(shortcut("设置", ",", ","))
                     .on_click(
@@ -341,12 +336,12 @@ impl ForceView {
             .child(
                 div()
                     .text_size(px(13.))
-                    .text_color(rgb(0x963f3f))
+                    .text_color(rgb(DESTRUCTIVE))
                     .child("无法读写本地数据。原文件已保留。"),
             )
             .child(
-                Button::new("retry-storage")
-                    .label("重试")
+                button("retry-storage")
+                    .child(control_label("重试", INK))
                     .on_click(cx.listener(|this, _, window, cx| {
                         this.open_store(cx);
                         if !this.storage_failed {
@@ -392,20 +387,14 @@ impl ForceView {
         div()
             .flex()
             .flex_col()
-            .gap(px(18.))
+            .gap(px(14.))
             .child(
                 div()
                     .flex()
                     .flex_col()
                     .gap_2()
                     .child(field_label("这次做什么"))
-                    .child(
-                        Input::new(&self.task_input)
-                            .h(px(38.))
-                            .text_size(px(14.))
-                            .bg(rgb(0xf7f7f5))
-                            .rounded(px(8.)),
-                    ),
+                    .child(field(&self.task_input)),
             )
             .child(
                 div()
@@ -419,7 +408,7 @@ impl ForceView {
                             .p(px(3.))
                             .gap(px(2.))
                             .rounded(px(8.))
-                            .bg(rgb(0xf0f0ed))
+                            .bg(rgb(SURFACE))
                             .children(
                                 [
                                     (25, "25 分钟"),
@@ -434,14 +423,14 @@ impl ForceView {
                                     } else {
                                         self.countdown && self.timer_minutes == minutes
                                     };
-                                    Button::new(("duration", minutes as u64))
+                                    button(("duration", minutes as u64))
                                         .ghost()
                                         .small()
                                         .flex_1()
                                         .min_w_0()
                                         .text_size(px(12.))
                                         .rounded(px(5.))
-                                        .label(label)
+                                        .child(control_label(label, INK))
                                         .when(selected, |button| {
                                             button.bg(rgb(PAPER)).font_weight(FontWeight::MEDIUM)
                                         })
@@ -465,14 +454,27 @@ impl ForceView {
                     .gap_3()
                     .child(field_label("标签"))
                     .child(
-                        Button::new("task-tag")
+                        button("task-tag")
                             .small()
                             .ghost()
                             .max_w(px(220.))
                             .overflow_hidden()
                             .tooltip(tag_name.clone())
-                            .child(div().min_w_0().truncate().child(tag_name))
-                            .child(Icon::new(IconName::ChevronDown).size(px(13.)))
+                            .child(
+                                div()
+                                    .min_w_0()
+                                    .max_w(px(172.))
+                                    .text_size(px(13.))
+                                    .text_ellipsis()
+                                    .line_clamp(1)
+                                    .text_color(rgb(INK))
+                                    .child(tag_name),
+                            )
+                            .child(
+                                Icon::new(IconName::ChevronDown)
+                                    .size(px(13.))
+                                    .text_color(rgb(INK)),
+                            )
                             .dropdown_menu(move |mut menu, _, _| {
                                 for tag in &tags {
                                     let id = tag.id;
@@ -493,18 +495,19 @@ impl ForceView {
                     ),
             )
             .child(
-                Button::new("start-focus")
-                    .primary()
-                    .h(px(36.))
+                primary_button("start-focus")
+                    .h(px(34.))
                     .w_full()
-                    .rounded(px(8.))
-                    .icon(action_icon("play").size(px(14.)))
-                    .label(if self.countdown {
-                        format!("开始 {} 分钟", self.timer_minutes)
-                    } else {
-                        "开始自由计时".to_owned()
-                    })
-                    .disabled(
+                    .icon(control_icon(action_icon("play").size(px(14.)), 0xffffff))
+                    .child(control_label(
+                        if self.countdown {
+                            format!("开始 {} 分钟", self.timer_minutes)
+                        } else {
+                            "开始自由计时".to_owned()
+                        },
+                        0xffffff,
+                    ))
+                    .unavailable(
                         !self.tags.iter().any(|tag| tag.kind == TagKind::Focus)
                             || self.storage_failed,
                     )
@@ -525,11 +528,11 @@ impl ForceView {
                                 .child(field_label("继续之前的事"))
                                 .when(self.selected_task.is_some(), |row| {
                                     row.child(
-                                        Button::new("clear-task-draft")
+                                        button("clear-task-draft")
                                             .ghost()
                                             .xsmall()
-                                            .icon(IconName::Plus)
-                                            .label("新任务")
+                                            .icon(control_icon(IconName::Plus, INK))
+                                            .child(control_label("新任务", INK))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 this.new_task(window, cx)
                                             })),
@@ -544,8 +547,10 @@ impl ForceView {
                                 .items_center()
                                 .gap_1()
                                 .child(
-                                    Button::new(("recent-task", id as u64))
+                                    button(("recent-task", id as u64))
                                         .ghost()
+                                        .small()
+                                        .px_0()
                                         .flex_1()
                                         .min_w_0()
                                         .justify_start()
@@ -555,7 +560,11 @@ impl ForceView {
                                             div()
                                                 .min_w_0()
                                                 .flex_1()
-                                                .truncate()
+                                                .max_w(px(140.))
+                                                .text_size(px(13.))
+                                                .text_ellipsis()
+                                                .line_clamp(1)
+                                                .text_color(rgb(INK))
                                                 .child(task.title.clone()),
                                         )
                                         .tooltip(task.title.clone())
@@ -570,10 +579,10 @@ impl ForceView {
                                         .child(short_time(task.total_seconds)),
                                 )
                                 .child(
-                                    Button::new(("recent-play", id as u64))
+                                    button(("recent-play", id as u64))
                                         .ghost()
-                                        .size(px(26.))
-                                        .icon(action_icon("play").size(px(13.)))
+                                        .size(px(28.))
+                                        .icon(control_icon(action_icon("play").size(px(13.)), INK))
                                         .tooltip("继续这件事")
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.select_task(id, window, cx);
@@ -581,10 +590,13 @@ impl ForceView {
                                         })),
                                 )
                                 .child(
-                                    Button::new(("recent-remove", id as u64))
+                                    button(("recent-remove", id as u64))
                                         .ghost()
-                                        .size(px(24.))
-                                        .icon(Icon::new(IconName::Close).size(px(13.)))
+                                        .size(px(28.))
+                                        .icon(control_icon(
+                                            Icon::new(IconName::Close).size(px(13.)),
+                                            INK,
+                                        ))
                                         .tooltip("从最近任务移除，保留记录")
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.archive_task(id, window, cx)
@@ -633,7 +645,9 @@ impl ForceView {
                             .child(
                                 div()
                                     .max_w(px(180.))
-                                    .truncate()
+                                    .w_full()
+                                    .text_ellipsis()
+                                    .line_clamp(1)
                                     .text_size(px(11.))
                                     .text_color(rgb(MUTED))
                                     .child(session.tag_name.clone()),
@@ -642,18 +656,13 @@ impl ForceView {
                     .child(task_heading(&session.title)),
             )
             .children(fraction.map(|fraction| {
-                div()
-                    .h(px(3.))
-                    .w_full()
-                    .rounded_full()
-                    .bg(rgb(0xebebe7))
-                    .child(
-                        div()
-                            .h_full()
-                            .w(relative(fraction))
-                            .rounded_full()
-                            .bg(rgb(if session.is_paused() { 0xaaaaa4 } else { INK })),
-                    )
+                div().h(px(3.)).w_full().rounded_full().bg(rgb(LINE)).child(
+                    div()
+                        .h_full()
+                        .w(relative(fraction))
+                        .rounded_full()
+                        .bg(rgb(if session.is_paused() { 0xaaaaaa } else { INK })),
+                )
             }))
             .child(
                 div()
@@ -704,19 +713,22 @@ impl ForceView {
                     .gap_2()
                     .pt_1()
                     .child(
-                        Button::new("running-next")
+                        button("running-next")
                             .small()
                             .flex_1()
                             .h(px(32.))
-                            .label(if rest {
-                                if self.return_task.is_some() {
-                                    "回到专注"
+                            .child(control_label(
+                                if rest {
+                                    if self.return_task.is_some() {
+                                        "回到专注"
+                                    } else {
+                                        "开始专注"
+                                    }
                                 } else {
-                                    "开始专注"
-                                }
-                            } else {
-                                "休息 5 分钟"
-                            })
+                                    "休息 5 分钟"
+                                },
+                                INK,
+                            ))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if rest {
                                     this.return_to_task(window, cx);
@@ -726,12 +738,12 @@ impl ForceView {
                             })),
                     )
                     .child(
-                        Button::new("switch-task")
+                        button("switch-task")
                             .ghost()
                             .small()
                             .h(px(32.))
                             .flex_1()
-                            .label("换个任务")
+                            .child(control_label("换个任务", INK))
                             .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx))),
                     ),
             )
@@ -753,7 +765,7 @@ impl ForceView {
                                         .items_center()
                                         .h(px(36.))
                                         .child(
-                                            Button::new(("other-timer", id as u64))
+                                            button(("other-timer", id as u64))
                                                 .ghost()
                                                 .small()
                                                 .flex_1()
@@ -764,7 +776,11 @@ impl ForceView {
                                                     div()
                                                         .min_w_0()
                                                         .flex_1()
-                                                        .truncate()
+                                                        .max_w(px(210.))
+                                                        .text_size(px(13.))
+                                                        .text_ellipsis()
+                                                        .line_clamp(1)
+                                                        .text_color(rgb(INK))
                                                         .child(other.title.clone()),
                                                 )
                                                 .tooltip(other.title.clone())
@@ -844,16 +860,18 @@ impl ForceView {
                     .flex()
                     .gap_2()
                     .child(
-                        Button::new("continue-task")
-                            .primary()
+                        primary_button("continue-task")
                             .flex_1()
                             .h(px(34.))
-                            .rounded(px(7.))
-                            .label(if rest {
-                                "回到专注"
-                            } else {
-                                "继续这件事"
-                            })
+                            .rounded(px(6.))
+                            .child(control_label(
+                                if rest {
+                                    "回到专注"
+                                } else {
+                                    "继续这件事"
+                                },
+                                0xffffff,
+                            ))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if rest {
                                     this.return_to_task(window, cx);
@@ -864,11 +882,11 @@ impl ForceView {
                     )
                     .when(!rest, |row| {
                         row.child(
-                            Button::new("rest-five")
+                            button("rest-five")
                                 .flex_1()
                                 .h(px(34.))
                                 .rounded(px(7.))
-                                .label("休息 5 分钟")
+                                .child(control_label("休息 5 分钟", INK))
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.start_break(window, cx)),
                                 ),
@@ -882,11 +900,11 @@ impl ForceView {
                     .justify_between()
                     .when(!rest && session.task_id.is_some(), |row| {
                         row.child(
-                            Button::new("complete-task")
+                            button("complete-task")
                                 .ghost()
                                 .small()
-                                .icon(Icon::new(IconName::Check).size(px(14.)))
-                                .label("完成任务")
+                                .icon(control_icon(Icon::new(IconName::Check).size(px(14.)), INK))
+                                .child(control_label("完成任务", INK))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.complete_current_task(window, cx)
                                 })),
@@ -894,11 +912,11 @@ impl ForceView {
                     })
                     .child(div().flex_1())
                     .child(
-                        Button::new("different-task")
+                        button("different-task")
                             .ghost()
                             .small()
                             .text_color(rgb(MUTED))
-                            .label("换个任务")
+                            .child(control_label("换个任务", INK))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.dismiss_completed(cx);
                                 this.new_task(window, cx);
@@ -918,43 +936,91 @@ impl ForceView {
                     || session.tag_name.to_lowercase().contains(&query)
             })
             .collect();
-        div().flex().flex_col().gap_3()
-            .child(div().flex().items_center().gap_1()
-                .child(Button::new("previous-day").ghost().size(px(26.)).icon(IconName::ChevronLeft).tooltip("前一天")
-                    .on_click(cx.listener(|this, _, _, cx| { this.record_date = this.record_date.checked_sub_days(Days::new(1)).unwrap_or(this.record_date); this.refresh(cx); })))
-                .child(Button::new("record-date").ghost().small().flex_1().label(self.record_date.format("%m 月 %d 日").to_string()).tooltip("回到今天")
-                    .on_click(cx.listener(|this, _, _, cx| { this.record_date = Local::now().date_naive(); this.refresh(cx); })))
-                .child(Button::new("next-day").ghost().size(px(26.)).icon(IconName::ChevronRight).tooltip("后一天").disabled(self.record_date >= Local::now().date_naive())
-                    .on_click(cx.listener(|this, _, _, cx| { this.record_date = this.record_date.checked_add_days(Days::new(1)).unwrap_or(this.record_date); this.refresh(cx); }))))
-            .child(div().flex().items_baseline().gap_2()
-                .child(div().text_size(px(25.)).font(timer_font(cx)).font_weight(FontWeight::MEDIUM).child(short_time(self.record_stats.focus_seconds)))
-                .child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(format!("专注 · {} 条记录", self.history.len())))
-                .child(div().flex_1())
-                .child(Button::new("record-help").ghost().size(px(24.)).icon(IconName::Info).tooltip("暂停不计时，重叠的专注时间只计算一次；休息不计入专注。记录按结束日期归档。")))
-            .child(Input::new(&self.record_search).h(px(32.)).text_size(px(12.)).bg(rgb(0xf7f7f5)).rounded(px(7.)).prefix(Icon::new(IconName::Search).size(px(14.))))
-            .child(div().flex().flex_col().children(records.iter().map(|session| {
-                let id = session.id;
-                div().py_3().border_b_1().border_color(rgb(LINE)).flex().items_center().gap_2()
-                    .child(div().flex_1().min_w_0()
-                        .child(div().text_size(px(13.)).truncate().child(session.title.clone()))
-                        .child(div().mt_1().text_size(px(12.)).text_color(rgb(MUTED)).truncate().child(format!("{} · {}", session_times(session), session.tag_name))))
-                    .child(div().font(timer_font(cx)).text_size(px(13.)).child(clock(session.elapsed_at(self.now))))
-                    .child(Button::new(("delete-record", id as u64)).ghost().size(px(24.)).icon(Icon::default().path("force-icons/trash.svg")).tooltip("删除记录").text_color(rgb(0x963f3f))
-                        .on_click(cx.listener(move |this, _, window, cx| this.delete_record(id, window, cx))))
-            })).when(records.is_empty(), |body| body.child(div().py_6().flex().flex_col().items_center().gap_3().text_size(px(12.)).text_color(rgb(MUTED))
-                .child(Icon::new(if query.is_empty() {IconName::Inbox}else{IconName::Search}).size(px(24.)))
-                .child(if query.is_empty() { "这一天还没有记录" } else { "没有匹配的记录" })
-                .when(query.is_empty() && self.record_date==Local::now().date_naive(), |body| body.child(Button::new("records-start").ghost().small().label("开始一段专注").icon(Icon::new(IconName::ArrowRight).size(px(13.)))
-                    .on_click(cx.listener(|this,_,window,cx|this.new_task(window,cx))))))))
-            .child(Button::new("export-records").ghost().small().icon(IconName::ArrowDown).label("导出全部记录").disabled(self.export_busy).loading(self.export_busy)
-                .on_click(cx.listener(|this, _, _, cx| this.export(cx))))
+        div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(
+                div().flex().items_center().gap_1()
+                    .child(button("previous-day").ghost().size(px(28.))
+                        .icon(control_icon(IconName::ChevronLeft, INK)).tooltip("前一天")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.record_date = this.record_date.checked_sub_days(Days::new(1)).unwrap_or(this.record_date);
+                            this.refresh(cx);
+                        })))
+                    .child(button("record-date").ghost().small().flex_1()
+                        .child(control_label(self.record_date.format("%m 月 %d 日").to_string(), INK)).tooltip("回到今天")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.record_date = Local::now().date_naive();
+                            this.refresh(cx);
+                        })))
+                    .child(button("next-day").ghost().size(px(28.))
+                        .icon(control_icon(IconName::ChevronRight, INK)).tooltip("后一天")
+                        .unavailable(self.record_date >= Local::now().date_naive())
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.record_date = this.record_date.checked_add_days(Days::new(1)).unwrap_or(this.record_date);
+                            this.refresh(cx);
+                        }))),
+            )
+            .child(
+                div().flex().items_end().gap_2().py_1()
+                    .child(div().flex_1().flex().flex_col().gap_1()
+                        .child(field_label("专注时长"))
+                        .child(div().text_size(px(24.)).line_height(relative(1.2))
+                            .font(timer_font(cx)).font_weight(FontWeight::MEDIUM)
+                            .child(short_time(self.record_stats.focus_seconds))))
+                    .child(div().pb_1().text_size(px(12.)).text_color(rgb(MUTED))
+                        .child(format!("{} 条记录", self.history.len())))
+                    .child(button("record-help").ghost().size(px(28.))
+                        .icon(control_icon(Icon::new(IconName::Info).size(px(14.)), MUTED))
+                        .tooltip("暂停不计时，重叠的专注时间只计算一次；休息不计入专注。记录按结束日期归档。")),
+            )
+            .child(field(&self.record_search).prefix(Icon::new(IconName::Search).size(px(14.)).text_color(rgb(MUTED))))
+            .child(
+                div().flex().flex_col()
+                    .children(records.iter().map(|session| {
+                        let id = session.id;
+                        div().py_3().border_b_1().border_color(rgb(LINE))
+                            .flex().items_center().gap_2()
+                            .child(div().flex_1().min_w_0()
+                                .child(div().text_size(px(13.)).w_full().text_ellipsis().line_clamp(1).child(session.title.clone()))
+                                .child(div().mt_1().text_size(px(11.)).text_color(rgb(MUTED)).w_full().text_ellipsis().line_clamp(1)
+                                    .child(format!("{} · {}", session_times(session), session.tag_name))))
+                            .child(div().font(timer_font(cx)).text_size(px(13.))
+                                .child(clock(session.elapsed_at(self.now))))
+                            .child(destructive_button(("delete-record", id as u64)).ghost().size(px(28.))
+                                .icon(control_icon(Icon::default().path("force-icons/trash.svg").size(px(14.)), DESTRUCTIVE))
+                                .tooltip("删除记录")
+                                .on_click(cx.listener(move |this, _, window, cx| this.delete_record(id, window, cx))))
+                    }))
+                    .when(records.is_empty(), |body| body.child(
+                        div().py_5().flex().flex_col().items_center().gap_2()
+                            .text_size(px(12.)).text_color(rgb(MUTED))
+                            .child(Icon::new(if query.is_empty() { IconName::Inbox } else { IconName::Search }).size(px(22.)))
+                            .child(if query.is_empty() { "这一天还没有记录" } else { "没有匹配的记录" })
+                            .when(query.is_empty() && self.record_date == Local::now().date_naive(), |body| body.child(
+                                button("records-start").ghost().small()
+                                    .child(control_label("开始一段专注", INK))
+                                    .icon(control_icon(Icon::new(IconName::ArrowRight).size(px(13.)), INK))
+                                    .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx))),
+                            )),
+                    )),
+            )
+            .child(
+                div().flex().justify_end()
+                    .child(button("export-records").ghost().small()
+                        .icon(control_icon(Icon::new(IconName::ArrowDown).size(px(14.)), MUTED))
+                        .child(control_label("导出全部记录", MUTED))
+                        .unavailable(self.export_busy).loading(self.export_busy)
+                        .on_click(cx.listener(|this, _, _, cx| this.export(cx)))),
+            )
     }
 
     fn settings_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .flex()
             .flex_col()
-            .gap_4()
+            .gap_3()
             .child(
                 div()
                     .flex()
@@ -964,6 +1030,10 @@ impl ForceView {
                     .child(
                         Switch::new("completion-sound")
                             .small()
+                            .when(
+                                cfg!(any(target_os = "macos", target_os = "windows")),
+                                |switch| switch.cursor_pointer(),
+                            )
                             .checked(self.sound_enabled)
                             .disabled(!cfg!(any(target_os = "macos", target_os = "windows")))
                             .tooltip(if cfg!(any(target_os = "macos", target_os = "windows")) {
@@ -982,7 +1052,7 @@ impl ForceView {
                     .items_center()
                     .gap_2()
                     .child(div().flex_1().text_size(px(13.)).child("每日目标"))
-                    .child(div().w(px(58.)).child(Input::new(&self.goal_input).small()))
+                    .child(div().w(px(64.)).child(field(&self.goal_input)))
                     .child(
                         div()
                             .text_size(px(12.))
@@ -990,10 +1060,10 @@ impl ForceView {
                             .child("分钟"),
                     )
                     .child(
-                        Button::new("save-goal")
+                        button("save-goal")
                             .ghost()
                             .size(px(28.))
-                            .icon(IconName::Check)
+                            .icon(control_icon(IconName::Check, INK))
                             .tooltip("保存每日目标")
                             .on_click(cx.listener(|this, _, _, cx| {
                                 let Ok(minutes) =
@@ -1010,14 +1080,14 @@ impl ForceView {
             )
             .child(
                 div()
-                    .pt_4()
+                    .pt_3()
                     .border_t_1()
                     .border_color(rgb(LINE))
                     .child(field_label("标签"))
                     .children(self.tags.iter().map(|tag| {
                         let id = tag.id;
                         div()
-                            .h(px(36.))
+                            .h(px(32.))
                             .flex()
                             .items_center()
                             .gap_1()
@@ -1026,7 +1096,9 @@ impl ForceView {
                                     .flex_1()
                                     .min_w_0()
                                     .text_size(px(13.))
-                                    .truncate()
+                                    .w_full()
+                                    .text_ellipsis()
+                                    .line_clamp(1)
                                     .child(tag.name.clone()),
                             )
                             .child(
@@ -1041,22 +1113,30 @@ impl ForceView {
                                     }),
                             )
                             .child(
-                                Button::new(("edit-tag", id as u64))
+                                button(("edit-tag", id as u64))
                                     .ghost()
-                                    .size(px(26.))
-                                    .icon(Icon::default().path("force-icons/pencil.svg"))
+                                    .size(px(28.))
+                                    .icon(control_icon(
+                                        Icon::default()
+                                            .path("force-icons/pencil.svg")
+                                            .size(px(14.)),
+                                        INK,
+                                    ))
                                     .tooltip("重命名标签")
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.begin_edit_tag(id, window, cx)
                                     })),
                             )
                             .child(
-                                Button::new(("remove-tag", id as u64))
+                                destructive_button(("remove-tag", id as u64))
                                     .ghost()
-                                    .size(px(26.))
-                                    .icon(Icon::default().path("force-icons/trash.svg"))
+                                    .size(px(28.))
+                                    .icon(control_icon(
+                                        Icon::default().path("force-icons/trash.svg").size(px(14.)),
+                                        DESTRUCTIVE,
+                                    ))
                                     .tooltip("移除标签")
-                                    .text_color(rgb(0x963f3f))
+                                    .text_color(rgb(DESTRUCTIVE))
                                     .on_click(cx.listener(move |this, _, window, cx| {
                                         this.delete_tag(id, window, cx)
                                     })),
@@ -1068,22 +1148,20 @@ impl ForceView {
                             .flex()
                             .items_center()
                             .gap_1()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(Input::new(&self.tag_input).small()),
-                            )
+                            .child(div().flex_1().min_w_0().child(field(&self.tag_input)))
                             .when(self.editing_tag.is_none(), |row| {
                                 row.child(
-                                    Button::new("new-tag-kind")
+                                    button("new-tag-kind")
                                         .ghost()
                                         .small()
-                                        .label(if self.new_tag_kind == TagKind::Focus {
-                                            "专注"
-                                        } else {
-                                            "休息"
-                                        })
+                                        .child(control_label(
+                                            if self.new_tag_kind == TagKind::Focus {
+                                                "专注"
+                                            } else {
+                                                "休息"
+                                            },
+                                            INK,
+                                        ))
                                         .tooltip("标签类型")
                                         .on_click(cx.listener(|this, _, _, cx| {
                                             this.new_tag_kind =
@@ -1097,14 +1175,17 @@ impl ForceView {
                                 )
                             })
                             .child(
-                                Button::new("save-tag")
+                                button("save-tag")
                                     .ghost()
                                     .size(px(28.))
-                                    .icon(if self.editing_tag.is_some() {
-                                        IconName::Check
-                                    } else {
-                                        IconName::Plus
-                                    })
+                                    .icon(control_icon(
+                                        if self.editing_tag.is_some() {
+                                            IconName::Check
+                                        } else {
+                                            IconName::Plus
+                                        },
+                                        INK,
+                                    ))
                                     .tooltip(if self.editing_tag.is_some() {
                                         "保存标签"
                                     } else {
@@ -1118,10 +1199,10 @@ impl ForceView {
                             )
                             .when(self.editing_tag.is_some(), |row| {
                                 row.child(
-                                    Button::new("cancel-tag-edit")
+                                    button("cancel-tag-edit")
                                         .ghost()
-                                        .size(px(26.))
-                                        .icon(IconName::Close)
+                                        .size(px(28.))
+                                        .icon(control_icon(IconName::Close, INK))
                                         .tooltip("取消")
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.cancel_tag_edit(window, cx)
@@ -1139,20 +1220,20 @@ impl ForceView {
                     .items_center()
                     .justify_between()
                     .child(
-                        Button::new("data-folder")
+                        button("data-folder")
                             .ghost()
                             .small()
-                            .icon(IconName::FolderOpen)
-                            .label("本地数据")
+                            .icon(control_icon(IconName::FolderOpen, INK))
+                            .child(control_label("本地数据", INK))
                             .on_click(cx.listener(|this, _, _, cx| cx.reveal_path(&this.data_dir))),
                     )
                     .child(
-                        Button::new("export-data")
+                        button("export-data")
                             .ghost()
                             .small()
-                            .icon(IconName::ArrowDown)
-                            .label("导出 CSV")
-                            .disabled(self.export_busy)
+                            .icon(control_icon(IconName::ArrowDown, INK))
+                            .child(control_label("导出 CSV", INK))
+                            .unavailable(self.export_busy)
                             .loading(self.export_busy)
                             .on_click(cx.listener(|this, _, _, cx| this.export(cx))),
                     ),
@@ -1169,10 +1250,11 @@ impl ForceView {
                             .child(format!("Force {}", env!("CARGO_PKG_VERSION"))),
                     )
                     .child(
-                        Button::new("quit-force")
+                        button("quit-force")
                             .ghost()
                             .small()
-                            .label("退出")
+                            .text_color(rgb(MUTED))
+                            .child(control_label("退出 Force", INK))
                             .on_click(cx.listener(|_, _, _, cx| cx.quit())),
                     ),
             )
@@ -1204,7 +1286,8 @@ impl ForceView {
                     .overflow_y_scroll()
                     .track_scroll(scroll)
                     .relative()
-                    .p_4()
+                    .px_4()
+                    .py_3()
                     .when(self.storage_failed, |body| {
                         body.child(self.storage_notice(cx))
                     })
@@ -1222,7 +1305,7 @@ impl ForceView {
                 |body| {
                     body.child(
                         div()
-                            .h(px(32.))
+                            .h(px(30.))
                             .px_4()
                             .flex_shrink_0()
                             .border_t_1()
@@ -1234,10 +1317,13 @@ impl ForceView {
                             .text_color(rgb(MUTED))
                             .child(format!("今日专注 {}", short_time(self.today.focus_seconds)))
                             .child(
-                                Button::new("goal-help")
+                                button("goal-help")
                                     .ghost()
-                                    .xsmall()
-                                    .icon(IconName::Info)
+                                    .size(px(28.))
+                                    .icon(control_icon(
+                                        Icon::new(IconName::Info).size(px(14.)),
+                                        INK,
+                                    ))
                                     .tooltip(format!(
                                         "每日目标 {} · 暂停不计时，电脑睡眠继续计时。",
                                         short_time(i64::from(self.goal) * 60)
@@ -1273,9 +1359,9 @@ impl Render for ForceView {
                     .relative()
                     .flex()
                     .flex_col()
-                    .rounded(px(14.))
+                    .rounded(px(12.))
                     .border_1()
-                    .border_color(rgb(0xdededa))
+                    .border_color(rgb(0xd9d9d9))
                     .bg(rgb(PAPER))
                     .shadow(vec![BoxShadow {
                         color: rgba(0x0000000d).into(),
@@ -1299,8 +1385,8 @@ impl Render for ForceView {
                                 .left_3()
                                 .right_3()
                                 .h(px(2.))
-                                .bg(rgb(0xefefec))
-                                .child(div().h_full().w(relative(fraction)).bg(rgb(0x777773)))
+                                .bg(rgb(LINE))
+                                .child(div().h_full().w(relative(fraction)).bg(rgb(MUTED)))
                         }))
                     })
                     .when(self.toast.is_some() && !self.compact, |body| {
@@ -1315,7 +1401,7 @@ impl Render for ForceView {
                                 .left_3()
                                 .right_3()
                                 .p_3()
-                                .rounded_md()
+                                .rounded(px(6.))
                                 .bg(rgb(INK))
                                 .text_color(rgb(0xffffff))
                                 .text_size(px(12.))
@@ -1328,6 +1414,58 @@ impl Render for ForceView {
                         )
                     }),
             )
+    }
+}
+
+fn button(id: impl Into<ElementId>) -> Button {
+    Button::new(id)
+        .text_size(px(13.))
+        .rounded(px(6.))
+        .cursor_pointer()
+}
+
+fn primary_button(id: impl Into<ElementId>) -> Button {
+    button(id).primary().font_weight(FontWeight::MEDIUM)
+}
+
+fn destructive_button(id: impl Into<ElementId>) -> Button {
+    button(id).text_color(rgb(DESTRUCTIVE))
+}
+
+fn field(state: &Entity<gpui_component::input::InputState>) -> Input {
+    // Input::h only affects multiline editors; Styled::h sets the single-line
+    // control height too. Use one geometry across task, search and settings.
+    Styled::h(Input::new(state), px(32.))
+        .text_size(px(13.))
+        .line_height(px(20.))
+        .px(px(9.))
+        .py(px(5.))
+        .bg(rgb(0xffffff))
+        .rounded(px(6.))
+}
+
+// gpui-component 0.5.1 hardcodes a red hover foreground. Keep each label and
+// icon explicitly colored; registering another hover handler would panic.
+fn control_label(value: impl Into<SharedString>, foreground: u32) -> Div {
+    div()
+        .text_size(px(13.))
+        .line_height(relative(1.2))
+        .text_color(rgb(foreground))
+        .child(value.into())
+}
+
+fn control_icon(value: impl Into<Icon>, foreground: u32) -> Icon {
+    value.into().text_color(rgb(foreground))
+}
+
+trait ControlState {
+    fn unavailable(self, disabled: bool) -> Self;
+}
+
+impl ControlState for Button {
+    fn unavailable(self, disabled: bool) -> Self {
+        self.disabled(disabled)
+            .when(disabled, |button| button.opacity(0.4).cursor_default())
     }
 }
 
@@ -1388,8 +1526,9 @@ fn task_heading(title: &str) -> impl IntoElement {
     let help = label.clone();
     div()
         .id("task-heading")
-        .text_size(px(17.))
+        .text_size(px(16.))
         .font_weight(FontWeight::MEDIUM)
+        .text_ellipsis()
         .line_clamp(2)
         .tooltip(move |window, cx| Tooltip::new(help.clone()).build(window, cx))
         .child(label)

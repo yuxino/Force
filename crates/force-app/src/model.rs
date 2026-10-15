@@ -530,10 +530,13 @@ impl ForceView {
                 .take(2)
                 .count();
             match recent {
-                0 => 400.,
-                1 => 420.,
+                0 => 376.,
                 _ => PANEL_HEIGHT,
             }
+        } else if self.page == Page::Focus {
+            if self.completed.is_some() { 388. } else { 376. }
+        } else if self.page == Page::Records {
+            416.
         } else {
             PANEL_HEIGHT
         }
