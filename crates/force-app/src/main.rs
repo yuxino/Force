@@ -97,6 +97,8 @@ fn main() -> anyhow::Result<()> {
         println!("Force {}", env!("CARGO_PKG_VERSION"));
         return Ok(());
     }
+    #[cfg(target_os = "macos")]
+    platform::prepare_application()?;
     let data_dir = data_directory()?;
     Application::new()
         .with_assets(Assets)

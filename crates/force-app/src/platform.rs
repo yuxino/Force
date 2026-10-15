@@ -3,6 +3,32 @@ pub(crate) const STRIP_HEIGHT: f32 = 68.;
 pub(crate) const PANEL_HEIGHT: f32 = 440.;
 
 #[cfg(target_os = "macos")]
+pub(crate) fn prepare_application() -> anyhow::Result<()> {
+    use anyhow::{Context as _, ensure};
+    use objc2::{
+        MainThreadMarker, msg_send,
+        runtime::{AnyClass, AnyObject},
+    };
+
+    let _main_thread = MainThreadMarker::new()
+        .context("AppKit initialization requires the application main thread")?;
+    // GPUI 0.2.2 queries TIS while constructing Application, before creating
+    // NSApplication. That order disables marked-text composition in nonactivating
+    // panels. Initialize its registered subclass first; creating NSApplication
+    // directly would leave GPUI with the wrong singleton and missing ivars.
+    let class = AnyClass::get(c"GPUIApplication")
+        .context("GPUI's native application class is unavailable")?;
+    // GPUI registers this NSApplication subclass before main. sharedApplication
+    // returns the process-owned singleton; no ownership is transferred here.
+    let application: *mut AnyObject = unsafe { msg_send![class, sharedApplication] };
+    ensure!(
+        !application.is_null(),
+        "Could not initialize the native application"
+    );
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 pub fn set_always_on_top(window: &gpui::Window, enabled: bool) -> anyhow::Result<()> {
     use anyhow::{Context as _, bail};
     use objc2::MainThreadMarker;
