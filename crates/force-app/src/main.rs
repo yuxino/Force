@@ -273,11 +273,15 @@ fn main() -> anyhow::Result<()> {
 fn with_force(
     handle: WindowHandle<Root>,
     cx: &mut App,
-    operation: impl FnOnce(&mut ForceView, &mut Window, &mut Context<ForceView>),
+    operation: impl FnOnce(&mut ForceView, &mut Window, &mut Context<ForceView>) + 'static,
 ) {
-    let _ = handle.update(cx, |root, window, cx| {
-        if let Ok(view) = root.view().clone().downcast::<ForceView>() {
-            view.update(cx, |this, cx| operation(this, window, cx));
-        }
+    // Keyboard actions run while GPUI is borrowing the dispatching window.
+    // Wait until that borrow ends before accessing it through its handle.
+    cx.defer(move |cx| {
+        let _ = handle.update(cx, |root, window, cx| {
+            if let Ok(view) = root.view().clone().downcast::<ForceView>() {
+                view.update(cx, |this, cx| operation(this, window, cx));
+            }
+        });
     });
 }

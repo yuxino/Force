@@ -11,6 +11,7 @@ Force is a local-first desktop focus timer built with Rust and GPUI. Keep all us
 - Test with a dedicated temporary data directory. Do not read or modify a real user's records during acceptance.
 - macOS previews must be signed with an existing private-key-backed identity. Use a separate Force Dev bundle and app data directory. Do not replace a formal installation.
 - Run `scripts/check.sh` before delivery. UI acceptance needs the actual native app; compilation alone is not visual or cross-platform acceptance.
+- Native input acceptance must include ordinary key presses, editing and shortcuts, plus typing immediately after dismissing native save/confirmation dialogs and reopening the panel. A visible caret or successful paste alone does not prove keyboard input works. After changing macOS window styles, preserve GPUI's native text-input responder; defer handle-based window access from global keyboard callbacks until the dispatching window's borrow ends.
 - Name branches `feat/...`, `fix/...` or `docs/...`. A substantial rewrite needs explicit approval before merging main. Do not publish a release without a release instruction.
 - Do not commit credentials, private data, local paths, installers or build outputs. Keep documentation concise and about current behavior.
 - Remove task-created temporary artifacts after verification. Preserve source, active app artifacts, useful build caches and concise verification evidence.

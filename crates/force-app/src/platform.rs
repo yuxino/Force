@@ -96,11 +96,12 @@ fn native_window(
 
 #[cfg(target_os = "macos")]
 pub(crate) fn configure_floating(window: &mut gpui::Window) -> anyhow::Result<()> {
-    use anyhow::Context as _;
+    use anyhow::{Context as _, ensure};
     use objc2_app_kit::{
         NSAccessibility, NSAccessibilityFloatingWindowSubrole, NSAccessibilityWindowRole, NSPanel,
         NSWindowStyleMask,
     };
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     window.set_window_title("Force");
     let native = native_window(window)?;
     let panel = native
@@ -113,7 +114,23 @@ pub(crate) fn configure_floating(window: &mut gpui::Window) -> anyhow::Result<()
     native.setMovableByWindowBackground(false);
     native.setHasShadow(false);
     panel.setFloatingPanel(true);
-    panel.setBecomesKeyOnlyIfNeeded(true);
+    // GPUI inputs share a custom NSView, which does not implement AppKit's
+    // needsPanelToBecomeKey opt-in. Let clicks reacquire keyboard focus, also
+    // after dismissing a native save/confirmation dialog.
+    panel.setBecomesKeyOnlyIfNeeded(false);
+    let handle = HasWindowHandle::window_handle(window)
+        .map_err(|error| anyhow::anyhow!("Native window is unavailable: {error:?}"))?;
+    if let RawWindowHandle::AppKit(handle) = handle.as_raw() {
+        // Removing the titled style resets AppKit's first responder to the
+        // panel. Restore GPUI's text-input view: logical focus and paste still
+        // work without it, but ordinary typing and IME composition do not.
+        // GPUI owns this live view for the duration of the window handle.
+        let view = unsafe { handle.ns_view.cast::<objc2_app_kit::NSView>().as_ref() };
+        ensure!(
+            native.makeFirstResponder(Some(view)),
+            "The floating window could not restore its text input responder"
+        );
+    }
     // A nonactivating tool panel is an application window, with floating-window
     // semantics exposed to assistive technology rather than an anonymous dialog.
     native.setAccessibilityRole(Some(unsafe { NSAccessibilityWindowRole }));
