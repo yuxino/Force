@@ -787,6 +787,7 @@ impl ForceView {
                                                 .on_click(cx.listener(move |this, _, _, cx| {
                                                     this.selected_session = Some(id);
                                                     this.completed = None;
+                                                    this.remember_selected_session(cx);
                                                     cx.notify();
                                                 })),
                                         )

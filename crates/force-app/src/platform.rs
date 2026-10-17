@@ -441,7 +441,10 @@ pub(crate) fn write_private_state(
         file.write_all(content)?;
         file.sync_all()?;
         drop(file);
-        std::fs::rename(&temporary, directory.join(name))
+        std::fs::rename(&temporary, directory.join(name))?;
+        #[cfg(unix)]
+        std::fs::File::open(directory)?.sync_all()?;
+        Ok(())
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(temporary);

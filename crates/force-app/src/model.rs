@@ -173,6 +173,10 @@ impl ForceView {
                 quit_subscription,
             ],
         };
+        match read_selected_session(&view.data_dir) {
+            Ok(selected) => view.selected_session = selected,
+            Err(_) => view.notify("无法读取上次选择的计时，将显示可用计时。", cx),
+        }
         view.open_store(cx);
         if view
             .active
@@ -206,13 +210,21 @@ impl ForceView {
         view.goal_input
             .update(cx, |input, cx| input.set_value(goal, window, cx));
         if let Some(session) = view
-            .active
-            .iter()
-            .find(|session| Some(session.id) == view.selected_session)
+            .completed
+            .as_ref()
+            .or_else(|| {
+                view.active
+                    .iter()
+                    .find(|session| Some(session.id) == view.selected_session)
+            })
             .cloned()
         {
             view.selected_task = session.task_id;
             view.selected_tag = session.tag_id;
+            view.countdown = session.target_seconds.is_some();
+            if let Some(target) = session.target_seconds {
+                view.timer_minutes = u32::try_from(target / 60).unwrap_or(25);
+            }
             if session.tag_kind == TagKind::Focus {
                 view.return_task = session.task_id;
                 view.return_target_seconds = session.target_seconds;
@@ -335,16 +347,17 @@ impl ForceView {
                         .iter()
                         .any(|session| Some(session.id) == self.selected_session)
                 {
-                    self.selected_session = self.active.last().map(|session| session.id);
+                    self.selected_session =
+                        preferred_session(&self.active).map(|session| session.id);
                 }
                 if let Some(completed) = completed {
                     if completed.tag_kind == TagKind::Focus {
                         self.return_task = completed.task_id;
                         self.return_target_seconds = completed.target_seconds;
                     }
-                    if self.preparing {
-                        // Finishing the previous timer must not replace an
-                        // unfinished task draft, its tag, or its chosen duration.
+                    if self.preparing || self.active.iter().any(Session::is_running) {
+                        // Completion must not hide a running timer or replace
+                        // an unfinished task draft and its chosen duration.
                         self.notify("上一段计时已结束并记录。", cx);
                     } else {
                         self.completed = Some(completed);
@@ -483,7 +496,17 @@ impl ForceView {
         self.completed = None;
         self.page = Page::Focus;
         self.toast = None;
+        self.remember_selected_session(cx);
         self.set_expanded(false, window, cx);
+    }
+
+    pub(crate) fn remember_selected_session(&mut self, cx: &mut Context<Self>) {
+        let data = format!("v1 {}\n", self.selected_session.unwrap_or(0));
+        if crate::platform::write_private_state(&self.data_dir, "selected-session", data.as_bytes())
+            .is_err()
+        {
+            self.notify("无法保存当前计时的选择。计时记录不受影响。", cx);
+        }
     }
 
     fn set_expanded(&mut self, expanded: bool, window: &mut Window, cx: &mut Context<Self>) {
@@ -565,6 +588,7 @@ impl ForceView {
         self.page = Page::Focus;
         self.task_input
             .update(cx, |input, cx| input.set_value(task.title, window, cx));
+        self.remember_selected_session(cx);
         self.set_expanded(true, window, cx);
     }
 
@@ -1082,6 +1106,33 @@ impl ForceView {
     }
 }
 
+// A newer paused round must never hide the timer that is still running after
+// restart. Use timestamp/id ordering rather than depending on query order.
+fn preferred_session(active: &[Session]) -> Option<&Session> {
+    active
+        .iter()
+        .max_by_key(|session| (session.is_running(), session.started_at, session.id))
+}
+
+fn read_selected_session(directory: &Path) -> std::io::Result<Option<i64>> {
+    let text = match fs::read_to_string(directory.join("selected-session")) {
+        Ok(text) => text,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error),
+    };
+    let fields: Vec<_> = text.split_whitespace().collect();
+    if let ["v1", id] = fields.as_slice()
+        && let Ok(id) = id.parse::<i64>()
+        && id >= 0
+    {
+        return Ok((id != 0).then_some(id));
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "Invalid selected session",
+    ))
+}
+
 fn write_return_context(
     directory: &Path,
     task: Option<i64>,
@@ -1250,6 +1301,54 @@ fn write_export(path: &Path, content: &[u8], database: &Path) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_timer_state_survives_restart_and_rejects_invalid_files() {
+        let directory = tempfile::tempdir().unwrap();
+        assert_eq!(read_selected_session(directory.path()).unwrap(), None);
+        crate::platform::write_private_state(directory.path(), "selected-session", b"v1 42\n")
+            .unwrap();
+        assert_eq!(read_selected_session(directory.path()).unwrap(), Some(42));
+        crate::platform::write_private_state(directory.path(), "selected-session", b"v1 0\n")
+            .unwrap();
+        assert_eq!(read_selected_session(directory.path()).unwrap(), None);
+        for invalid in ["v1 -1", "v2 42", "v1 42 extra", "", "v1 invalid"] {
+            fs::write(directory.path().join("selected-session"), invalid).unwrap();
+            assert!(read_selected_session(directory.path()).is_err());
+            assert_eq!(
+                fs::read_to_string(directory.path().join("selected-session")).unwrap(),
+                invalid
+            );
+        }
+    }
+
+    #[test]
+    fn restart_prefers_running_timer_over_newer_paused_rounds() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("force.sqlite3");
+        let mut store = Store::open(&path).unwrap();
+        let first = store.create_task("Earlier task", 1, 100).unwrap();
+        let running = store.start_task(first.id, 100, None).unwrap();
+        let second = store.create_task("Newer paused task", 1, 200).unwrap();
+        let paused = store.start_task(second.id, 200, Some(2700)).unwrap();
+        store.pause(paused.id, 210).unwrap();
+        store.start_task(first.id, 220, None).unwrap();
+        drop(store);
+
+        let store = Store::open(&path).unwrap();
+        let mut active = store.active_sessions().unwrap();
+        assert_eq!(active.last().unwrap().id, paused.id);
+        assert_eq!(preferred_session(&active).unwrap().id, running.id);
+        active.reverse();
+        assert_eq!(preferred_session(&active).unwrap().id, running.id);
+        drop(store);
+
+        let mut store = Store::open(&path).unwrap();
+        store.pause(running.id, 230).unwrap();
+        let active = store.active_sessions().unwrap();
+        assert_eq!(preferred_session(&active).unwrap().id, paused.id);
+        assert!(preferred_session(&[]).is_none());
+    }
 
     #[test]
     fn rest_return_context_round_trips_exact_task_and_timer_mode() {
