@@ -8,6 +8,10 @@ license.workspace = true
 name = "force"
 path = "src/main.rs"
 
+[features]
+default = []
+ui-test-support = ["gpui/test-support"]
+
 [dependencies]
 anyhow = "1"
 chrono = "0.4"

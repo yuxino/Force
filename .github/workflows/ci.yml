@@ -38,6 +38,11 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - name: Tests
         run: cargo test --workspace --locked
+      - name: UI regression checks
+        if: runner.os == 'macOS'
+        run: |
+          cargo clippy -p force-app --all-targets --features ui-test-support --locked -- -D warnings
+          cargo test -p force-app --features ui-test-support --locked
       - name: Build native application
         run: cargo build --bin force --locked
       - name: Diff whitespace

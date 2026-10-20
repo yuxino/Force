@@ -475,3 +475,62 @@ fn app_database_directory_and_file_are_private() {
         0o600
     );
 }
+
+#[test]
+fn batched_focus_days_split_midnight_merge_overlap_and_exclude_rest() {
+    let (_directory, mut store) = database();
+    let midnight = 86_400;
+    let first = store.start("Across midnight", 1, midnight - 30).unwrap();
+    let overlap = store.start("Parallel focus", 3, midnight - 10).unwrap();
+    let rest = store.start("Rest", 4, midnight - 100).unwrap();
+    store.finish(first.id, midnight + 20).unwrap();
+    store.finish(overlap.id, midnight + 50).unwrap();
+    store.finish(rest.id, midnight + 100).unwrap();
+    store.start("Still running", 1, midnight + 55).unwrap();
+    let ranges = [
+        (midnight, midnight * 2),
+        (0, midnight),
+        (midnight * 2, midnight * 3),
+        (midnight + 5, midnight + 5),
+        (midnight + 10, midnight + 1),
+        (-100, 0),
+    ];
+    assert_eq!(
+        store
+            .focus_totals_for_ranges(&ranges, midnight + 60)
+            .unwrap(),
+        vec![55, 30, 0, 0, 0, 0]
+    );
+    assert_eq!(
+        store
+            .focus_totals_for_ranges(&[(midnight - 15, midnight + 25)], midnight + 10)
+            .unwrap(),
+        vec![25]
+    );
+}
+
+#[test]
+fn batched_focus_days_handle_empty_data_and_settled_timed_targets() {
+    let (_directory, mut store) = database();
+    assert_eq!(
+        store.focus_totals_for_ranges(&[], 100).unwrap(),
+        Vec::<i64>::new()
+    );
+    assert_eq!(
+        store
+            .focus_totals_for_ranges(&[(0, 200), (200, 300)], 100)
+            .unwrap(),
+        vec![0, 0]
+    );
+    let midnight = 86_400;
+    let timed = store.start_timed("Timed", 1, midnight - 20, 60).unwrap();
+    store.pause(timed.id, midnight + 10).unwrap();
+    store.resume(timed.id, midnight + 30).unwrap();
+    store.finish_exact_target(timed.id, midnight + 200).unwrap();
+    assert_eq!(
+        store
+            .focus_totals_for_ranges(&[(0, midnight), (midnight, midnight * 2)], midnight + 200)
+            .unwrap(),
+        vec![20, 40]
+    );
+}

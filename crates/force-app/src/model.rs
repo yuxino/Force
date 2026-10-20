@@ -5,20 +5,30 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use crate::platform::{PANEL_HEIGHT, STRIP_HEIGHT};
+use crate::tag_picker::{FocusTagOption, TagPicked, TagPicker};
 
-use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone};
-use force_core::{Session, Stats, Store, Tag, TagKind, Task};
+use chrono::{Datelike, Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone};
+use force_core::{MAX_GOAL_MINUTES, Session, Stats, Store, Tag, TagKind, Task};
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, PromptButton, PromptLevel, Subscription, Window,
+    WindowHandle,
 };
-use gpui_component::input::{InputEvent, InputState};
+use gpui_component::{
+    Root,
+    input::{InputEvent, InputState},
+};
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Page {
     Focus,
     Records,
     Settings,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct ActivityDay {
+    pub(crate) date: NaiveDate,
+    pub(crate) seconds: i64,
 }
 
 pub(crate) struct ForceView {
@@ -35,20 +45,25 @@ pub(crate) struct ForceView {
     pub(crate) completed: Option<Session>,
     pub(crate) today: Stats,
     pub(crate) record_stats: Stats,
+    pub(crate) activity_days: Vec<ActivityDay>,
     pub(crate) selected_tag: i64,
+    pub(crate) tag_picker: Entity<TagPicker>,
+    tag_picker_options: Vec<FocusTagOption>,
     pub(crate) selected_session: Option<i64>,
     pub(crate) record_date: NaiveDate,
     pub(crate) goal: u32,
     pub(crate) page: Page,
     pub(crate) compact: bool,
-    pub(crate) panel_above: bool,
-    panel_height: f32,
+    pub(crate) manager_window: Option<WindowHandle<Root>>,
+    pub(crate) strip_window: Option<WindowHandle<Root>>,
     pub(crate) preparing: bool,
     pub(crate) pinned: bool,
     pub(crate) task_input: Entity<InputState>,
     pub(crate) tag_input: Entity<InputState>,
     pub(crate) goal_input: Entity<InputState>,
     pub(crate) record_search: Entity<InputState>,
+    pub(crate) record_help_open: bool,
+    pub(crate) record_details: Option<i64>,
     pub(crate) new_tag_kind: TagKind,
     pub(crate) editing_tag: Option<i64>,
     pub(crate) toast: Option<(String, Instant)>,
@@ -59,8 +74,11 @@ pub(crate) struct ForceView {
     pub(crate) sound_enabled: bool,
     pub(crate) focus_handle: FocusHandle,
     pub(crate) panel_scroll: [gpui::ScrollHandle; 3],
+    pub(crate) tag_scroll: gpui::ScrollHandle,
+    pub(crate) tag_form_anchor: gpui::ScrollAnchor,
     data_version: i64,
     window_position: (f32, f32),
+    strip_position_initialized: bool,
     position_changed: Option<Instant>,
     _subscriptions: Vec<Subscription>,
 }
@@ -72,10 +90,28 @@ impl ForceView {
         let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
         let goal_input = cx.new(|cx| InputState::new(window, cx).placeholder("每日目标（分钟）"));
         let record_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索任务或标签"));
+        let tag_picker = cx.new(TagPicker::new);
+        let tag_picker_subscription =
+            cx.subscribe(&tag_picker, |this, _, event: &TagPicked, cx| {
+                let id = event.0;
+                if this
+                    .tags
+                    .iter()
+                    .any(|tag| tag.id == id && tag.kind == TagKind::Focus)
+                {
+                    this.selected_tag = id;
+                    cx.notify();
+                } else {
+                    this.notify("这个专注标签已变更，请重新选择。", cx);
+                }
+            });
         let subscription = cx.subscribe_in(
             &task_input,
             window,
             |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                }
                 if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Focus
@@ -90,7 +126,9 @@ impl ForceView {
             &tag_input,
             window,
             |this, _, event: &InputEvent, window, cx| {
-                if matches!(event, InputEvent::PressEnter { secondary: false })
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Settings
                 {
@@ -98,29 +136,39 @@ impl ForceView {
                 }
             },
         );
-        let search_subscription = cx.subscribe(&record_search, |_, _, event: &InputEvent, cx| {
-            if matches!(event, InputEvent::Change) {
-                cx.notify();
-            }
-        });
-        let position_subscription = cx.observe_window_bounds(window, |this, window, _| {
-            let origin = window.bounds().origin;
-            let offset = if this.panel_above {
-                (f32::from(window.bounds().size.height) - STRIP_HEIGHT).max(0.)
-            } else {
-                0.
-            };
-            this.window_position = (f32::from(origin.x), f32::from(origin.y) + offset);
-            this.position_changed = Some(Instant::now());
-        });
+        let goal_subscription =
+            cx.subscribe_in(&goal_input, window, |this, _, event: &InputEvent, _, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { secondary: false })
+                    && !this.compact
+                    && this.page == Page::Settings
+                {
+                    this.save_goal(cx);
+                }
+            });
+        let search_subscription =
+            cx.subscribe(&record_search, |this, _, event: &InputEvent, cx| {
+                if matches!(event, InputEvent::Change) {
+                    this.record_details = None;
+                    this.panel_scroll[1].set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+                    cx.notify();
+                }
+            });
         let quit_subscription = cx.on_app_quit(|this, cx| {
             let directory = this.data_dir.clone();
-            let position = this.window_position;
+            let position = this
+                .strip_position_initialized
+                .then_some(this.window_position);
 
             cx.background_executor().spawn(async move {
-                let _ = crate::platform::persist_position(&directory, position);
+                if let Some(position) = position {
+                    let _ = crate::platform::persist_position(&directory, position);
+                }
             })
         });
+        let panel_scroll: [gpui::ScrollHandle; 3] = std::array::from_fn(|_| Default::default());
+        let tag_form_anchor = gpui::ScrollAnchor::for_handle(panel_scroll[2].clone());
         let mut view = Self {
             store: None,
             data_dir,
@@ -135,20 +183,25 @@ impl ForceView {
             completed: None,
             today: Stats::default(),
             record_stats: Stats::default(),
+            activity_days: Vec::new(),
             selected_tag: 0,
+            tag_picker,
+            tag_picker_options: Vec::new(),
             selected_session: None,
             record_date: Local::now().date_naive(),
             goal: 300,
             page: Page::Focus,
             compact: true,
-            panel_above: false,
-            panel_height: STRIP_HEIGHT,
+            manager_window: None,
+            strip_window: None,
             preparing: false,
             pinned: cfg!(any(target_os = "macos", target_os = "windows")),
             task_input,
             tag_input,
             goal_input,
             record_search,
+            record_help_open: false,
+            record_details: None,
             new_tag_kind: TagKind::Focus,
             editing_tag: None,
             toast: None,
@@ -158,18 +211,19 @@ impl ForceView {
             countdown: true,
             sound_enabled: true,
             focus_handle: cx.focus_handle(),
-            panel_scroll: std::array::from_fn(|_| gpui::ScrollHandle::default()),
+            panel_scroll,
+            tag_scroll: gpui::ScrollHandle::default(),
+            tag_form_anchor,
             data_version: 0,
-            window_position: (
-                f32::from(window.bounds().origin.x),
-                f32::from(window.bounds().origin.y),
-            ),
+            window_position: (0., 0.),
+            strip_position_initialized: false,
             position_changed: None,
             _subscriptions: vec![
                 subscription,
                 tag_subscription,
+                goal_subscription,
                 search_subscription,
-                position_subscription,
+                tag_picker_subscription,
                 quit_subscription,
             ],
         };
@@ -245,6 +299,38 @@ impl ForceView {
         view
     }
 
+    pub(crate) fn sync_tag_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let options: Vec<_> = self
+            .tags
+            .iter()
+            .filter(|tag| tag.kind == TagKind::Focus)
+            .map(|tag| FocusTagOption {
+                id: tag.id,
+                name: tag.name.clone(),
+            })
+            .collect();
+        let selected = options
+            .iter()
+            .find(|option| option.id == self.selected_tag)
+            .map(|option| option.id);
+        let enabled = self.page == Page::Focus
+            && !self.compact
+            && !self.storage_failed
+            && self.completed.is_none()
+            && (self.preparing || self.active.is_empty());
+        let options_changed = options != self.tag_picker_options;
+        let picker = self.tag_picker.read(cx);
+        let selection_changed = picker.selected_value() != selected;
+        let enabled_changed = picker.is_enabled() != enabled;
+        if !options_changed && !selection_changed && !enabled_changed {
+            return;
+        }
+        self.tag_picker.update(cx, |picker, cx| {
+            picker.synchronize(options.clone(), selected, enabled, window, cx);
+        });
+        self.tag_picker_options = options;
+    }
+
     pub(crate) fn open_store(&mut self, cx: &mut Context<Self>) {
         match Store::open(self.data_dir.join("force.sqlite3")) {
             Ok(store) => {
@@ -308,6 +394,11 @@ impl ForceView {
                 version,
                 store.tasks(self.now)?,
                 store.completion_sound()?,
+                if self.page == Page::Records {
+                    load_activity_days(store, date_at(self.now), self.now)?
+                } else {
+                    Vec::new()
+                },
             ))
         })();
         match snapshot {
@@ -321,6 +412,7 @@ impl ForceView {
                 version,
                 tasks,
                 sound_enabled,
+                activity_days,
             )) => {
                 self.data_version = version;
                 self.tags = tags;
@@ -328,9 +420,16 @@ impl ForceView {
                 self.sound_enabled = sound_enabled;
                 self.active = active;
                 self.history = history;
+                if self
+                    .record_details
+                    .is_some_and(|id| !self.history.iter().any(|record| record.id == id))
+                {
+                    self.record_details = None;
+                }
                 self.goal = goal;
                 self.today = today;
                 self.record_stats = record_stats;
+                self.activity_days = activity_days;
                 self.storage_failed = false;
                 if !self.tags.iter().any(|tag| {
                     tag.id == self.selected_tag && (!self.preparing || tag.kind == TagKind::Focus)
@@ -360,6 +459,7 @@ impl ForceView {
                         // an unfinished task draft and its chosen duration.
                         self.notify("上一段计时已结束并记录。", cx);
                     } else {
+                        self.reset_focus_scroll();
                         self.completed = Some(completed);
                         self.toast = None;
                     }
@@ -374,6 +474,16 @@ impl ForceView {
                 self.notify("更新本地数据失败。已有内容已保留，请重试。", cx);
             }
         }
+    }
+
+    pub(crate) fn select_record_date(&mut self, date: NaiveDate, cx: &mut Context<Self>) {
+        if date > Local::now().date_naive() || date == self.record_date {
+            return;
+        }
+        self.record_date = date;
+        self.record_details = None;
+        // Selecting a heatmap cell keeps the activity grid at the same place.
+        self.refresh(cx);
     }
 
     pub(crate) fn notify(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
@@ -478,12 +588,7 @@ impl ForceView {
         }
     }
 
-    fn accept_started(&mut self, session: Session, window: &mut Window, cx: &mut Context<Self>) {
-        if session.tag_kind == TagKind::Focus {
-            self.return_task = session.task_id;
-            self.return_target_seconds = session.target_seconds;
-        }
-        self.preparing = false;
+    fn apply_session_selection(&mut self, session: &Session) {
         self.selected_session = Some(session.id);
         self.selected_task = session.task_id;
         self.selected_tag = session.tag_id;
@@ -491,13 +596,41 @@ impl ForceView {
         if let Some(target) = session.target_seconds {
             self.timer_minutes = u32::try_from(target / 60).unwrap_or(25);
         }
-        self.task_input
-            .update(cx, |input, cx| input.set_value(session.title, window, cx));
+    }
+
+    fn reset_focus_scroll(&mut self) {
+        self.panel_scroll[0].set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+    }
+
+    fn remember_return_context(&mut self, cx: &mut Context<Self>) {
+        if write_return_context(&self.data_dir, self.return_task, self.return_target_seconds)
+            .is_err()
+        {
+            self.notify("计时已保存，但无法保存休息后的返回任务。", cx);
+        }
+    }
+
+    fn accept_started(&mut self, session: Session, window: &mut Window, cx: &mut Context<Self>) {
+        if session.tag_kind == TagKind::Focus {
+            self.return_task = session.task_id;
+            self.return_target_seconds = session.target_seconds;
+        }
+        self.preparing = false;
+        self.apply_session_selection(&session);
+        self.reset_focus_scroll();
+        self.task_input.update(cx, |input, cx| {
+            input.set_value(session.title.clone(), window, cx)
+        });
         self.completed = None;
         self.page = Page::Focus;
         self.toast = None;
         self.remember_selected_session(cx);
-        self.set_expanded(false, window, cx);
+        if session.tag_kind == TagKind::Focus {
+            self.remember_return_context(cx);
+        }
+        // Starting or resuming a timer preserves whichever windows the user
+        // currently has open. Closing management remains an explicit action.
+        cx.notify();
     }
 
     pub(crate) fn remember_selected_session(&mut self, cx: &mut Context<Self>) {
@@ -510,65 +643,68 @@ impl ForceView {
     }
 
     fn set_expanded(&mut self, expanded: bool, window: &mut Window, cx: &mut Context<Self>) {
-        let height = if expanded {
-            self.preferred_panel_height()
+        if expanded {
+            self.show_manager(window, cx);
         } else {
-            STRIP_HEIGHT
-        };
-        if expanded && self.compact {
-            let bounds = window.bounds();
-            if let Some(display) = window.display(cx) {
-                let screen = display.bounds();
-                let top =
-                    f32::from(screen.origin.y) + if cfg!(target_os = "macos") { 28. } else { 8. };
-                let bottom = f32::from(screen.origin.y + screen.size.height) - 8.;
-                let bar_top = f32::from(bounds.origin.y);
-                let bar_bottom = bar_top + STRIP_HEIGHT;
-                self.panel_above = cfg!(any(target_os = "macos", target_os = "windows"))
-                    && bottom - bar_top < height
-                    && bar_bottom - top > bottom - bar_top;
-            }
+            self.hide_manager(window, cx);
         }
-        if crate::platform::resize_floating(window, height, self.panel_above, cx).is_err() {
-            self.notify("无法调整浮窗大小，请重试。", cx);
-            return;
+    }
+
+    pub(crate) fn show_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.compact = false;
+        // A model created in TestAppContext has no attached native windows.
+        if self.manager_window.is_some() && crate::platform::show_manager(window, cx).is_err() {
+            self.notify("无法打开管理窗口，请重试。", cx);
         }
-        self.compact = !expanded;
-        if !expanded {
-            window.focus(&self.focus_handle);
-        }
-        self.panel_height = height;
         cx.notify();
     }
 
-    fn preferred_panel_height(&self) -> f32 {
-        if self.page == Page::Focus
-            && self.completed.is_none()
-            && (self.preparing || self.active.is_empty())
-        {
-            let recent = self
-                .tasks
-                .iter()
-                .filter(|task| task.completed_at.is_none())
-                .take(2)
-                .count();
-            match recent {
-                0 => 376.,
-                _ => PANEL_HEIGHT,
-            }
-        } else if self.page == Page::Focus {
-            if self.completed.is_some() { 388. } else { 376. }
-        } else if self.page == Page::Records {
-            416.
-        } else {
-            PANEL_HEIGHT
+    pub(crate) fn hide_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tag_picker
+            .update(cx, |picker, cx| picker.dismiss(window, false, cx));
+        window.focus(&self.focus_handle);
+        self.compact = true;
+        if self.manager_window.is_some() && crate::platform::hide_manager(window, cx).is_err() {
+            self.notify("无法隐藏管理窗口，请重试。", cx);
         }
+        cx.notify();
     }
 
-    pub(crate) fn sync_panel_size(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.compact && self.panel_height != self.preferred_panel_height() {
-            self.set_expanded(true, window, cx);
-        }
+    pub(crate) fn toggle_strip_pin(&mut self, cx: &mut Context<Self>) {
+        let Some(strip) = self.strip_window else {
+            return;
+        };
+        let pinned = !self.pinned;
+        let model = cx.entity().downgrade();
+        cx.defer(move |cx| {
+            let result = strip.update(cx, |_, window, _| {
+                crate::platform::set_always_on_top(window, pinned)
+            });
+            let _ = model.update(cx, |this, cx| {
+                if result.is_ok_and(|result| result.is_ok()) {
+                    this.pinned = pinned;
+                    cx.notify();
+                } else {
+                    this.notify("无法更改计时条置顶状态，请重试。", cx);
+                }
+            });
+        });
+    }
+
+    pub(crate) fn select_session(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(session) = self.active.iter().find(|session| session.id == id).cloned() else {
+            self.notify("这项计时已结束，请刷新后重试。", cx);
+            return;
+        };
+        self.preparing = false;
+        self.completed = None;
+        self.page = Page::Focus;
+        self.apply_session_selection(&session);
+        self.reset_focus_scroll();
+        self.task_input
+            .update(cx, |input, cx| input.set_value(session.title, window, cx));
+        self.remember_selected_session(cx);
+        cx.notify();
     }
 
     pub(crate) fn select_task(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
@@ -578,12 +714,19 @@ impl ForceView {
         };
         self.selected_task = Some(id);
         self.selected_tag = task.tag_id;
-        self.selected_session = self
+        if let Some(session) = self
             .active
             .iter()
             .find(|session| session.task_id == Some(id))
-            .map(|session| session.id);
-        self.preparing = self.selected_session.is_none();
+            .cloned()
+        {
+            self.apply_session_selection(&session);
+            self.preparing = false;
+        } else {
+            self.selected_session = None;
+            self.preparing = true;
+        }
+        self.reset_focus_scroll();
         self.completed = None;
         self.page = Page::Focus;
         self.task_input
@@ -618,6 +761,27 @@ impl ForceView {
             input.focus(window, cx);
         });
         self.set_expanded(true, window, cx);
+    }
+
+    pub(crate) fn strip_session(&self) -> Option<&Session> {
+        preferred_strip_session(&self.active, self.selected_session, self.now)
+    }
+
+    pub(crate) fn strip_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.storage_failed {
+            self.page = Page::Focus;
+            self.show_manager(window, cx);
+            return;
+        }
+        // A completion receipt may coexist with other paused rounds. Its play
+        // action opens the receipt rather than resuming an unseen paused timer.
+        if self.completed.is_some() && running_session(&self.active, self.now).is_none() {
+            self.primary_action(window, cx);
+        } else if let Some(id) = self.strip_session().map(|session| session.id) {
+            self.toggle_pause(id, cx);
+        } else {
+            self.primary_action(window, cx);
+        }
     }
 
     pub(crate) fn primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -789,6 +953,38 @@ impl ForceView {
         .detach();
     }
 
+    pub(crate) fn goal_draft(&self, cx: &gpui::App) -> Option<u32> {
+        parse_goal_draft(self.goal_input.read(cx).value().as_ref())
+    }
+
+    pub(crate) fn can_save_goal(&self, cx: &gpui::App) -> bool {
+        goal_draft_has_changes(self.goal_input.read(cx).value().as_ref(), self.goal)
+    }
+
+    pub(crate) fn goal_has_unsaved_changes(&self, cx: &gpui::App) -> bool {
+        goal_draft_has_unsaved_changes(self.goal_input.read(cx).value().as_ref(), self.goal)
+    }
+
+    pub(crate) fn reset_goal_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let goal = self.goal.to_string();
+        self.goal_input.update(cx, |input, cx| {
+            input.set_value(goal, window, cx);
+            input.focus(window, cx);
+        });
+        self.toast = None;
+        cx.notify();
+    }
+
+    pub(crate) fn save_goal(&mut self, cx: &mut Context<Self>) {
+        let Some(minutes) = self.goal_draft(cx) else {
+            self.notify("请输入 1–1440 之间的分钟数。", cx);
+            return;
+        };
+        if self.can_save_goal(cx) && self.write(|store| store.set_goal_minutes(minutes), cx) {
+            self.notify("目标已保存。", cx);
+        }
+    }
+
     pub(crate) fn set_sound_enabled(&mut self, enabled: bool, cx: &mut Context<Self>) {
         self.write(|store| store.set_completion_sound(enabled), cx);
     }
@@ -810,11 +1006,44 @@ impl ForceView {
             input.set_value(name, window, cx);
             input.focus(window, cx);
         });
+        self.tag_form_anchor.scroll_to(window, cx);
         cx.notify();
+    }
+
+    pub(crate) fn tag_draft_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        tag_draft_error_for(
+            self.tag_input.read(cx).value().as_ref(),
+            self.editing_tag,
+            &self.tags,
+        )
+    }
+
+    pub(crate) fn can_save_tag(&self, cx: &gpui::App) -> bool {
+        if self.tag_draft_error(cx).is_some() {
+            return false;
+        }
+        let original = match self.editing_tag {
+            Some(id) => match self.tags.iter().find(|tag| tag.id == id) {
+                Some(tag) => Some(tag.name.as_str()),
+                None => return false,
+            },
+            None => None,
+        };
+        tag_draft_has_changes(self.tag_input.read(cx).value().as_ref(), original)
     }
 
     pub(crate) fn save_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let name = self.tag_input.read(cx).value().to_string();
+        if let Some(message) = self.tag_draft_error(cx) {
+            self.notify(message, cx);
+            return;
+        }
+        if !self.can_save_tag(cx) {
+            if name.trim().is_empty() {
+                self.notify("请输入 1–40 字的标签名称。", cx);
+            }
+            return;
+        }
         let editing = self.editing_tag;
         let kind = self.new_tag_kind;
         let mut created_id = None;
@@ -829,7 +1058,9 @@ impl ForceView {
             },
             cx,
         ) {
-            if let Some(id) = created_id {
+            if kind == TagKind::Focus
+                && let Some(id) = created_id
+            {
                 self.selected_tag = id;
             }
             self.cancel_tag_edit(window, cx);
@@ -847,55 +1078,116 @@ impl ForceView {
     pub(crate) fn cancel_tag_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing_tag = None;
         self.new_tag_kind = TagKind::Focus;
+        self.tag_input.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn open_tag_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.navigate(Page::Settings, window, cx);
+        if self.editing_tag.is_some() {
+            self.cancel_tag_edit(window, cx);
+        }
+        self.new_tag_kind = TagKind::Focus;
+        // Let the settings form lay out before seeking its scroll anchor.
+        let anchor = self.tag_form_anchor.clone();
+        window.on_next_frame(move |window, cx| {
+            anchor.scroll_to(window, cx);
+            window.request_animation_frame();
+        });
         self.tag_input
-            .update(cx, |input, cx| input.set_value("", window, cx));
+            .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
     }
 
     pub(crate) fn toggle_pause(&mut self, id: i64, cx: &mut Context<Self>) {
-        let Some(session) = self.active.iter().find(|session| session.id == id) else {
-            self.notify("这项计时已结束，请刷新后重试。", cx);
-            return;
-        };
-        let running = session.is_running();
-        let task_id = session.task_id;
-        let target = session.target_seconds;
         let now = Local::now().timestamp();
-        self.write(
+        let mut outcome = None;
+        if self.write(
             |store| {
-                if running {
-                    store.pause(id, now)
-                } else if let Some(task_id) = task_id {
-                    store.start_task(task_id, now, target)
-                } else {
-                    store.resume(id, now)
-                }
+                outcome = Some(toggle_session(store, id, now)?);
+                Ok(())
             },
             cx,
-        );
+        ) && let Some(outcome) = outcome
+        {
+            let remember_return = outcome.return_context.is_some();
+            if let Some((task, target)) = outcome.return_context {
+                self.return_task = task;
+                self.return_target_seconds = target;
+            }
+            // The strip may control the previous timer while a new task draft
+            // is open. Keep that draft and its chosen tag/duration intact.
+            if !self.preparing
+                && self
+                    .active
+                    .iter()
+                    .any(|session| session.id == outcome.session.id)
+            {
+                self.apply_session_selection(&outcome.session);
+                self.completed = None;
+                if outcome.session.is_running() {
+                    self.reset_focus_scroll();
+                }
+                self.remember_selected_session(cx);
+            }
+            if remember_return {
+                self.remember_return_context(cx);
+            }
+            cx.notify();
+        }
     }
 
     pub(crate) fn finish(&mut self, id: i64, cx: &mut Context<Self>) {
         let now = Local::now().timestamp();
-        let mut completed = None;
+        let mut outcome = None;
         if self.write(
             |store| {
-                completed = Some(store.finish(id, now)?);
+                outcome = Some(finish_session(store, id, now)?);
                 Ok(())
             },
             cx,
-        ) && let Some(session) = completed
+        ) && let Some(outcome) = outcome
         {
-            if session.tag_kind == TagKind::Focus {
-                self.return_task = session.task_id;
-                self.return_target_seconds = session.target_seconds;
+            let foreground = outcome
+                .foreground
+                .filter(|session| {
+                    self.active
+                        .iter()
+                        .any(|active| active.id == session.id && active.is_running())
+                })
+                .or_else(|| running_session(&self.active, self.now).cloned());
+            let return_context = foreground
+                .as_ref()
+                .filter(|s| s.tag_kind == TagKind::Focus)
+                .or_else(|| {
+                    (outcome.finished.tag_kind == TagKind::Focus).then_some(&outcome.finished)
+                })
+                .map(|session| (session.task_id, session.target_seconds));
+            if let Some((task, target)) = return_context {
+                self.return_task = task;
+                self.return_target_seconds = target;
             }
-            self.selected_session = None;
             if self.preparing {
+                self.selected_session = None;
                 self.notify("上一段计时已结束并记录。", cx);
             } else {
-                self.completed = Some(session);
-                self.toast = None;
+                self.reset_focus_scroll();
+                if let Some(session) = foreground {
+                    self.apply_session_selection(&session);
+                    self.completed = None;
+                    self.notify("上一段计时已结束并记录。", cx);
+                } else {
+                    self.selected_session = None;
+                    self.completed = Some(outcome.finished);
+                    self.toast = None;
+                }
+            }
+            self.remember_selected_session(cx);
+            if return_context.is_some() {
+                self.remember_return_context(cx);
             }
             cx.notify();
         }
@@ -906,6 +1198,7 @@ impl ForceView {
         self.page = page;
         self.toast = None;
         self.refresh(cx);
+        self.show_manager(window, cx);
     }
 
     pub(crate) fn compact(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1015,12 +1308,17 @@ impl ForceView {
             &[PromptButton::cancel("取消"), PromptButton::new("删除")],
             cx,
         );
-        cx.spawn(async move |this, cx| match answer.await {
+        cx.spawn_in(window, async move |this, cx| match answer.await {
             Ok(1) => {
-                let _ = this.update(cx, |this, cx| {
-                    if this.write(|store| store.delete_tag(id), cx) {
-                        this.notify("标签已删除。", cx);
-                    }
+                let _ = cx.update(|window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.write(|store| store.delete_tag(id), cx) {
+                            if this.editing_tag == Some(id) {
+                                this.cancel_tag_edit(window, cx);
+                            }
+                            this.notify("标签已删除。", cx);
+                        }
+                    });
                 });
             }
             Ok(_) => {}
@@ -1080,12 +1378,9 @@ impl ForceView {
                 .target_seconds
                 .is_some_and(|target| session.elapsed_at(self.now) >= target)
         });
-        if completed && !self.storage_failed {
+        if (completed || previous_date != date_at(self.now)) && !self.storage_failed {
             self.refresh(cx);
-        } else if (self.active.iter().any(Session::is_running)
-            || previous_date != date_at(self.now))
-            && !self.storage_failed
-        {
+        } else if self.active.iter().any(Session::is_running) && !self.storage_failed {
             let result = self
                 .store
                 .as_ref()
@@ -1094,6 +1389,10 @@ impl ForceView {
                 Some(Ok((today, record_stats))) => {
                     self.today = today;
                     self.record_stats = record_stats;
+                    let date = date_at(self.now);
+                    if let Some(day) = self.activity_days.iter_mut().find(|day| day.date == date) {
+                        day.seconds = today.focus_seconds;
+                    }
                 }
                 Some(Err(_)) => {
                     self.storage_failed = true;
@@ -1104,6 +1403,142 @@ impl ForceView {
         }
         cx.notify();
     }
+}
+
+pub(crate) struct FloatingStrip {
+    pub(crate) model: Entity<ForceView>,
+    pub(crate) manager: WindowHandle<Root>,
+    pub(crate) focus_handle: FocusHandle,
+    _subscriptions: Vec<Subscription>,
+}
+
+impl FloatingStrip {
+    pub(crate) fn new(
+        model: Entity<ForceView>,
+        manager: WindowHandle<Root>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let bounds = window.bounds();
+        model.update(cx, |this, _| {
+            this.window_position = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+            this.strip_position_initialized = true;
+        });
+        let observe = cx.observe(&model, |_, _, cx| cx.notify());
+        let position = cx.observe_window_bounds(window, |this, window, cx| {
+            let origin = window.bounds().origin;
+            this.model.update(cx, |model, _| {
+                model.window_position = (f32::from(origin.x), f32::from(origin.y));
+                model.position_changed = Some(Instant::now());
+            });
+        });
+        Self {
+            model,
+            manager,
+            focus_handle: cx.focus_handle(),
+            _subscriptions: vec![observe, position],
+        }
+    }
+
+    pub(crate) fn dispatch(
+        &self,
+        cx: &mut Context<Self>,
+        operation: impl FnOnce(&mut ForceView, &mut Window, &mut Context<ForceView>) + 'static,
+    ) {
+        let manager = self.manager;
+        let model = self.model.clone();
+        // InputState belongs to the manager. Never handle its actions using
+        // the strip's Window, and wait until the dispatching borrow has ended.
+        cx.defer(move |cx| {
+            let _ = manager.update(cx, |_, window, cx| {
+                model.update(cx, |model, cx| operation(model, window, cx));
+            });
+        });
+    }
+}
+
+struct TimerToggleOutcome {
+    session: Session,
+    return_context: Option<(Option<i64>, Option<i64>)>,
+}
+
+fn toggle_session(store: &mut Store, id: i64, now: i64) -> force_core::Result<TimerToggleOutcome> {
+    let active = store.active_sessions()?;
+    let session = active
+        .iter()
+        .find(|session| session.id == id)
+        .ok_or(force_core::Error::NotFound)?;
+    let return_context = if session.tag_kind == TagKind::Focus {
+        Some((session.task_id, session.target_seconds))
+    } else if session.is_paused() {
+        active
+            .iter()
+            .filter(|focus| {
+                focus.tag_kind == TagKind::Focus
+                    && focus.is_running()
+                    && focus
+                        .target_seconds
+                        .is_none_or(|target| focus.elapsed_at(now) < target)
+            })
+            .max_by_key(|focus| (focus.started_at, focus.id))
+            .map(|focus| (focus.task_id, focus.target_seconds))
+    } else {
+        None
+    };
+    let changed = if session.is_running() {
+        store.pause(id, now)?
+    } else if session.tag_kind == TagKind::Rest {
+        store.resume_break(id, now)?
+    } else if let Some(task) = session.task_id {
+        store.start_task(task, now, session.target_seconds)?
+    } else {
+        store.resume(id, now)?
+    };
+    Ok(TimerToggleOutcome {
+        session: changed,
+        return_context,
+    })
+}
+
+struct SessionFinishOutcome {
+    finished: Session,
+    foreground: Option<Session>,
+}
+
+fn finish_session(
+    store: &mut Store,
+    id: i64,
+    now: i64,
+) -> force_core::Result<SessionFinishOutcome> {
+    let finished = store.finish(id, now)?;
+    let active = store.active_sessions()?;
+    let foreground = running_session(&active, now).cloned();
+    Ok(SessionFinishOutcome {
+        finished,
+        foreground,
+    })
+}
+
+fn running_session(active: &[Session], now: i64) -> Option<&Session> {
+    active
+        .iter()
+        .filter(|session| {
+            session.is_running()
+                && session
+                    .target_seconds
+                    .is_none_or(|target| session.elapsed_at(now) < target)
+        })
+        .max_by_key(|session| (session.started_at, session.id))
+}
+
+fn preferred_strip_session(
+    active: &[Session],
+    selected: Option<i64>,
+    now: i64,
+) -> Option<&Session> {
+    running_session(active, now)
+        .or_else(|| active.iter().find(|session| Some(session.id) == selected))
+        .or_else(|| active.last())
 }
 
 // A newer paused round must never hide the timer that is still running after
@@ -1193,6 +1628,48 @@ fn rest_tag(store: &mut Store) -> force_core::Result<Tag> {
     store.create_tag(&name, TagKind::Rest)
 }
 
+fn parse_goal_draft(value: &str) -> Option<u32> {
+    value
+        .trim()
+        .parse::<u32>()
+        .ok()
+        .filter(|minutes| (1..=MAX_GOAL_MINUTES).contains(minutes))
+}
+
+fn goal_draft_has_changes(value: &str, saved: u32) -> bool {
+    parse_goal_draft(value).is_some_and(|minutes| minutes != saved)
+}
+
+fn goal_draft_has_unsaved_changes(value: &str, saved: u32) -> bool {
+    parse_goal_draft(value) != Some(saved)
+}
+
+fn tag_draft_error_for(value: &str, editing: Option<i64>, tags: &[Tag]) -> Option<&'static str> {
+    if editing.is_some_and(|id| !tags.iter().any(|tag| tag.id == id)) {
+        return Some("这个标签已被移除，请取消后重新选择。");
+    }
+    let name = value.trim();
+    if name.contains('\0') {
+        return Some("标签名称包含无效字符。");
+    }
+    if name.chars().count() > 40 {
+        return Some("标签名称最多 40 字。");
+    }
+    if !name.is_empty()
+        && tags
+            .iter()
+            .any(|tag| Some(tag.id) != editing && tag.name.eq_ignore_ascii_case(name))
+    {
+        return Some("这个标签名称已存在，请换一个。");
+    }
+    None
+}
+
+fn tag_draft_has_changes(value: &str, original: Option<&str>) -> bool {
+    let name = value.trim();
+    !name.is_empty() && name.chars().count() <= 40 && !name.contains('\0') && original != Some(name)
+}
+
 fn validation_message(message: &str) -> &'static str {
     match message {
         "Enter a task title of 1–200 characters" => "请输入 1–200 字的任务名称。",
@@ -1204,6 +1681,31 @@ fn validation_message(message: &str) -> &'static str {
         }
         _ => "输入内容无效，请检查后重试。",
     }
+}
+
+fn activity_dates(today: NaiveDate) -> Vec<NaiveDate> {
+    let days_back = u64::from(today.weekday().num_days_from_monday()) + 52 * 7;
+    let start = today
+        .checked_sub_days(Days::new(days_back))
+        .unwrap_or(today);
+    (0..53 * 7)
+        .filter_map(|offset| start.checked_add_days(Days::new(offset)))
+        .collect()
+}
+
+fn load_activity_days(
+    store: &Store,
+    today: NaiveDate,
+    now: i64,
+) -> force_core::Result<Vec<ActivityDay>> {
+    let dates = activity_dates(today);
+    let ranges: Vec<_> = dates.iter().copied().map(day_bounds).collect();
+    let totals = store.focus_totals_for_ranges(&ranges, now)?;
+    Ok(dates
+        .into_iter()
+        .zip(totals)
+        .map(|(date, seconds)| ActivityDay { date, seconds })
+        .collect())
 }
 
 fn load_stats(
@@ -1301,6 +1803,322 @@ fn write_export(path: &Path, content: &[u8], database: &Path) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resuming_paused_rest_through_model_toggle_pauses_focus_and_keeps_identity() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let task = store.create_task("A", 1, 100).unwrap();
+        let focus = store.start_task(task.id, 100, Some(1500)).unwrap();
+        let rest = store.start_break(4, 130, 300).unwrap();
+        toggle_session(&mut store, rest.id, 140).unwrap();
+        toggle_session(&mut store, focus.id, 150).unwrap();
+        let resumed = toggle_session(&mut store, rest.id, 160).unwrap();
+        assert_eq!(resumed.session.id, rest.id);
+        assert_eq!(resumed.session.task_id, None);
+        assert_eq!(resumed.session.target_seconds, Some(300));
+        assert_eq!(resumed.return_context, Some((Some(task.id), Some(1500))));
+        let active = store.active_sessions().unwrap();
+        assert_eq!(
+            active.iter().filter(|session| session.is_running()).count(),
+            1
+        );
+        assert!(
+            active
+                .iter()
+                .find(|session| session.id == focus.id)
+                .unwrap()
+                .is_paused()
+        );
+        assert_eq!(store.stats(0, 200, 170).unwrap().focus_seconds, 40);
+        assert_eq!(resumed.session.elapsed_at(170), 20);
+
+        // Fast explicit pause/resume must keep the same round and never let
+        // the focus task restart underneath the visible break.
+        toggle_session(&mut store, rest.id, 170).unwrap();
+        let again = toggle_session(&mut store, rest.id, 170).unwrap();
+        assert_eq!(again.session.id, rest.id);
+        assert_eq!(store.stats(0, 200, 180).unwrap().focus_seconds, 40);
+        assert_eq!(
+            store
+                .active_sessions()
+                .unwrap()
+                .iter()
+                .filter(|s| s.is_running())
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn resuming_legacy_free_rest_keeps_its_mode_and_pauses_focus() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let rest = store.start("Legacy rest", 4, 100).unwrap();
+        toggle_session(&mut store, rest.id, 110).unwrap();
+        let task = store.create_task("Focus", 1, 120).unwrap();
+        let focus = store.start_task(task.id, 120, None).unwrap();
+        let resumed = toggle_session(&mut store, rest.id, 130).unwrap();
+        assert_eq!(resumed.session.id, rest.id);
+        assert_eq!(resumed.session.target_seconds, None);
+        assert_eq!(resumed.session.title, "Legacy rest");
+        assert!(
+            store
+                .active_sessions()
+                .unwrap()
+                .iter()
+                .find(|session| session.id == focus.id)
+                .unwrap()
+                .is_paused()
+        );
+    }
+
+    #[test]
+    fn finishing_a_paused_task_keeps_the_other_running_task_in_the_foreground() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let first = store.create_task("A", 1, 100).unwrap();
+        let a = store.start_task(first.id, 100, Some(1500)).unwrap();
+        let second = store.create_task("B", 1, 110).unwrap();
+        let b = store.start_task(second.id, 110, None).unwrap();
+        let outcome = finish_session(&mut store, a.id, 120).unwrap();
+        assert_eq!(outcome.finished.id, a.id);
+        let foreground = outcome.foreground.unwrap();
+        assert_eq!(foreground.id, b.id);
+        assert_eq!(foreground.task_id, Some(second.id));
+        assert_eq!(foreground.title, "B");
+        assert_eq!(foreground.target_seconds, None);
+        let outcome = finish_session(&mut store, b.id, 130).unwrap();
+        assert!(outcome.foreground.is_none());
+        assert_eq!(outcome.finished.id, b.id);
+    }
+
+    #[test]
+    fn failed_rest_resume_rolls_back_any_other_timer_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let rest = store.start_timed("Rest", 4, 100, 300).unwrap();
+        store.pause(rest.id, 110).unwrap();
+        let task = store.create_task("Future boundary", 1, 200).unwrap();
+        let focus = store.start_task(task.id, 200, None).unwrap();
+        assert!(matches!(
+            toggle_session(&mut store, rest.id, 190),
+            Err(force_core::Error::InvalidTransition)
+        ));
+        let active = store.active_sessions().unwrap();
+        assert!(
+            active
+                .iter()
+                .find(|session| session.id == focus.id)
+                .unwrap()
+                .is_running()
+        );
+        assert!(
+            active
+                .iter()
+                .find(|session| session.id == rest.id)
+                .unwrap()
+                .is_paused()
+        );
+    }
+
+    #[test]
+    fn strip_prioritizes_running_timer_over_a_browsed_paused_task() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let a = store.create_task("A", 1, 100).unwrap();
+        let a = store.start_task(a.id, 100, Some(1500)).unwrap();
+        let b = store.create_task("B", 1, 110).unwrap();
+        let b = store.start_task(b.id, 110, None).unwrap();
+        let active = store.active_sessions().unwrap();
+        assert_eq!(
+            preferred_strip_session(&active, Some(a.id), 120)
+                .unwrap()
+                .id,
+            b.id
+        );
+
+        // With no running timer, the explicit browsing selection takes priority.
+        toggle_session(&mut store, b.id, 120).unwrap();
+        let active = store.active_sessions().unwrap();
+        assert_eq!(
+            preferred_strip_session(&active, Some(a.id), 120)
+                .unwrap()
+                .id,
+            a.id
+        );
+        assert_eq!(
+            preferred_strip_session(&active, Some(b.id), 120)
+                .unwrap()
+                .id,
+            b.id
+        );
+
+        toggle_session(&mut store, a.id, 130).unwrap();
+        let active = store.active_sessions().unwrap();
+        assert_eq!(
+            preferred_strip_session(&active, Some(b.id), 140)
+                .unwrap()
+                .id,
+            a.id
+        );
+    }
+
+    #[test]
+    fn strip_falls_back_safely_when_the_browsed_session_is_stale() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let task = store.create_task("Paused", 1, 100).unwrap();
+        let paused = store.start_task(task.id, 100, None).unwrap();
+        toggle_session(&mut store, paused.id, 110).unwrap();
+        let active = store.active_sessions().unwrap();
+        assert_eq!(
+            preferred_strip_session(&active, Some(i64::MAX), 120)
+                .unwrap()
+                .id,
+            paused.id
+        );
+        assert_eq!(
+            preferred_strip_session(&active, None, 120).unwrap().id,
+            active.last().unwrap().id
+        );
+        assert!(preferred_strip_session(&[], Some(paused.id), 120).is_none());
+    }
+
+    #[test]
+    fn activity_calendar_covers_53_monday_to_sunday_weeks() {
+        let today = NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+        let dates = activity_dates(today);
+        assert_eq!(dates.len(), 53 * 7);
+        assert_eq!(dates[0], NaiveDate::from_ymd_opt(2025, 10, 20).unwrap());
+        assert_eq!(dates[364], NaiveDate::from_ymd_opt(2026, 10, 19).unwrap());
+        assert_eq!(
+            *dates.last().unwrap(),
+            NaiveDate::from_ymd_opt(2026, 10, 25).unwrap()
+        );
+        assert!(
+            dates
+                .windows(2)
+                .all(|pair| pair[0].succ_opt() == Some(pair[1]))
+        );
+    }
+
+    #[test]
+    fn activity_days_use_local_midnight_and_zero_future_cells() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 21).unwrap();
+        let (midnight, _) = day_bounds(today);
+        store
+            .start("Across local midnight", 1, midnight - 30)
+            .unwrap();
+        let days = load_activity_days(&store, today, midnight + 20).unwrap();
+        assert_eq!(
+            days.iter()
+                .find(|day| day.date == today.pred_opt().unwrap())
+                .unwrap()
+                .seconds,
+            30
+        );
+        assert_eq!(
+            days.iter().find(|day| day.date == today).unwrap().seconds,
+            20
+        );
+        assert!(
+            days.iter()
+                .filter(|day| day.date > today)
+                .all(|day| day.seconds == 0)
+        );
+    }
+
+    #[test]
+    fn goal_drafts_require_a_changed_value_within_daily_bounds() {
+        assert_eq!(parse_goal_draft(" 1 "), Some(1));
+        assert_eq!(parse_goal_draft("1440"), Some(MAX_GOAL_MINUTES));
+        for invalid in ["", "0", "1441", "-1", "2.5", "abc", "4294967296"] {
+            assert_eq!(parse_goal_draft(invalid), None, "{invalid}");
+            assert!(!goal_draft_has_changes(invalid, 300), "{invalid}");
+        }
+        assert!(!goal_draft_has_changes(" 0300 ", 300));
+        assert!(goal_draft_has_changes("301", 300));
+    }
+
+    #[test]
+    fn goal_reset_is_available_for_changed_or_invalid_drafts() {
+        for draft in ["", "0", "1441", "invalid", "301"] {
+            assert!(goal_draft_has_unsaved_changes(draft, 300), "{draft}");
+        }
+        for draft in ["300", " 300 ", "0300"] {
+            assert!(!goal_draft_has_unsaved_changes(draft, 300), "{draft}");
+        }
+    }
+
+    #[test]
+    fn tag_drafts_reject_blank_long_and_unchanged_names() {
+        assert!(!tag_draft_has_changes(" ", None));
+        assert!(!tag_draft_has_changes(&"字".repeat(41), None));
+        assert!(tag_draft_has_changes(&"字".repeat(40), None));
+        assert!(!tag_draft_has_changes("  阅读  ", Some("阅读")));
+        assert!(tag_draft_has_changes("写作", Some("阅读")));
+        assert!(tag_draft_has_changes("READING", Some("Reading")));
+    }
+
+    #[test]
+    fn tag_draft_uniqueness_matches_sqlite_across_kinds_and_allows_self_rename() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let reading = store.create_tag("Reading", TagKind::Focus).unwrap();
+        store.create_tag("Break", TagKind::Rest).unwrap();
+        for name in ["reading", " READING ", "break"] {
+            assert!(tag_draft_error_for(name, None, &store.tags().unwrap()).is_some());
+            assert!(matches!(
+                store.create_tag(name, TagKind::Focus),
+                Err(force_core::Error::Validation(_))
+            ));
+        }
+        assert_eq!(
+            tag_draft_error_for(" READING ", Some(reading.id), &store.tags().unwrap()),
+            None
+        );
+        assert_eq!(
+            store.rename_tag(reading.id, "READING").unwrap().name,
+            "READING"
+        );
+
+        let archived = store.create_tag("Archived", TagKind::Focus).unwrap();
+        store.delete_tag(archived.id).unwrap();
+        assert_eq!(
+            tag_draft_error_for("archived", None, &store.tags().unwrap()),
+            None
+        );
+        store.create_tag("archived", TagKind::Rest).unwrap();
+
+        // SQLite's built-in NOCASE folds ASCII, not arbitrary Unicode letters.
+        store.create_tag("Ä", TagKind::Focus).unwrap();
+        assert_eq!(tag_draft_error_for("ä", None, &store.tags().unwrap()), None);
+        store.create_tag("ä", TagKind::Rest).unwrap();
+    }
+
+    #[test]
+    fn tag_draft_errors_reject_nul_and_orphaned_edits_without_flagging_empty_new_input() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        assert_eq!(tag_draft_error_for(" ", None, &store.tags().unwrap()), None);
+        assert!(tag_draft_error_for("name\0suffix", None, &store.tags().unwrap()).is_some());
+        assert!(!tag_draft_has_changes("name\0suffix", None));
+        assert!(matches!(
+            store.create_tag("name\0suffix", TagKind::Focus),
+            Err(force_core::Error::Validation(_))
+        ));
+        let tag = store.create_tag("Removed", TagKind::Focus).unwrap();
+        store.delete_tag(tag.id).unwrap();
+        assert!(tag_draft_error_for("Renamed", Some(tag.id), &store.tags().unwrap()).is_some());
+        assert!(tag_draft_error_for("Renamed", Some(i64::MAX), &store.tags().unwrap()).is_some());
+        assert!(matches!(
+            store.rename_tag(tag.id, "Renamed"),
+            Err(force_core::Error::NotFound)
+        ));
+    }
 
     #[test]
     fn selected_timer_state_survives_restart_and_rejects_invalid_files() {

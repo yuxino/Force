@@ -243,6 +243,34 @@ impl Store {
         Ok(session)
     }
 
+    /// Resumes the requested rest session without letting focus continue
+    /// behind it. Keep its original identity and timer mode, including legacy
+    /// untimed rest sessions.
+    pub fn resume_break(&mut self, id: i64, now: i64) -> Result<Session> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session = load_session(&transaction, id)?;
+        if session.tag_kind != TagKind::Rest
+            || !session.is_paused()
+            || now < last_boundary(&session)
+            || session
+                .target_seconds
+                .is_some_and(|target| session.elapsed_at(now) >= target)
+        {
+            return Err(Error::InvalidTransition);
+        }
+        let active = load_sessions_in_snapshot(&transaction, "WHERE finished_at IS NULL", [])?;
+        pause_for_break(&transaction, &active, Some(id), now)?;
+        transaction.execute(
+            "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
+            params![id, now],
+        )?;
+        let session = load_session(&transaction, id)?;
+        transaction.commit()?;
+        Ok(session)
+    }
+
     /// Starts one dedicated break, or resumes the existing break without
     /// resetting its duration. The focus-to-break transition is atomic.
     pub fn start_break(&mut self, tag_id: i64, now: i64, target: i64) -> Result<Session> {
@@ -269,23 +297,12 @@ impl Store {
                         .is_some_and(|limit| session.elapsed_at(now) < limit)
             })
             .max_by_key(|session| (session.is_running(), session.id));
-        for session in &active {
-            if now < last_boundary(session) {
-                return Err(Error::InvalidTransition);
-            }
-            if existing.is_some_and(|current| current.id == session.id) {
-                continue;
-            }
-            if session.tag_kind == TagKind::Rest
-                || session
-                    .target_seconds
-                    .is_some_and(|limit| session.elapsed_at(now) >= limit)
-            {
-                end_session(&transaction, session, now)?;
-            } else if session.is_running() {
-                close_open_interval(&transaction, session, now)?;
-            }
-        }
+        pause_for_break(
+            &transaction,
+            &active,
+            existing.map(|session| session.id),
+            now,
+        )?;
         let id = if let Some(existing) = existing {
             if existing.is_paused() {
                 transaction.execute(
@@ -310,6 +327,32 @@ impl Store {
         transaction.commit()?;
         Ok(session)
     }
+}
+
+fn pause_for_break(
+    transaction: &Transaction<'_>,
+    active: &[Session],
+    selected: Option<i64>,
+    now: i64,
+) -> Result<()> {
+    for session in active {
+        if now < last_boundary(session) {
+            return Err(Error::InvalidTransition);
+        }
+        if Some(session.id) == selected {
+            continue;
+        }
+        if session.tag_kind == TagKind::Rest
+            || session
+                .target_seconds
+                .is_some_and(|limit| session.elapsed_at(now) >= limit)
+        {
+            end_session(transaction, session, now)?;
+        } else if session.is_running() {
+            close_open_interval(transaction, session, now)?;
+        }
+    }
+    Ok(())
 }
 
 fn available_tag(connection: &Connection, id: i64) -> Result<Tag> {
