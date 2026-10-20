@@ -1,6 +1,9 @@
 pub(crate) const STRIP_WIDTH: f32 = 328.;
 pub(crate) const STRIP_HEIGHT: f32 = 68.;
-pub(crate) const PANEL_HEIGHT: f32 = 440.;
+pub(crate) const MANAGER_WIDTH: f32 = 1040.;
+pub(crate) const MANAGER_HEIGHT: f32 = 780.;
+pub(crate) const MANAGER_MIN_WIDTH: f32 = 780.;
+pub(crate) const MANAGER_MIN_HEIGHT: f32 = 620.;
 
 #[cfg(target_os = "macos")]
 pub(crate) fn prepare_application() -> anyhow::Result<()> {
@@ -175,121 +178,32 @@ pub(crate) fn configure_floating(_window: &gpui::Window) -> anyhow::Result<()> {
 }
 
 #[cfg(target_os = "macos")]
-pub(crate) fn resize_floating(
-    window: &mut gpui::Window,
-    requested_height: f32,
-    above: bool,
-    cx: &gpui::App,
-) -> anyhow::Result<()> {
+pub(crate) fn hide_manager(window: &gpui::Window, cx: &gpui::App) -> anyhow::Result<()> {
     let native = native_window(window)?;
-    // AppKit resize notifications synchronously enter GPUI. Defer the native
-    // mutation so GPUI can update viewport_size after the Window borrow ends.
+    // AppKit notifications may synchronously enter GPUI. Hide this window
+    // after its current borrow ends, leaving the independent timer visible.
     cx.foreground_executor()
         .spawn(async move {
-            let mut frame = native.frame();
-            let height = f64::from(requested_height);
-            if !above {
-                frame.origin.y += frame.size.height - height;
-            }
-            frame.size.width = f64::from(STRIP_WIDTH);
-            frame.size.height = height;
-            if let Some(screen) = native.screen() {
-                let visible = screen.visibleFrame();
-                frame.size.height = frame.size.height.min(visible.size.height);
-                frame.origin.x = frame.origin.x.clamp(
-                    visible.origin.x,
-                    (visible.origin.x + visible.size.width - frame.size.width)
-                        .max(visible.origin.x),
-                );
-                frame.origin.y = frame.origin.y.clamp(
-                    visible.origin.y,
-                    (visible.origin.y + visible.size.height - frame.size.height)
-                        .max(visible.origin.y),
-                );
-            }
-            native.setFrame_display(frame, true);
-            if requested_height > STRIP_HEIGHT {
-                native.makeKeyWindow();
-            } else {
-                native.resignKeyWindow();
-            }
+            native.orderOut(None);
         })
         .detach();
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-pub(crate) fn resize_floating(
-    window: &mut gpui::Window,
-    requested_height: f32,
-    above: bool,
-    cx: &gpui::App,
-) -> anyhow::Result<()> {
-    use anyhow::{Context as _, bail};
+pub(crate) fn hide_manager(window: &gpui::Window, cx: &gpui::App) -> anyhow::Result<()> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-    use windows_sys::Win32::Foundation::RECT;
-    use windows_sys::Win32::Graphics::Gdi::{
-        GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::{
-        GetWindowRect, SWP_NOACTIVATE, SWP_NOZORDER, SetWindowPos,
-    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SW_HIDE, ShowWindow};
     let handle = HasWindowHandle::window_handle(window)
         .map_err(|error| anyhow::anyhow!("Native window is unavailable: {error:?}"))?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
-        bail!("Unsupported native window handle")
+        anyhow::bail!("Unsupported native window handle");
     };
-    let scale = window.scale_factor();
     let hwnd = handle.hwnd.get() as _;
     cx.foreground_executor()
         .spawn(async move {
-            let result = (|| -> anyhow::Result<()> {
-                let mut rect: RECT = unsafe { std::mem::zeroed() };
-                if unsafe { GetWindowRect(hwnd, &mut rect) } == 0 {
-                    return Err(std::io::Error::last_os_error())
-                        .context("Could not locate the floating window");
-                }
-                let width = (STRIP_WIDTH * scale).round() as i32;
-                let mut height = (requested_height * scale).round() as i32;
-                let mut x = rect.left;
-                let mut y = if above {
-                    rect.bottom - height
-                } else {
-                    rect.top
-                };
-                let mut monitor: MONITORINFO = unsafe { std::mem::zeroed() };
-                monitor.cbSize = std::mem::size_of::<MONITORINFO>() as u32;
-                if unsafe {
-                    GetMonitorInfoW(
-                        MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST),
-                        &mut monitor,
-                    )
-                } != 0
-                {
-                    let work = monitor.rcWork;
-                    height = height.min(work.bottom - work.top);
-                    x = x.clamp(work.left, (work.right - width).max(work.left));
-                    y = y.clamp(work.top, (work.bottom - height).max(work.top));
-                }
-                let result = unsafe {
-                    SetWindowPos(
-                        hwnd,
-                        std::ptr::null_mut(),
-                        x,
-                        y,
-                        width,
-                        height,
-                        SWP_NOACTIVATE | SWP_NOZORDER,
-                    )
-                };
-                if result == 0 {
-                    return Err(std::io::Error::last_os_error())
-                        .context("Could not resize the floating window");
-                }
-                Ok(())
-            })();
-            if result.is_err() {
-                eprintln!("Force could not resize the floating window.");
+            unsafe {
+                ShowWindow(hwnd, SW_HIDE);
             }
         })
         .detach();
@@ -297,16 +211,32 @@ pub(crate) fn resize_floating(
 }
 
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub(crate) fn resize_floating(
-    window: &mut gpui::Window,
-    requested_height: f32,
-    _above: bool,
-    _cx: &gpui::App,
-) -> anyhow::Result<()> {
-    window.resize(gpui::size(
-        gpui::px(STRIP_WIDTH),
-        gpui::px(requested_height),
-    ));
+pub(crate) fn hide_manager(window: &gpui::Window, _cx: &gpui::App) -> anyhow::Result<()> {
+    window.minimize_window();
+    Ok(())
+}
+
+pub(crate) fn show_manager(window: &gpui::Window, cx: &gpui::App) -> anyhow::Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use windows_sys::Win32::UI::WindowsAndMessaging::{SW_SHOW, ShowWindow};
+        let handle = HasWindowHandle::window_handle(window)
+            .map_err(|error| anyhow::anyhow!("Native window is unavailable: {error:?}"))?;
+        let RawWindowHandle::Win32(handle) = handle.as_raw() else {
+            anyhow::bail!("Unsupported native window handle");
+        };
+        let hwnd = handle.hwnd.get() as _;
+        cx.foreground_executor()
+            .spawn(async move {
+                unsafe {
+                    ShowWindow(hwnd, SW_SHOW);
+                }
+            })
+            .detach();
+    }
+    cx.activate(true);
+    window.activate_window();
     Ok(())
 }
 

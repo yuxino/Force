@@ -3,13 +3,21 @@
     windows_subsystem = "windows"
 )]
 
+mod activity_view;
+mod control_style;
+mod label;
 mod model;
 mod platform;
+mod settings_view;
+mod tag_picker;
 mod view;
+
+#[cfg(all(test, feature = "ui-test-support"))]
+mod headless_ui_tests;
 
 use gpui::{prelude::*, *};
 use gpui_component::{Root, Theme, ThemeMode};
-use model::ForceView;
+use model::{FloatingStrip, ForceView};
 use std::{borrow::Cow, path::PathBuf};
 
 actions!(
@@ -26,6 +34,10 @@ actions!(
         ClosePanel
     ]
 );
+
+struct ManagerWindow(WindowHandle<Root>);
+
+impl Global for ManagerWindow {}
 
 struct Assets;
 
@@ -100,177 +112,237 @@ fn main() -> anyhow::Result<()> {
     #[cfg(target_os = "macos")]
     platform::prepare_application()?;
     let data_dir = data_directory()?;
-    Application::new()
-        .with_assets(Assets)
-        .run(move |cx: &mut App| {
-            gpui_component::init(cx);
-            Theme::change(ThemeMode::Light, None, cx);
-            let theme = Theme::global_mut(cx);
-            theme.primary = rgb(0x252525).into();
-            theme.primary_hover = rgb(0x414141).into();
-            theme.primary_active = rgb(0x111111).into();
-            theme.primary_foreground = rgb(0xffffff).into();
-            theme.ring = rgb(0x9a9a9a).into();
-            theme.caret = rgb(0x252525).into();
-            theme.background = rgba(0x00000000).into();
-            theme.popover = rgb(0xfdfdfd).into();
-            theme.popover_foreground = rgb(0x202020).into();
-            theme.foreground = rgb(0x202020).into();
-            theme.muted_foreground = rgb(0x737373).into();
-            theme.border = rgb(0xe1e1e1).into();
-            theme.input = rgb(0xe1e1e1).into();
-            theme.secondary = rgb(0xf2f2f2).into();
-            theme.secondary_hover = rgb(0xe9e9e9).into();
-            theme.secondary_active = rgb(0xe0e0e0).into();
-            theme.accent = rgb(0xededed).into();
-            theme.accent_foreground = rgb(0x202020).into();
-            theme.selection = rgb(0xdcdcdc).into();
-            theme.font_size = px(13.);
-            theme.radius = px(6.);
-            theme.radius_lg = px(8.);
-            theme.shadow = false;
-            if cfg!(target_os = "windows") {
-                theme.font_family = "Segoe UI".into();
+    let application = Application::new().with_assets(Assets);
+    application.on_reopen(|cx| {
+        if let Some(handle) = cx.try_global::<ManagerWindow>().map(|manager| manager.0) {
+            with_force(handle, cx, |this, window, cx| this.show_manager(window, cx));
+        }
+    });
+    application.run(move |cx: &mut App| {
+        gpui_component::init(cx);
+        Theme::change(ThemeMode::Light, None, cx);
+        let theme = Theme::global_mut(cx);
+        theme.primary = rgb(0x252525).into();
+        theme.primary_hover = rgb(0x414141).into();
+        theme.primary_active = rgb(0x111111).into();
+        theme.primary_foreground = rgb(0xffffff).into();
+        theme.ring = rgb(0x9a9a9a).into();
+        theme.caret = rgb(0x252525).into();
+        theme.background = rgba(0x00000000).into();
+        theme.popover = rgb(0xfdfdfd).into();
+        theme.popover_foreground = rgb(0x202020).into();
+        theme.foreground = rgb(0x202020).into();
+        theme.muted_foreground = rgb(0x737373).into();
+        theme.border = rgb(0xe1e1e1).into();
+        theme.input = rgb(0xe1e1e1).into();
+        theme.secondary = rgb(0xf2f2f2).into();
+        theme.secondary_hover = rgb(0xe9e9e9).into();
+        theme.secondary_active = rgb(0xe0e0e0).into();
+        theme.accent = rgb(0xededed).into();
+        theme.accent_foreground = rgb(0x202020).into();
+        theme.selection = rgb(0xdcdcdc).into();
+        theme.font_size = px(13.);
+        theme.radius = px(6.);
+        theme.radius_lg = px(8.);
+        theme.shadow = false;
+        if cfg!(target_os = "windows") {
+            theme.font_family = "Segoe UI".into();
+        }
+        if cfg!(target_os = "linux") {
+            theme.font_family = "Noto Sans".into();
+        }
+        cx.bind_keys([
+            KeyBinding::new("secondary-q", Quit, None),
+            KeyBinding::new("secondary-n", NewTask, None),
+            KeyBinding::new("secondary-p", PrimaryAction, None),
+            KeyBinding::new("secondary-shift-p", FinishSegment, None),
+            KeyBinding::new("secondary-,", ShowSettings, None),
+            KeyBinding::new("escape", ClosePanel, Some("Force")),
+            KeyBinding::new("secondary-shift-m", ToggleCompact, None),
+        ]);
+        cx.on_action(|_: &Quit, cx| cx.quit());
+        cx.set_menus(vec![
+            Menu {
+                name: "Force".into(),
+                items: vec![
+                    MenuItem::action("设置…", ShowSettings),
+                    MenuItem::separator(),
+                    MenuItem::action("退出 Force", Quit),
+                ],
+            },
+            Menu {
+                name: "计时".into(),
+                items: vec![
+                    MenuItem::action("新任务", NewTask),
+                    MenuItem::separator(),
+                    MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
+                    MenuItem::action("结束本段", FinishSegment),
+                    MenuItem::action("休息 5 分钟", StartBreak),
+                ],
+            },
+            Menu {
+                name: "显示".into(),
+                items: vec![
+                    MenuItem::action("显示 / 隐藏管理窗口", ToggleCompact),
+                    MenuItem::action("计时记录", ShowRecords),
+                ],
+            },
+        ]);
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
             }
-            if cfg!(target_os = "linux") {
-                theme.font_family = "Noto Sans".into();
-            }
-            cx.bind_keys([
-                KeyBinding::new("secondary-q", Quit, None),
-                KeyBinding::new("secondary-n", NewTask, None),
-                KeyBinding::new("secondary-p", PrimaryAction, None),
-                KeyBinding::new("secondary-shift-p", FinishSegment, None),
-                KeyBinding::new("secondary-,", ShowSettings, None),
-                KeyBinding::new("escape", ClosePanel, Some("Force")),
-                KeyBinding::new("secondary-shift-m", ToggleCompact, None),
-            ]);
-            cx.on_action(|_: &Quit, cx| cx.quit());
-            cx.set_menus(vec![
-                Menu {
-                    name: "Force".into(),
-                    items: vec![
-                        MenuItem::action("设置…", ShowSettings),
-                        MenuItem::separator(),
-                        MenuItem::action("退出 Force", Quit),
-                    ],
-                },
-                Menu {
-                    name: "计时".into(),
-                    items: vec![
-                        MenuItem::action("新任务", NewTask),
-                        MenuItem::separator(),
-                        MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
-                        MenuItem::action("结束本段", FinishSegment),
-                        MenuItem::action("休息 5 分钟", StartBreak),
-                    ],
-                },
-                Menu {
-                    name: "显示".into(),
-                    items: vec![
-                        MenuItem::action("展开 / 收起", ToggleCompact),
-                        MenuItem::action("计时记录", ShowRecords),
-                    ],
-                },
-            ]);
-            cx.on_window_closed(|cx| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-            let bounds = platform::restored_bounds(&data_dir, cx).unwrap_or_else(|| {
-                Bounds::centered(
-                    None,
-                    size(px(platform::STRIP_WIDTH), px(platform::STRIP_HEIGHT)),
-                    cx,
-                )
-            });
-            let result = cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: None,
-                    kind: WindowKind::PopUp,
-                    focus: false,
-                    is_resizable: false,
-                    window_background: WindowBackgroundAppearance::Transparent,
-                    window_decorations: Some(WindowDecorations::Client),
-                    window_min_size: Some(size(
-                        px(platform::STRIP_WIDTH),
-                        px(platform::STRIP_HEIGHT),
-                    )),
-                    app_id: Some("app.yuxino.force".into()),
-                    ..Default::default()
-                },
-                move |window, cx| {
-                    if platform::configure_floating(window).is_err() {
-                        eprintln!("Force could not configure the floating window.");
-                    }
-                    let view = cx.new(|cx| ForceView::new(data_dir, window, cx));
-                    cx.new(|cx| Root::new(view, window, cx))
-                },
-            );
-            match result {
-                Ok(handle) => {
-                    cx.on_action(move |_: &NewTask, cx| {
-                        with_force(handle, cx, |this, window, cx| this.new_task(window, cx))
-                    });
-                    cx.on_action(move |_: &ToggleCompact, cx| {
-                        with_force(handle, cx, |this, window, cx| this.compact(window, cx))
-                    });
-                    cx.on_action(move |_: &PrimaryAction, cx| {
-                        with_force(handle, cx, |this, window, cx| {
-                            this.primary_action(window, cx)
-                        })
-                    });
-                    cx.on_action(move |_: &FinishSegment, cx| {
-                        with_force(handle, cx, |this, _, cx| {
-                            if this.completed.is_some() {
-                                return;
-                            }
-                            if let Some(id) = this.selected_session.or_else(|| {
-                                this.active
-                                    .iter()
-                                    .find(|session| session.is_running())
-                                    .or_else(|| this.active.last())
-                                    .map(|session| session.id)
-                            }) {
-                                this.finish(id, cx);
-                            }
-                        })
-                    });
-                    cx.on_action(move |_: &StartBreak, cx| {
-                        with_force(handle, cx, |this, window, cx| this.start_break(window, cx))
-                    });
-                    cx.on_action(move |_: &ShowRecords, cx| {
-                        with_force(handle, cx, |this, window, cx| {
-                            if this.compact {
-                                this.compact(window, cx);
-                            }
-                            this.navigate(model::Page::Records, window, cx);
-                        })
-                    });
-                    cx.on_action(move |_: &ShowSettings, cx| {
-                        with_force(handle, cx, |this, window, cx| {
-                            if this.compact {
-                                this.compact(window, cx);
-                            }
-                            this.navigate(model::Page::Settings, window, cx);
-                        })
-                    });
-                    cx.on_action(move |_: &ClosePanel, cx| {
-                        with_force(handle, cx, |this, window, cx| {
-                            if !this.compact {
-                                this.compact(window, cx);
-                            }
-                        })
-                    });
-                }
-                Err(_) => {
-                    eprintln!("Force could not open a graphics window.");
-                    cx.quit();
-                }
-            }
+        })
+        .detach();
+        let strip_bounds = platform::restored_bounds(&data_dir, cx).unwrap_or_else(|| {
+            Bounds::centered(
+                None,
+                size(px(platform::STRIP_WIDTH), px(platform::STRIP_HEIGHT)),
+                cx,
+            )
         });
+        // Create the one model and every input inside the normal manager
+        // window. The timer window only observes and dispatches to it.
+        let manager = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
+                    None,
+                    size(px(platform::MANAGER_WIDTH), px(platform::MANAGER_HEIGHT)),
+                    cx,
+                ))),
+                titlebar: Some(TitlebarOptions {
+                    title: Some("Force".into()),
+                    ..Default::default()
+                }),
+                kind: WindowKind::Normal,
+                focus: false,
+                show: false,
+                is_resizable: true,
+                window_background: WindowBackgroundAppearance::Opaque,
+                window_min_size: Some(size(
+                    px(platform::MANAGER_MIN_WIDTH),
+                    px(platform::MANAGER_MIN_HEIGHT),
+                )),
+                app_id: Some("app.yuxino.force.manager".into()),
+                ..Default::default()
+            },
+            move |window, cx| {
+                let model = cx.new(|cx| ForceView::new(data_dir, window, cx));
+                let close_model = model.clone();
+                window.on_window_should_close(cx, move |window, cx| {
+                    close_model.update(cx, |model, cx| model.hide_manager(window, cx));
+                    false
+                });
+                cx.new(|cx| Root::new(model, window, cx))
+            },
+        );
+        let Ok(handle) = manager else {
+            eprintln!("Force could not open its management window.");
+            cx.quit();
+            return;
+        };
+        let Some(model) = handle
+            .update(cx, |root, _, _| root.view().clone().downcast::<ForceView>())
+            .ok()
+            .and_then(Result::ok)
+        else {
+            cx.quit();
+            return;
+        };
+        cx.set_global(ManagerWindow(handle));
+        model.update(cx, |model, _| model.manager_window = Some(handle));
+        let strip_model = model.clone();
+        let strip = cx.open_window(
+            WindowOptions {
+                window_bounds: Some(WindowBounds::Windowed(strip_bounds)),
+                titlebar: None,
+                kind: WindowKind::PopUp,
+                focus: false,
+                is_resizable: false,
+                window_background: WindowBackgroundAppearance::Transparent,
+                window_decorations: Some(WindowDecorations::Client),
+                window_min_size: Some(size(px(platform::STRIP_WIDTH), px(platform::STRIP_HEIGHT))),
+                app_id: Some("app.yuxino.force".into()),
+                ..Default::default()
+            },
+            move |window, cx| {
+                if platform::configure_floating(window).is_err() {
+                    eprintln!("Force could not configure the floating timer.");
+                }
+                let strip = cx.new(|cx| FloatingStrip::new(strip_model, handle, window, cx));
+                cx.new(|cx| Root::new(strip, window, cx))
+            },
+        );
+        match strip {
+            Ok(strip) => {
+                model.update(cx, |model, _| model.strip_window = Some(strip));
+                cx.on_action(move |_: &NewTask, cx| {
+                    with_force(handle, cx, |this, window, cx| this.new_task(window, cx))
+                });
+                cx.on_action(move |_: &ToggleCompact, cx| {
+                    with_force(handle, cx, |this, window, cx| this.compact(window, cx))
+                });
+                cx.on_action(move |_: &PrimaryAction, cx| {
+                    with_force(handle, cx, |this, window, cx| {
+                        this.strip_primary_action(window, cx)
+                    })
+                });
+                cx.on_action(move |_: &FinishSegment, cx| {
+                    with_force(handle, cx, |this, _, cx| {
+                        if this.completed.is_some()
+                            && !this.active.iter().any(|session| session.is_running())
+                        {
+                            return;
+                        }
+                        if let Some(id) = this.strip_session().map(|session| session.id) {
+                            this.finish(id, cx);
+                        }
+                    })
+                });
+                cx.on_action(move |_: &StartBreak, cx| {
+                    with_force(handle, cx, |this, window, cx| this.start_break(window, cx))
+                });
+                cx.on_action(move |_: &ShowRecords, cx| {
+                    with_force(handle, cx, |this, window, cx| {
+                        this.navigate(model::Page::Records, window, cx);
+                    })
+                });
+                cx.on_action(move |_: &ShowSettings, cx| {
+                    with_force(handle, cx, |this, window, cx| {
+                        this.navigate(model::Page::Settings, window, cx);
+                    })
+                });
+                cx.on_action(move |_: &ClosePanel, cx| {
+                    with_force(handle, cx, |this, window, cx| {
+                        if !this.compact
+                            && this.page == model::Page::Settings
+                            && this.editing_tag.is_some()
+                        {
+                            this.cancel_tag_edit(window, cx);
+                        } else if !this.compact
+                            && this.page == model::Page::Records
+                            && this.record_details.is_some()
+                        {
+                            this.record_details = None;
+                            cx.notify();
+                        } else if !this.compact
+                            && this.page == model::Page::Records
+                            && this.record_help_open
+                        {
+                            this.record_help_open = false;
+                            cx.notify();
+                        } else if !this.compact {
+                            this.compact(window, cx);
+                        }
+                    })
+                });
+            }
+            Err(_) => {
+                eprintln!("Force could not open a graphics window.");
+                cx.quit();
+            }
+        }
+    });
     Ok(())
 }
 

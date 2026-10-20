@@ -475,6 +475,18 @@ impl Store {
         Ok(())
     }
 
+    /// Returns merged focus seconds for every `[start, min(end, now))` range,
+    /// preserving input order. Empty, reversed and future ranges return zero.
+    /// All buckets share one snapshot and one bounded interval query; rest and
+    /// overlapping focus never inflate a bucket. Settle expired timed sessions
+    /// before querying, as for [`Store::stats`].
+    pub fn focus_totals_for_ranges(&self, ranges: &[(i64, i64)], now: i64) -> Result<Vec<i64>> {
+        let transaction = self.connection.unchecked_transaction()?;
+        let totals = calculate_focus_totals(&transaction, ranges, now)?;
+        transaction.commit()?;
+        Ok(totals)
+    }
+
     /// Clips intervals to `[start, min(end, now))`. Completed events at `now`
     /// are included if they also belong to the requested `[start, end)` window.
     pub fn stats(&self, start: i64, end: i64, now: i64) -> Result<Stats> {
@@ -529,6 +541,78 @@ impl Store {
         }
         Ok(csv)
     }
+}
+
+fn calculate_focus_totals(
+    connection: &Connection,
+    ranges: &[(i64, i64)],
+    now: i64,
+) -> Result<Vec<i64>> {
+    let bounds = ranges
+        .iter()
+        .filter_map(|&(start, end)| (end.min(now) > start).then_some((start, end.min(now))))
+        .fold(None, |bounds, (start, end)| match bounds {
+            Some((left, right)) => Some((start.min(left), end.max(right))),
+            None => Some((start, end)),
+        });
+    let Some((start, end)) = bounds else {
+        return Ok(vec![0; ranges.len()]);
+    };
+    let mut statement = connection.prepare(
+        "SELECT i.started_at, MIN(COALESCE(i.ended_at, ?2), ?2)
+         FROM intervals i JOIN sessions s ON s.id = i.session_id
+         WHERE s.tag_kind = 'focus' AND i.started_at < ?2
+           AND (i.ended_at > ?1 OR i.ended_at IS NULL)
+         ORDER BY i.started_at",
+    )?;
+    let rows = statement.query_map(params![start, end], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?))
+    })?;
+    let mut merged: Vec<(i64, i64)> = Vec::new();
+    for row in rows {
+        let (a, b) = row?;
+        let a = a.max(start);
+        if b <= a {
+            continue;
+        }
+        if let Some((_, right)) = merged.last_mut()
+            && a <= *right
+        {
+            *right = (*right).max(b);
+        } else {
+            merged.push((a, b));
+        }
+    }
+    let mut prefix = Vec::with_capacity(merged.len() + 1);
+    prefix.push(0_i64);
+    for &(a, b) in &merged {
+        prefix.push(
+            prefix
+                .last()
+                .copied()
+                .unwrap_or(0)
+                .saturating_add(b.saturating_sub(a)),
+        );
+    }
+    let covered_before = |point| {
+        let count = merged.partition_point(|&(a, _)| a < point);
+        if count == 0 {
+            0
+        } else {
+            let (a, b) = merged[count - 1];
+            prefix[count - 1].saturating_add(point.min(b).saturating_sub(a).max(0))
+        }
+    };
+    Ok(ranges
+        .iter()
+        .map(|&(a, b)| {
+            if b.min(now) <= a {
+                0
+            } else {
+                covered_before(b.min(now)).saturating_sub(covered_before(a))
+            }
+        })
+        .collect())
 }
 
 fn calculate_stats(connection: &Connection, start: i64, end: i64, now: i64) -> Result<Stats> {
