@@ -199,20 +199,12 @@ impl Store {
         }
         if tag.kind == TagKind::Focus {
             let active = load_sessions_in_snapshot(&transaction, "WHERE finished_at IS NULL", [])?;
-            for session in active
-                .iter()
-                .filter(|session| session.task_id != Some(id) && session.is_running())
-            {
-                if session.tag_kind == TagKind::Rest
-                    || session
-                        .target_seconds
-                        .is_some_and(|value| session.elapsed_at(now) >= value)
-                {
-                    end_session(&transaction, session, now)?;
-                } else {
-                    close_open_interval(&transaction, session, now)?;
-                }
-            }
+            pause_for_focus(
+                &transaction,
+                &active,
+                existing.as_ref().map(|session| session.id),
+                now,
+            )?;
         }
         let session_id = if let Some(session) = existing {
             if session
@@ -239,6 +231,34 @@ impl Store {
             session_id
         };
         let session = load_session(&transaction, session_id)?;
+        transaction.commit()?;
+        Ok(session)
+    }
+
+    /// Resumes an existing focus round without changing its identity or timer
+    /// target. Legacy rounds without a task use the same atomic switching policy
+    /// as task focus: pause other focus and finish running rest.
+    pub fn resume_focus(&mut self, id: i64, now: i64) -> Result<Session> {
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session = load_session(&transaction, id)?;
+        if session.tag_kind != TagKind::Focus
+            || !session.is_paused()
+            || now < last_boundary(&session)
+            || session
+                .target_seconds
+                .is_some_and(|target| session.elapsed_at(now) >= target)
+        {
+            return Err(Error::InvalidTransition);
+        }
+        let active = load_sessions_in_snapshot(&transaction, "WHERE finished_at IS NULL", [])?;
+        pause_for_focus(&transaction, &active, Some(id), now)?;
+        transaction.execute(
+            "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
+            params![id, now],
+        )?;
+        let session = load_session(&transaction, id)?;
         transaction.commit()?;
         Ok(session)
     }
@@ -327,6 +347,29 @@ impl Store {
         transaction.commit()?;
         Ok(session)
     }
+}
+
+fn pause_for_focus(
+    transaction: &Transaction<'_>,
+    active: &[Session],
+    selected: Option<i64>,
+    now: i64,
+) -> Result<()> {
+    for session in active
+        .iter()
+        .filter(|session| Some(session.id) != selected && session.is_running())
+    {
+        if session.tag_kind == TagKind::Rest
+            || session
+                .target_seconds
+                .is_some_and(|target| session.elapsed_at(now) >= target)
+        {
+            end_session(transaction, session, now)?;
+        } else {
+            close_open_interval(transaction, session, now)?;
+        }
+    }
+    Ok(())
 }
 
 fn pause_for_break(

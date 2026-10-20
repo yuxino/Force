@@ -1492,7 +1492,7 @@ fn toggle_session(store: &mut Store, id: i64, now: i64) -> force_core::Result<Ti
     } else if let Some(task) = session.task_id {
         store.start_task(task, now, session.target_seconds)?
     } else {
-        store.resume(id, now)?
+        store.resume_focus(id, now)?
     };
     Ok(TimerToggleOutcome {
         session: changed,
@@ -1803,6 +1803,57 @@ fn write_export(path: &Path, content: &[u8], database: &Path) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn legacy_focus_toggle_ends_rest_and_pauses_other_focus_without_replacing_the_round() {
+        for target in [None, Some(1500)] {
+            let directory = tempfile::tempdir().unwrap();
+            let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+            let focus = match target {
+                Some(target) => store.start_timed("Legacy focus", 1, 100, target).unwrap(),
+                None => store.start("Legacy focus", 1, 100).unwrap(),
+            };
+            toggle_session(&mut store, focus.id, 110).unwrap();
+            let rest = store.start_break(4, 120, 300).unwrap();
+            let resumed = toggle_session(&mut store, focus.id, 130).unwrap();
+            assert_eq!(resumed.session.id, focus.id);
+            assert_eq!(resumed.session.task_id, None);
+            assert_eq!(resumed.session.title, focus.title);
+            assert_eq!(resumed.session.target_seconds, target);
+            assert_eq!(resumed.return_context, Some((None, target)));
+            assert_eq!(store.active_sessions().unwrap().len(), 1);
+            assert_eq!(
+                store
+                    .sessions()
+                    .unwrap()
+                    .iter()
+                    .find(|session| session.id == rest.id)
+                    .unwrap()
+                    .finished_at,
+                Some(130)
+            );
+
+            let other_task = store.create_task("Other focus", 1, 140).unwrap();
+            let other = store.start_task(other_task.id, 140, None).unwrap();
+            let resumed = toggle_session(&mut store, focus.id, 150).unwrap();
+            assert_eq!(resumed.session.id, focus.id);
+            assert_eq!(resumed.session.elapsed_at(160), 30);
+            assert_eq!(resumed.session.target_seconds, target);
+            let active = store.active_sessions().unwrap();
+            assert_eq!(
+                active.iter().filter(|session| session.is_running()).count(),
+                1
+            );
+            assert!(
+                active
+                    .iter()
+                    .find(|session| session.id == other.id)
+                    .unwrap()
+                    .is_paused()
+            );
+            assert_eq!(store.stats(0, 200, 160).unwrap().focus_seconds, 40);
+        }
+    }
 
     #[test]
     fn resuming_paused_rest_through_model_toggle_pauses_focus_and_keeps_identity() {

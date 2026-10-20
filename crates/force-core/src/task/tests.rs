@@ -7,6 +7,93 @@ fn database() -> (tempfile::TempDir, Store) {
 }
 
 #[test]
+fn legacy_focus_resume_preserves_timing_and_atomically_switches_other_sessions() {
+    for target in [None, Some(1500)] {
+        let (_directory, mut store) = database();
+        let focus = match target {
+            Some(target) => store.start_timed("Legacy focus", 1, 100, target).unwrap(),
+            None => store.start("Legacy focus", 1, 100).unwrap(),
+        };
+        store.pause(focus.id, 110).unwrap();
+        let other_task = store.create_task("Other focus", 1, 120).unwrap();
+        let other = store.start_task(other_task.id, 120, None).unwrap();
+        // Legacy stores can contain overlapping sessions. Switching must settle
+        // all running rest and focus in the same transaction.
+        let rest = store.start_timed("Legacy rest", 4, 130, 300).unwrap();
+        let resumed = store.resume_focus(focus.id, 140).unwrap();
+        assert_eq!(resumed.id, focus.id);
+        assert_eq!(resumed.task_id, None);
+        assert_eq!(resumed.title, focus.title);
+        assert_eq!(resumed.tag_id, focus.tag_id);
+        assert_eq!(resumed.started_at, focus.started_at);
+        assert_eq!(resumed.target_seconds, target);
+        assert_eq!(resumed.intervals.len(), 2);
+        assert_eq!(resumed.elapsed_at(150), 20);
+        let active = store.active_sessions().unwrap();
+        assert_eq!(active.len(), 2);
+        assert_eq!(
+            active.iter().filter(|session| session.is_running()).count(),
+            1
+        );
+        let paused = active
+            .iter()
+            .find(|session| session.id == other.id)
+            .unwrap();
+        assert!(paused.is_paused());
+        assert_eq!(paused.elapsed_at(150), 20);
+        let records = store.sessions().unwrap();
+        let rest = records
+            .iter()
+            .find(|session| session.id == rest.id)
+            .unwrap();
+        assert_eq!(rest.finished_at, Some(140));
+        assert_eq!(rest.elapsed_at(150), 10);
+        assert_eq!(store.stats(0, 200, 150).unwrap().focus_seconds, 40);
+    }
+}
+
+#[test]
+fn failed_focus_resume_insert_rolls_back_other_focus_and_rest_changes() {
+    let (_directory, mut store) = database();
+    let focus = store.start("Legacy focus", 1, 100).unwrap();
+    store.pause(focus.id, 110).unwrap();
+    store.start("Other focus", 1, 120).unwrap();
+    store.start_timed("Rest", 4, 130, 300).unwrap();
+    let before = store.active_sessions().unwrap();
+    store
+        .connection
+        .execute_batch(
+            "CREATE TRIGGER reject_focus_resume BEFORE INSERT ON intervals
+             BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.resume_focus(focus.id, 140),
+        Err(Error::Database(_))
+    ));
+    assert_eq!(store.active_sessions().unwrap(), before);
+    assert!(store.sessions().unwrap().is_empty());
+}
+
+#[test]
+fn focus_resume_rejects_invalid_or_elapsed_rounds_without_changing_other_sessions() {
+    let (_directory, mut store) = database();
+    let elapsed = store.start_timed("Elapsed focus", 1, 100, 60).unwrap();
+    store.pause(elapsed.id, 160).unwrap();
+    let rest = store.start_timed("Paused rest", 4, 170, 300).unwrap();
+    store.pause(rest.id, 180).unwrap();
+    let focus = store.start("Running focus", 1, 190).unwrap();
+    let before = store.active_sessions().unwrap();
+    for id in [elapsed.id, rest.id, focus.id] {
+        assert!(matches!(
+            store.resume_focus(id, 200),
+            Err(Error::InvalidTransition)
+        ));
+        assert_eq!(store.active_sessions().unwrap(), before);
+    }
+}
+
+#[test]
 fn repeating_break_reuses_the_same_round_and_pauses_focus_atomically() {
     let (_directory, mut store) = database();
     let task = store.create_task("Write", 1, 100).unwrap();

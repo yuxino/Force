@@ -25,19 +25,27 @@ replaced the production installation.
   before the fix with a 51-point gap from trigger bottom to the first option.
   The final native build confirmed that the menu sits directly below its
   visible control.
-- Updated the interface contract and native-text verification guidance. No timer,
-  persistence, dependency or platform-window logic changed in this revision.
+- Updated the interface contract and native-text verification guidance. The text/layout fixes
+  do not change persistence, dependencies or platform-window logic.
+- Pre-merge review found a legacy focus-resume path that could leave rest or
+  another focus running. It now uses the same atomic focus-switch policy as
+  saved tasks while retaining the original session, elapsed time and timer mode.
+  A transaction failure rolls back every affected timer.
 
 ## Verification
 
-- `scripts/check.sh`: formatting, strict workspace Clippy, 64 default tests and
+- `scripts/check.sh`: formatting, strict workspace Clippy, 68 default tests and
   whitespace checks passed.
-- `cargo test -p force-app --features ui-test-support --locked`: 30 application
-  tests passed. Including the overlapping default suite, 74 distinct tests passed.
+- `cargo test -p force-app --features ui-test-support --locked`: 31 application
+  tests passed. Including the overlapping default suite, 78 distinct tests passed.
   The new menu-anchor case covers default and minimum window sizes. The text
   regression checks UTF-8 run coverage directly because TestPlatform ignores
   font runs and correct boxes do not prove correct native glyphs.
 - Strict Clippy with `ui-test-support` passed.
+- The new legacy-resume model regression failed against the previous fallback
+  (two active timers instead of one), then passed after the fix. Three additional
+  core cases cover free/timed rounds, invalid/elapsed states, and a SQLite trigger
+  rejecting the final interval insertion to verify complete transaction rollback.
 - A signed `Force Dev.app` was built with the existing private-key-backed identity
   and passed strict bundle verification. The production executable checksum
   remained unchanged.
