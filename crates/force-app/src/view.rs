@@ -267,30 +267,6 @@ impl ForceView {
             .flex()
             .flex_col()
             .child(self.today_overview(cx))
-            .when_some(self.toast.as_ref(), |body, (message, _)| {
-                body.child(
-                    div()
-                        .mb(px(20.))
-                        .p(px(12.))
-                        .bg(rgb(SURFACE))
-                        .rounded(px(8.))
-                        .flex()
-                        .items_center()
-                        .gap(px(12.))
-                        .child(div().flex_1().text_size(px(14.)).child(message.clone()))
-                        .child(
-                            button("dismiss-focus-feedback")
-                                .ghost()
-                                .size(px(28.))
-                                .icon(control_icon(IconName::Close, MUTED))
-                                .tooltip("关闭提示")
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.toast = None;
-                                    cx.notify();
-                                })),
-                        ),
-                )
-            })
             .when(self.storage_failed, |body| {
                 body.child(self.storage_notice(cx))
             })
@@ -343,7 +319,10 @@ impl ForceView {
         let task_length = task_name.trim().chars().count();
         let task_valid = (1..=200).contains(&task_length);
         let no_focus_tags = tags.is_empty();
-        let disabled = no_focus_tags || !task_valid || self.storage_failed;
+        let disabled = no_focus_tags
+            || !task_valid
+            || self.storage_failed
+            || self.task_has_unsaved_changes(cx);
         let selected = self.selected_tag;
         let tag_name = tags
             .iter()
@@ -362,20 +341,53 @@ impl ForceView {
                     .flex_col()
                     .gap_2()
                     .child(
-                        section_heading(if self.selected_task.is_some() {
-                            "任务设置"
-                        } else {
-                            "新建任务"
-                        })
-                        .h(px(32.))
-                        .flex()
-                        .items_center(),
+                        div()
+                            .h(px(32.))
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(section_heading(if self.selected_task.is_some() {
+                                "任务名称"
+                            } else {
+                                "新建任务"
+                            }))
+                            .when(self.task_has_unsaved_changes(cx), |row| {
+                                row.child(
+                                    div()
+                                        .flex()
+                                        .gap(px(8.))
+                                        .child(
+                                            button("reset-task")
+                                                .debug_selector(|| "reset-task".into())
+                                                .ghost()
+                                                .h(px(32.))
+                                                .child(control_label("撤销", MUTED))
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.reset_task_changes(window, cx)
+                                                })),
+                                        )
+                                        .child(
+                                            button("save-task")
+                                                .debug_selector(|| "save-task".into())
+                                                .h(px(32.))
+                                                .unavailable(
+                                                    !task_valid
+                                                        || no_focus_tags
+                                                        || self.storage_failed,
+                                                )
+                                                .child(control_label("保存", INK))
+                                                .on_click(cx.listener(|this, _, _, cx| {
+                                                    this.save_task_changes(cx);
+                                                })),
+                                        ),
+                                )
+                            }),
                     )
                     .child(gpui::Styled::h(field(&self.task_input), px(44.)))
                     .when(task_length > 200, |form| {
                         form.child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(px(14.))
                                 .text_color(rgb(DESTRUCTIVE))
                                 .child("任务名称最多 200 字。"),
                         )
@@ -496,15 +508,17 @@ impl ForceView {
                         .iter()
                         .any(|session| session.task_id == Some(*id))
                 }),
-                |body, id| {
+                |body, _id| {
                     body.child(
-                        button("remove-selected-task")
+                        button("complete-task")
+                            .debug_selector(|| "complete-task".into())
                             .ghost()
                             .h(px(36.))
-                            .child(control_label("移出任务列表", MUTED))
-                            .tooltip("保留已经记录的专注时间")
+                            .child(control_label("完成任务", MUTED))
+                            .tooltip("从任务列表移出，保留全部计时记录")
+                            .unavailable(self.task_has_unsaved_changes(cx))
                             .on_click(cx.listener(move |this, _, window, cx| {
-                                this.archive_task(id, window, cx)
+                                this.complete_current_task(window, cx)
                             })),
                     )
                 },
@@ -716,20 +730,24 @@ impl ForceView {
                     .flex()
                     .flex_col()
                     .gap(px(12.))
-                    .child(field_label(if paused {
-                        "已暂停"
-                    } else if rest {
-                        "休息中"
-                    } else {
-                        "正在专注"
-                    }))
+                    .when(!rest || paused, |body| {
+                        body.child(field_label(if paused {
+                            "已暂停"
+                        } else if rest {
+                            "休息中"
+                        } else {
+                            "正在专注"
+                        }))
+                    })
                     .child(task_heading(&session.title))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(rgb(MUTED))
-                            .child(session.tag_name.clone()),
-                    ),
+                    .when(session.tag_name != session.title, |body| {
+                        body.child(
+                            div()
+                                .text_size(px(13.))
+                                .text_color(rgb(MUTED))
+                                .child(session.tag_name.clone()),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -761,83 +779,89 @@ impl ForceView {
                 div()
                     .flex()
                     .gap(px(12.))
-                    .child(
-                        primary_button("running-pause")
-                            .debug_selector(|| "running-pause".into())
-                            .flex_1()
-                            .h(px(44.))
-                            .icon(control_icon(
-                                action_icon(if paused { "play" } else { "pause" }).size(px(14.)),
-                                0xffffff,
-                            ))
-                            .child(control_label(
-                                if paused {
-                                    if self.browsing_other_timer() {
-                                        "切换并继续计时"
+                    .when(rest, |row| {
+                        row.child(
+                            primary_button("return-from-rest")
+                                .debug_selector(|| "return-from-rest".into())
+                                .flex_1()
+                                .h(px(44.))
+                                .child(control_label(
+                                    if self.return_focus_task().is_some() {
+                                        "继续专注"
                                     } else {
-                                        "继续计时"
-                                    }
-                                } else {
-                                    "暂停计时"
-                                },
-                                0xffffff,
-                            ))
-                            .on_click({
-                                let id = session.id;
-                                cx.listener(move |this, event: &ClickEvent, _, cx| {
-                                    if event.click_count() == 1 {
-                                        this.toggle_pause(id, cx);
-                                    }
-                                })
-                            }),
-                    )
+                                        "结束休息"
+                                    },
+                                    0xffffff,
+                                ))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.return_to_task(window, cx)
+                                })),
+                        )
+                    })
                     .child(
-                        button("running-finish")
-                            .debug_selector(|| "running-finish".into())
-                            .flex_1()
-                            .h(px(44.))
-                            .child(control_label("结束本次计时", INK))
-                            .tooltip("保存本次计时；任务保留，可再次开始计时")
-                            .on_click({
-                                let id = session.id;
-                                cx.listener(move |this, _, _, cx| this.finish(id, cx))
-                            }),
-                    ),
-            )
-            .child(
-                button("running-rest")
-                    .ghost()
-                    .h(px(36.))
-                    .child(control_label(
-                        if rest {
-                            "继续专注"
+                        (if rest {
+                            button("running-pause")
                         } else {
-                            "休息 5 分钟"
-                        },
-                        MUTED,
-                    ))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if rest {
-                            this.return_to_task(window, cx);
-                        } else {
-                            this.start_break(window, cx);
-                        }
-                    })),
+                            primary_button("running-pause")
+                        })
+                        .debug_selector(|| "running-pause".into())
+                        .flex_1()
+                        .h(px(44.))
+                        .icon(control_icon(
+                            action_icon(if paused { "play" } else { "pause" }).size(px(14.)),
+                            if rest { INK } else { 0xffffff },
+                        ))
+                        .child(control_label(
+                            if paused {
+                                if self.browsing_other_timer() {
+                                    "切换并继续计时"
+                                } else {
+                                    "继续计时"
+                                }
+                            } else {
+                                "暂停计时"
+                            },
+                            if rest { INK } else { 0xffffff },
+                        ))
+                        .on_click({
+                            let id = session.id;
+                            cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                if event.click_count() == 1 {
+                                    this.toggle_pause(id, cx);
+                                }
+                            })
+                        }),
+                    )
+                    .when(!rest, |row| {
+                        row.child(
+                            button("running-finish")
+                                .debug_selector(|| "running-finish".into())
+                                .flex_1()
+                                .h(px(44.))
+                                .child(control_label("结束本次计时", INK))
+                                .tooltip("保存本次计时；任务保留，可再次开始计时")
+                                .on_click({
+                                    let id = session.id;
+                                    cx.listener(move |this, _, _, cx| this.finish(id, cx))
+                                }),
+                        )
+                    }),
             )
+            .when(!rest, |body| {
+                body.child(
+                    button("running-rest")
+                        .debug_selector(|| "running-rest".into())
+                        .ghost()
+                        .h(px(36.))
+                        .child(control_label("休息 5 分钟", MUTED))
+                        .on_click(cx.listener(|this, _, window, cx| this.start_break(window, cx))),
+                )
+            })
     }
 
     fn completed_panel(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement {
         let rest = session.tag_kind == TagKind::Rest;
-        let return_task = self.return_task.and_then(|id| {
-            self.tasks
-                .iter()
-                .find(|task| task.id == id && task.completed_at.is_none())
-        });
-        let next_title = if rest {
-            return_task.map_or("下一段专注", |task| task.title.as_str())
-        } else {
-            session.title.as_str()
-        };
+        let return_task = self.return_focus_task();
         div()
             .debug_selector(|| "focus-completed".into())
             .w_full()
@@ -854,12 +878,12 @@ impl ForceView {
                     .text_color(rgb(MUTED))
                     .child(Icon::new(IconName::CircleCheck).size(px(15.)))
                     .child(if rest {
-                        "休息结束，可以继续了"
+                        "休息已结束"
                     } else {
                         "本次计时已保存"
                     }),
             )
-            .child(task_heading(next_title))
+            .child(task_heading(&session.title))
             .child(
                 div()
                     .flex()
@@ -892,7 +916,7 @@ impl ForceView {
                                     if return_task.is_some() {
                                         "继续专注"
                                     } else {
-                                        "开始专注"
+                                        "新建任务"
                                     }
                                 } else {
                                     "再计一次"
@@ -900,9 +924,12 @@ impl ForceView {
                                 0xffffff,
                             ))
                             .tooltip(if rest {
-                                "结束休息，继续原任务的计时"
+                                return_task.map_or_else(
+                                    || "新建一个专注任务".to_owned(),
+                                    |task| format!("继续：{}", task.title),
+                                )
                             } else {
-                                "为同一任务开始一次新的计时，原记录保留"
+                                "为同一任务开始一次新的计时，原记录保留".to_owned()
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if rest {
@@ -926,22 +953,19 @@ impl ForceView {
                         )
                     }),
             )
-            .child(div().flex().items_center().justify_between().when(
-                !rest && session.task_id.is_some(),
-                |row| {
-                    row.child(
-                        button("complete-task")
-                            .ghost()
-                            .small()
-                            .icon(control_icon(Icon::new(IconName::Check).size(px(14.)), INK))
-                            .child(control_label("完成任务", INK))
-                            .tooltip("从任务列表移出，保留此任务的全部计时记录")
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.complete_current_task(window, cx)
-                            })),
-                    )
-                },
-            ))
+            .when(!rest && session.task_id.is_some(), |body| {
+                body.child(
+                    button("complete-task")
+                        .debug_selector(|| "complete-task".into())
+                        .ghost()
+                        .h(px(36.))
+                        .child(control_label("完成任务", MUTED))
+                        .tooltip("从任务列表移出，保留全部计时记录")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.complete_current_task(window, cx)
+                        })),
+                )
+            })
     }
 
     fn record_date_controls(&self, cx: &mut Context<Self>) -> Div {
@@ -1049,7 +1073,7 @@ impl ForceView {
                     }))))
             .when(self.record_help_open, |body| body.child(
                 div().p(px(12.)).rounded(px(6.)).bg(rgb(SURFACE)).text_size(px(13.)).text_color(rgb(MUTED))
-                    .child("当日专注按本地零点拆分，扣除暂停与休息，重叠专注只计一次。列表显示当天计时，跨日记录在对应日期分别显示；整段时长不含暂停。搜索只筛选列表。")
+                    .child("专注按本地日期统计，扣除暂停和休息，重叠时段只计一次。跨日记录分别计入每天；搜索只筛选列表。")
             ))
             .child(div().flex().flex_col()
                 .children(records.iter().map(|session| self.record_row(session, cx)))
@@ -1115,16 +1139,27 @@ impl ForceView {
                         div()
                             .flex_1()
                             .min_w_0()
-                            .child(
+                            .child(if expanded {
+                                div()
+                                    .w_full()
+                                    .whitespace_normal()
+                                    .text_size(px(14.))
+                                    .child(session.title.clone())
+                                    .id(("record-title", id as u64))
+                            } else {
                                 single_line(session.title.clone(), 14.)
                                     .id(("record-title", id as u64))
                                     .tooltip(move |window, cx| {
                                         Tooltip::new(help_title.clone()).build(window, cx)
-                                    }),
-                            )
+                                    })
+                            })
                             .child(
                                 single_line(
-                                    format!("{} · {}", session_times(session), session.tag_name),
+                                    if session.title == session.tag_name {
+                                        session_times(session)
+                                    } else {
+                                        format!("{} · {}", session_times(session), session.tag_name)
+                                    },
                                     12.,
                                 )
                                 .mt_1()
@@ -1206,22 +1241,9 @@ impl ForceView {
                         .flex()
                         .flex_col()
                         .gap(px(8.))
-                        .child(record_detail("任务", session.title.clone()))
-                        .child(record_detail(
-                            "标签",
-                            format!(
-                                "{} · {}",
-                                session.tag_name,
-                                if session.tag_kind == TagKind::Focus {
-                                    "专注"
-                                } else {
-                                    "休息"
-                                }
-                            ),
-                        ))
-                        .child(record_detail("当日", clock(day_seconds)))
-                        .child(record_detail("整段", clock(total_seconds)))
-                        .child(record_detail("暂停", clock(session.paused_at(self.now))))
+                        .when(session.paused_at(self.now) > 0, |body| {
+                            body.child(record_detail("暂停", clock(session.paused_at(self.now))))
+                        })
                         .child(record_detail("开始", record_timestamp(session.started_at)))
                         .child(record_detail(
                             "结束",
@@ -1239,12 +1261,48 @@ impl ForceView {
                         .child(record_detail(
                             "方式",
                             session.target_seconds.map_or_else(
-                                || "不限时（手动结束）".to_owned(),
+                                || "不限时".to_owned(),
                                 |seconds| format!("{}倒计时", short_time(seconds)),
                             ),
                         )),
                 )
             })
+    }
+
+    fn feedback_toast(&self, message: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .debug_selector(|| "manager-feedback".into())
+            .absolute()
+            .bottom(px(16.))
+            .right(px(24.))
+            .max_w(px(360.))
+            .p(px(12.))
+            .rounded(px(8.))
+            .bg(rgb(SURFACE))
+            .border_1()
+            .border_color(rgb(LINE))
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .text_size(px(14.))
+                    .whitespace_normal()
+                    .child(message.to_owned()),
+            )
+            .child(
+                button("dismiss-feedback")
+                    .ghost()
+                    .size(px(24.))
+                    .icon(control_icon(IconName::Close, MUTED))
+                    .tooltip("关闭提示")
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.toast = None;
+                        cx.notify();
+                    })),
+            )
     }
 
     fn management_page(&self, cx: &mut Context<Self>) -> AnyElement {
@@ -1281,30 +1339,6 @@ impl ForceView {
                         (self.page == Page::Focus)
                             .then(|| Local::now().format("%m 月 %d 日").to_string()),
                     ))
-                    .when_some(self.toast.as_ref(), |body, (message, _)| {
-                        body.child(
-                            div()
-                                .mb(px(24.))
-                                .p(px(12.))
-                                .rounded(px(8.))
-                                .bg(rgb(SURFACE))
-                                .flex()
-                                .items_center()
-                                .gap(px(12.))
-                                .child(div().flex_1().text_size(px(13.)).child(message.clone()))
-                                .child(
-                                    button("dismiss-feedback")
-                                        .ghost()
-                                        .size(px(28.))
-                                        .icon(control_icon(IconName::Close, MUTED))
-                                        .tooltip("关闭提示")
-                                        .on_click(cx.listener(|this, _, _, cx| {
-                                            this.toast = None;
-                                            cx.notify();
-                                        })),
-                                ),
-                        )
-                    })
                     .when(self.storage_failed, |body| {
                         body.child(self.storage_notice(cx))
                     })
@@ -1329,6 +1363,7 @@ impl Render for ForceView {
             .track_focus(&self.focus_handle)
             .key_context("Force")
             .size_full()
+            .relative()
             .bg(rgb(PAPER))
             .text_color(rgb(INK))
             .text_size(px(14.))
@@ -1336,6 +1371,9 @@ impl Render for ForceView {
             .flex_col()
             .child(self.panel_navigation(cx))
             .child(self.management_page(cx))
+            .when_some(self.toast.as_ref(), |body, (message, _)| {
+                body.child(self.feedback_toast(message, cx))
+            })
     }
 }
 

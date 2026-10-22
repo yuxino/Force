@@ -23,3 +23,24 @@ Acceptance covers default/minimum widths, navigation back from records/settings,
 new-task browsing with a running timer, switching both ways, pause/resume,
 completion/repeat/rest, and the same terms on the strip and native menu. Use
 only isolated development data. GPUI layout tests do not establish native pixels.
+
+## Reduce ambiguous choices
+
+Task metadata saves independently of starting a timer. Show 保存/撤销 only for
+changed existing tasks, and protect unsaved changes when selecting another task.
+New-task Return starts; changed existing-task Return saves without starting.
+Completing an inactive task uses the same 完成任务 action as the timer receipt.
+
+Rest has two controls: continue the original focus task (or end rest if none),
+and pause/resume rest. Its receipt describes rest, never the next task's time.
+Global rest follows the actually running task; a local rest action follows the
+viewed task. With no return task, end rest before opening a new-task form.
+Keep legacy standalone rest reachable but label it as rest, not a focus task.
+
+Only create focus tags in settings; retain existing rest tag data and editing.
+Goal actions appear only when changed. Record expansion adds dated boundaries,
+pause time when present, and mode; it does not repeat the row's title, tag and
+durations. Expanded titles wrap so long names remain readable.
+
+Routine feedback uses one compact transient toast without shifting the workspace.
+Task/goal saves are quiet on success; values and edit actions update in place.

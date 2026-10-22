@@ -36,7 +36,10 @@ Use spacing between columns without a full-height dividing line.
   three states, aligned with the heading above. Setup keeps
   task, duration, tag and start
   together. Running uses a 72-point tabular timer, visible 暂停计时 / 继续计时 and
-  结束本次计时 actions, and a secondary rest/return action. Completion shows a compact
+  结束本次计时 actions, and a secondary rest action. Rest has only a primary
+  继续专注 / 结束休息 action and secondary pause/resume. Returning to focus ends
+  paused rest as well, atomically; global rest follows the running task, while
+  a task-local rest follows the viewed task. Completion shows a compact
   receipt and next actions without removing task navigation or daily progress.
 - One task list includes unfinished tasks and unfinished legacy sessions without
   a task association. Do not duplicate it as recent tasks and other timers.
@@ -68,8 +71,9 @@ Settings have a 160-point section-title column, a 32-point gap and an elastic
 content column, with 36 points between groups. Timing preferences contain strip
 pinning, completion sound and daily goal. Pinning and sound each use a
 keyboard-accessible button around a passive switch indicator. Tags use 44-point
-rows and a list capped at 240 points. The tag input, type choice and 添加 / 保存
-stay on one row at the minimum width. Local data exposes the folder; export is
+rows and a list capped at 240 points. The tag input and 添加 / 保存
+stay on one row at the minimum width. New labels are focus tags; existing rest
+labels remain editable. Daily-goal 保存 / 撤销 appear only while changed. Local data exposes the folder; export is
 owned by records.
 
 Single-line inputs and settings controls are 40 points high; main start and
@@ -113,13 +117,18 @@ A day change or storage refresh reloads the series; never query once per cell.
   within an opaque list capped at 240 points. Selection uses stable tag IDs.
   Navigation, hiding management, completion and changed options dismiss stale
   menus. Restore prior focus without overriding a deliberate focus change.
+- Task edits save independently of starting. 保存 / 撤销 appear only for changed
+  saved tasks; Return saves that edit without starting a timer. Protect unsaved
+  existing-task edits and new-task drafts before task/session switches or global
+  rest. Completing an inactive task and a finished round uses one 完成任务 action.
 - Button and Return share validation. Save requires changed, valid input; show
   errors beside the field. Preserve drafts across navigation. Goal restore uses
   the saved value without a database write. Tag validation covers duplicate names
   across both types, invalid characters and removed edit targets. Scroll the tag
   form into view when editing or recovering from an empty focus-tag list.
 - Escape first closes local editing/details/help, then hides management. Feedback
-  stays dismissible in the content flow without covering controls.
+  uses one compact transient toast without moving the page. Task/goal saves
+  are quiet on success; changed controls and values provide confirmation.
 - Records provide date navigation, 今天, search, daily focus and sessions with
   investment on the selected date, including running and paused rounds.
   Daily focus includes ongoing investment and is independent of search. List
@@ -129,8 +138,8 @@ A day change or storage refresh reloads the series; never query once per cell.
   date or search changes. Mark rest explicitly;
   rows show 当日 time and, when different, 整段 time. Cross-day time
   ranges include dates; unfinished rounds show their state and cannot be deleted.
-  Expanded details show daily/total investment, excluded pause time, full task,
-  tag, dated start/end and timing mode. Following today advances at local
+  Expanded titles wrap. Details add dated start/end, nonzero pause time and
+  timing mode without repeating row labels or durations. Following today advances at local
   midnight; browsing another historical date stays fixed.
   Long values wrap, and details close when the record disappears.
 

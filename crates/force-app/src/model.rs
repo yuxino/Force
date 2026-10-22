@@ -31,6 +31,14 @@ pub(crate) struct ActivityDay {
     pub(crate) seconds: i64,
 }
 
+#[derive(Clone, Copy)]
+enum TaskDestination {
+    New,
+    Task(i64),
+    Session(i64),
+    GlobalBreak,
+}
+
 pub(crate) struct ForceView {
     pub(crate) store: Option<Store>,
     pub(crate) data_dir: PathBuf,
@@ -118,7 +126,11 @@ impl ForceView {
                     && this.completed.is_none()
                     && (this.preparing || this.active.is_empty())
                 {
-                    this.start(window, cx);
+                    if this.task_has_unsaved_changes(cx) {
+                        this.save_task_changes(cx);
+                    } else {
+                        this.start(window, cx);
+                    }
                 }
             },
         );
@@ -535,7 +547,121 @@ impl ForceView {
         }
     }
 
+    pub(crate) fn task_has_unsaved_changes(&self, cx: &gpui::App) -> bool {
+        self.preparing
+            && self
+                .selected_task
+                .and_then(|id| self.tasks.iter().find(|t| t.id == id))
+                .is_some_and(|task| {
+                    task.title != self.task_input.read(cx).value().trim()
+                        || task.tag_id != self.selected_tag
+                })
+    }
+
+    pub(crate) fn reset_task_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(task) = self
+            .selected_task
+            .and_then(|id| self.tasks.iter().find(|t| t.id == id))
+            .cloned()
+        {
+            self.selected_tag = task.tag_id;
+            self.task_input
+                .update(cx, |input, cx| input.set_value(task.title, window, cx));
+            cx.notify();
+        }
+    }
+
+    pub(crate) fn save_task_changes(&mut self, cx: &mut Context<Self>) -> bool {
+        if !self.preparing {
+            return false;
+        }
+        let mut saved_id = self.selected_task;
+        let title = self.task_input.read(cx).value().trim().to_owned();
+        let tag = self.selected_tag;
+        if self.write(
+            |store| {
+                if let Some(id) = saved_id {
+                    store.update_task(id, &title, tag)?;
+                } else {
+                    saved_id = Some(store.create_task(&title, tag, Local::now().timestamp())?.id);
+                }
+                Ok(())
+            },
+            cx,
+        ) {
+            self.selected_task = saved_id;
+            self.toast = None;
+            cx.notify();
+            true
+        } else {
+            false
+        }
+    }
+
+    fn confirm_task_changes(
+        &mut self,
+        destination: TaskDestination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let new_draft = self.preparing
+            && self.selected_task.is_none()
+            && !self.task_input.read(cx).value().trim().is_empty();
+        if !self.task_has_unsaved_changes(cx) && !new_draft {
+            return false;
+        }
+        let selected = self.selected_task;
+        let answer = window.prompt(
+            PromptLevel::Info,
+            if new_draft {
+                "保存新任务？"
+            } else {
+                "保存任务修改？"
+            },
+            None,
+            &[
+                PromptButton::cancel("取消"),
+                PromptButton::new("不保存"),
+                PromptButton::new("保存"),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(choice @ (1 | 2)) = answer.await {
+                let _ = cx.update(|window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.selected_task != selected || !this.preparing {
+                            return;
+                        }
+                        if choice == 2 {
+                            if !this.save_task_changes(cx) {
+                                return;
+                            }
+                        } else if this.selected_task.is_some() {
+                            this.reset_task_changes(window, cx);
+                        } else {
+                            this.task_input
+                                .update(cx, |input, cx| input.set_value("", window, cx));
+                        }
+                        match destination {
+                            TaskDestination::New => this.new_task(window, cx),
+                            TaskDestination::Task(id) => this.select_task(id, window, cx),
+                            TaskDestination::Session(id) => this.select_session(id, window, cx),
+                            TaskDestination::GlobalBreak => this.start_global_break(window, cx),
+                        }
+                    });
+                });
+            }
+        })
+        .detach();
+        true
+    }
+
     pub(crate) fn start(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.task_has_unsaved_changes(cx) {
+            self.notify("请先保存或撤销任务修改。", cx);
+            return;
+        }
         if self.storage_failed {
             self.notify("请先重试打开本地数据。", cx);
             return;
@@ -692,6 +818,9 @@ impl ForceView {
     }
 
     pub(crate) fn select_session(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_task_changes(TaskDestination::Session(id), window, cx) {
+            return;
+        }
         let Some(session) = self.active.iter().find(|session| session.id == id).cloned() else {
             self.notify("这项计时已结束，请刷新后重试。", cx);
             return;
@@ -708,6 +837,12 @@ impl ForceView {
     }
 
     pub(crate) fn select_task(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.selected_task == Some(id) && self.preparing {
+            return;
+        }
+        if self.confirm_task_changes(TaskDestination::Task(id), window, cx) {
+            return;
+        }
         let Some(task) = self.tasks.iter().find(|task| task.id == id).cloned() else {
             self.notify("这件事已变更，请刷新后重试。", cx);
             return;
@@ -736,6 +871,9 @@ impl ForceView {
     }
 
     pub(crate) fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_task_changes(TaskDestination::New, window, cx) {
+            return;
+        }
         self.refresh(cx);
         self.panel_scroll[0].set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
         self.selected_task = None;
@@ -837,6 +975,21 @@ impl ForceView {
         }
     }
 
+    pub(crate) fn start_global_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.confirm_task_changes(TaskDestination::GlobalBreak, window, cx) {
+            return;
+        }
+        if let Some(session) = running_session(&self.active, self.now).cloned() {
+            if session.tag_kind == TagKind::Focus {
+                self.return_task = session.task_id;
+                self.return_target_seconds = session.target_seconds;
+            }
+            self.begin_break(window, cx);
+        } else {
+            self.start_break(window, cx);
+        }
+    }
+
     pub(crate) fn start_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(focus) = self
             .completed
@@ -856,6 +1009,10 @@ impl ForceView {
             self.return_task = focus.task_id;
             self.return_target_seconds = focus.target_seconds;
         }
+        self.begin_break(window, cx);
+    }
+
+    fn begin_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if write_return_context(&self.data_dir, self.return_task, self.return_target_seconds)
             .is_err()
         {
@@ -877,12 +1034,32 @@ impl ForceView {
         }
     }
 
-    pub(crate) fn return_to_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(id) = self.return_task.filter(|id| {
+    pub(crate) fn return_focus_task(&self) -> Option<&Task> {
+        self.return_task.and_then(|id| {
             self.tasks
                 .iter()
-                .any(|task| task.id == *id && task.completed_at.is_none())
-        }) else {
+                .find(|t| t.id == id && t.completed_at.is_none())
+        })
+    }
+
+    pub(crate) fn return_to_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(id) = self.return_focus_task().map(|task| task.id) else {
+            let now = Local::now().timestamp();
+            let rest = self
+                .active
+                .iter()
+                .find(|s| s.tag_kind == TagKind::Rest && Some(s.id) == self.selected_session)
+                .or_else(|| {
+                    self.active
+                        .iter()
+                        .find(|s| s.tag_kind == TagKind::Rest && s.is_running())
+                })
+                .map(|s| s.id);
+            if let Some(id) = rest
+                && !self.write(|store| store.finish(id, now), cx)
+            {
+                return;
+            }
             self.new_task(window, cx);
             return;
         };
@@ -922,37 +1099,6 @@ impl ForceView {
         }
     }
 
-    pub(crate) fn archive_task(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        if self
-            .active
-            .iter()
-            .any(|session| session.task_id == Some(id))
-        {
-            self.notify("请先结束这件事的计时，再从任务列表移除。", cx);
-            return;
-        }
-        let answer = window.prompt(
-            PromptLevel::Warning,
-            "从任务列表移除？",
-            Some("所有计时记录都会保留。"),
-            &[PromptButton::cancel("取消"), PromptButton::new("移除")],
-            cx,
-        );
-        cx.spawn(async move |this, cx| {
-            if let Ok(1) = answer.await {
-                let _ = this.update(cx, |this, cx| {
-                    if this.write(|store| store.delete_task(id), cx) {
-                        if this.selected_task == Some(id) {
-                            this.selected_task = None;
-                        }
-                        this.notify("已从任务列表移除，记录已保留。", cx);
-                    }
-                });
-            }
-        })
-        .detach();
-    }
-
     pub(crate) fn goal_draft(&self, cx: &gpui::App) -> Option<u32> {
         parse_goal_draft(self.goal_input.read(cx).value().as_ref())
     }
@@ -977,11 +1123,14 @@ impl ForceView {
 
     pub(crate) fn save_goal(&mut self, cx: &mut Context<Self>) {
         let Some(minutes) = self.goal_draft(cx) else {
-            self.notify("请输入 1–1440 之间的分钟数。", cx);
+            // The field already displays its actionable validation error.
+            self.toast = None;
+            cx.notify();
             return;
         };
         if self.can_save_goal(cx) && self.write(|store| store.set_goal_minutes(minutes), cx) {
-            self.notify("目标已保存。", cx);
+            self.toast = None;
+            cx.notify();
         }
     }
 
@@ -1045,7 +1194,11 @@ impl ForceView {
             return;
         }
         let editing = self.editing_tag;
-        let kind = self.new_tag_kind;
+        let kind = if editing.is_some() {
+            self.new_tag_kind
+        } else {
+            TagKind::Focus
+        };
         let mut created_id = None;
         if self.write(
             |store| {
@@ -1869,9 +2022,13 @@ mod tests {
         let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
         let task = store.create_task("A", 1, 100).unwrap();
         let focus = store.start_task(task.id, 100, Some(1500)).unwrap();
-        let rest = store.start_break(4, 130, 300).unwrap();
-        toggle_session(&mut store, rest.id, 140).unwrap();
+        store.pause(focus.id, 130).unwrap();
         toggle_session(&mut store, focus.id, 150).unwrap();
+        // Replay a legacy paused break beside the already resumed focus.
+        // New focus transitions now finish paused breaks instead of creating
+        // this historical state.
+        let rest = store.start_timed("休息", 4, 130, 300).unwrap();
+        toggle_session(&mut store, rest.id, 140).unwrap();
         let resumed = toggle_session(&mut store, rest.id, 160).unwrap();
         assert_eq!(resumed.session.id, rest.id);
         assert_eq!(resumed.session.task_id, None);
@@ -1915,8 +2072,8 @@ mod tests {
         let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
         let rest = store.start("Legacy rest", 4, 100).unwrap();
         toggle_session(&mut store, rest.id, 110).unwrap();
-        let task = store.create_task("Focus", 1, 120).unwrap();
-        let focus = store.start_task(task.id, 120, None).unwrap();
+        // Low-level insertion preserves the legacy coexistence fixture.
+        let focus = store.start("Focus", 1, 120).unwrap();
         let resumed = toggle_session(&mut store, rest.id, 130).unwrap();
         assert_eq!(resumed.session.id, rest.id);
         assert_eq!(resumed.session.target_seconds, None);
@@ -1958,8 +2115,8 @@ mod tests {
         let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
         let rest = store.start_timed("Rest", 4, 100, 300).unwrap();
         store.pause(rest.id, 110).unwrap();
-        let task = store.create_task("Future boundary", 1, 200).unwrap();
-        let focus = store.start_task(task.id, 200, None).unwrap();
+        // The old database may retain a paused break beside future focus.
+        let focus = store.start("Future boundary", 1, 200).unwrap();
         assert!(matches!(
             toggle_session(&mut store, rest.id, 190),
             Err(force_core::Error::InvalidTransition)

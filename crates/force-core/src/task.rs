@@ -174,8 +174,8 @@ impl Store {
     }
 
     /// Reuses a paused session for the same task, preserving its original timer
-    /// target. Starting focus atomically pauses other focus and ends running
-    /// rest, so a break never continues hidden behind the selected focus task.
+    /// target. Starting focus atomically pauses other running focus and ends
+    /// all unfinished rest, including paused breaks.
     pub fn start_task(&mut self, id: i64, now: i64, target: Option<i64>) -> Result<Session> {
         if target.is_some_and(|value| !(MIN_TARGET_SECONDS..=MAX_TARGET_SECONDS).contains(&value)) {
             return Err(Error::Validation(
@@ -237,7 +237,7 @@ impl Store {
 
     /// Resumes an existing focus round without changing its identity or timer
     /// target. Legacy rounds without a task use the same atomic switching policy
-    /// as task focus: pause other focus and finish running rest.
+    /// as task focus: pause other running focus and finish all unfinished rest.
     pub fn resume_focus(&mut self, id: i64, now: i64) -> Result<Session> {
         let transaction = self
             .connection
@@ -355,10 +355,9 @@ fn pause_for_focus(
     selected: Option<i64>,
     now: i64,
 ) -> Result<()> {
-    for session in active
-        .iter()
-        .filter(|session| Some(session.id) != selected && session.is_running())
-    {
+    for session in active.iter().filter(|session| {
+        Some(session.id) != selected && (session.tag_kind == TagKind::Rest || session.is_running())
+    }) {
         if session.tag_kind == TagKind::Rest
             || session
                 .target_seconds

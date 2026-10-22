@@ -132,6 +132,90 @@ fn repeating_break_reuses_the_same_round_and_pauses_focus_atomically() {
 }
 
 #[test]
+fn returning_to_focus_ends_paused_rest_and_the_next_break_starts_fresh() {
+    for use_resume_focus in [false, true] {
+        let (_directory, mut store) = database();
+        let task = store.create_task("Write", 1, 100).unwrap();
+        let focus = store.start_task(task.id, 100, Some(1500)).unwrap();
+        let rest = store.start_break(4, 130, 300).unwrap();
+        store.pause(rest.id, 160).unwrap();
+
+        let resumed = if use_resume_focus {
+            store.resume_focus(focus.id, 200).unwrap()
+        } else {
+            store.start_task(task.id, 200, Some(1500)).unwrap()
+        };
+        assert_eq!(resumed.id, focus.id);
+        assert_eq!(resumed.target_seconds, Some(1500));
+        assert_eq!(resumed.elapsed_at(210), 40);
+        assert_eq!(store.active_sessions().unwrap(), vec![resumed]);
+        let records = store.sessions().unwrap();
+        let finished_rest = records.iter().find(|s| s.id == rest.id).unwrap();
+        assert_eq!(finished_rest.finished_at, Some(200));
+        assert_eq!(finished_rest.elapsed_at(210), 30);
+
+        let next = store.start_break(4, 230, 300).unwrap();
+        assert_ne!(next.id, rest.id);
+        assert_eq!(next.target_seconds, Some(300));
+        assert_eq!(next.elapsed_at(230), 0);
+    }
+}
+
+#[test]
+fn failed_focus_resume_rolls_back_paused_rest_completion_and_other_focus_pause() {
+    for use_resume_focus in [false, true] {
+        let (_directory, mut store) = database();
+        let task = store.create_task("Write", 1, 100).unwrap();
+        let focus = store.start_task(task.id, 100, None).unwrap();
+        let rest = store.start_break(4, 130, 300).unwrap();
+        store.pause(rest.id, 160).unwrap();
+        // Legacy data can contain running focus beside a paused break.
+        store.start("Other focus", 1, 170).unwrap();
+        let before = store.active_sessions().unwrap();
+        store
+            .connection
+            .execute_batch(
+                "CREATE TRIGGER reject_focus_resume BEFORE INSERT ON intervals
+                 BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
+            )
+            .unwrap();
+
+        let result = if use_resume_focus {
+            store.resume_focus(focus.id, 200)
+        } else {
+            store.start_task(task.id, 200, None)
+        };
+        assert!(matches!(result, Err(Error::Database(_))));
+        assert_eq!(store.active_sessions().unwrap(), before);
+        assert!(store.sessions().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn failed_new_focus_insert_rolls_back_paused_rest_completion_and_other_focus_pause() {
+    let (_directory, mut store) = database();
+    let task = store.create_task("Write", 1, 100).unwrap();
+    let rest = store.start_break(4, 130, 300).unwrap();
+    store.pause(rest.id, 160).unwrap();
+    store.start("Other focus", 1, 170).unwrap();
+    let before = store.active_sessions().unwrap();
+    store
+        .connection
+        .execute_batch(
+            "CREATE TRIGGER reject_new_focus BEFORE INSERT ON sessions
+             BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
+        )
+        .unwrap();
+
+    assert!(matches!(
+        store.start_task(task.id, 200, None),
+        Err(Error::Database(_))
+    ));
+    assert_eq!(store.active_sessions().unwrap(), before);
+    assert!(store.sessions().unwrap().is_empty());
+}
+
+#[test]
 fn a_new_break_settles_expired_timers_and_previous_duplicate_breaks() {
     let (_directory, mut store) = database();
     let focus = store.create_task("Read", 1, 100).unwrap();

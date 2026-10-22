@@ -300,7 +300,9 @@ fn main() -> anyhow::Result<()> {
                     })
                 });
                 cx.on_action(move |_: &StartBreak, cx| {
-                    with_force(handle, cx, |this, window, cx| this.start_break(window, cx))
+                    with_force(handle, cx, |this, window, cx| {
+                        this.start_global_break(window, cx)
+                    })
                 });
                 cx.on_action(move |_: &ShowRecords, cx| {
                     with_force(handle, cx, |this, window, cx| {

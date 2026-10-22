@@ -9,8 +9,8 @@ use crate::{
     label::single_line,
     model::ForceView,
     view::{
-        ControlState, DESTRUCTIVE, INK, LINE, MUTED, PAPER, SURFACE, button, choice_button,
-        control_icon, control_label, field, field_label, section_heading,
+        ControlState, DESTRUCTIVE, INK, LINE, MUTED, button, control_icon, control_label, field,
+        field_label, section_heading,
     },
 };
 
@@ -113,41 +113,38 @@ impl ForceView {
                                     .text_color(rgb(MUTED))
                                     .child("分钟"),
                             )
-                            .child(
-                                button("save-goal")
-                                    .debug_selector(|| "save-goal".into())
-                                    .h(px(40.))
-                                    .w(px(72.))
-                                    .px(px(12.))
-                                    .child(control_label(
-                                        if self.goal_draft(cx) == Some(self.goal) {
-                                            "已保存"
-                                        } else {
-                                            "保存"
-                                        },
-                                        INK,
-                                    ))
-                                    .unavailable(!self.can_save_goal(cx))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.save_goal(cx);
-                                        this.goal_input
-                                            .update(cx, |input, cx| input.focus(window, cx));
-                                    })),
-                            )
-                            .child(
-                                button("reset-goal")
-                                    .debug_selector(|| "reset-goal".into())
-                                    .ghost()
-                                    .h(px(40.))
-                                    .w(px(56.))
-                                    .px(px(8.))
-                                    .child(control_label("撤销", MUTED))
-                                    .tooltip(format!("撤销未保存的修改，恢复为 {} 分钟", self.goal))
-                                    .unavailable(!self.goal_has_unsaved_changes(cx))
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.reset_goal_draft(window, cx)
-                                    })),
-                            ),
+                            .when(self.goal_has_unsaved_changes(cx), |row| {
+                                row.child(
+                                    button("save-goal")
+                                        .debug_selector(|| "save-goal".into())
+                                        .h(px(40.))
+                                        .w(px(72.))
+                                        .px(px(12.))
+                                        .child(control_label("保存", INK))
+                                        .unavailable(!self.can_save_goal(cx))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.save_goal(cx);
+                                            this.goal_input
+                                                .update(cx, |input, cx| input.focus(window, cx));
+                                        })),
+                                )
+                                .child(
+                                    button("reset-goal")
+                                        .debug_selector(|| "reset-goal".into())
+                                        .ghost()
+                                        .h(px(40.))
+                                        .w(px(56.))
+                                        .px(px(8.))
+                                        .child(control_label("撤销", MUTED))
+                                        .tooltip(format!(
+                                            "撤销未保存的修改，恢复为 {} 分钟",
+                                            self.goal
+                                        ))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.reset_goal_draft(window, cx)
+                                        })),
+                                )
+                            }),
                     )
                     .when(self.goal_draft(cx).is_none(), |body| {
                         body.child(
@@ -202,18 +199,16 @@ impl ForceView {
                                                 Tooltip::new(help_name.clone()).build(window, cx)
                                             }),
                                     )
-                                    .child(
-                                        div()
-                                            .w(px(32.))
-                                            .flex_shrink_0()
-                                            .text_size(px(14.))
-                                            .text_color(rgb(MUTED))
-                                            .child(if tag.kind == TagKind::Focus {
-                                                "专注"
-                                            } else {
-                                                "休息"
-                                            }),
-                                    )
+                                    .when(tag.kind == TagKind::Rest, |row| {
+                                        row.child(
+                                            div()
+                                                .w(px(32.))
+                                                .flex_shrink_0()
+                                                .text_size(px(14.))
+                                                .text_color(rgb(MUTED))
+                                                .child("休息"),
+                                        )
+                                    })
                                     .child(
                                         button(("edit-tag", id as u64))
                                             .ghost()
@@ -273,51 +268,6 @@ impl ForceView {
                                                 px(40.),
                                             )),
                                     )
-                                    .when(self.editing_tag.is_none(), |row| {
-                                        row.child(
-                                            div()
-                                                .flex()
-                                                .flex_shrink_0()
-                                                .p(px(3.))
-                                                .rounded(px(7.))
-                                                .bg(rgb(SURFACE))
-                                                .children(
-                                                    [
-                                                        (TagKind::Focus, "专注"),
-                                                        (TagKind::Rest, "休息"),
-                                                    ]
-                                                    .into_iter()
-                                                    .map(|(kind, label)| {
-                                                        choice_button(
-                                                            if kind == TagKind::Focus {
-                                                                "tag-kind-focus"
-                                                            } else {
-                                                                "tag-kind-rest"
-                                                            },
-                                                            self.new_tag_kind == kind,
-                                                            PAPER,
-                                                            cx,
-                                                        )
-                                                        .h(px(34.))
-                                                        .px(px(12.))
-                                                        .child(control_label(
-                                                            label,
-                                                            if self.new_tag_kind == kind {
-                                                                INK
-                                                            } else {
-                                                                MUTED
-                                                            },
-                                                        ))
-                                                        .on_click(cx.listener(
-                                                            move |this, _, _, cx| {
-                                                                this.new_tag_kind = kind;
-                                                                cx.notify();
-                                                            },
-                                                        ))
-                                                    }),
-                                                ),
-                                        )
-                                    })
                                     .child(
                                         button("save-tag")
                                             .debug_selector(|| "save-tag".into())
@@ -334,6 +284,9 @@ impl ForceView {
                                                 INK,
                                             ))
                                             .on_click(cx.listener(|this, _, window, cx| {
+                                                if this.editing_tag.is_none() {
+                                                    this.new_tag_kind = TagKind::Focus;
+                                                }
                                                 this.save_tag(window, cx)
                                             })),
                                     )
