@@ -1,4 +1,4 @@
-use chrono::{Days, Local, TimeZone};
+use chrono::{Datelike, Days, Local, TimeZone};
 use force_core::{Session, TagKind};
 use gpui::{prelude::*, *};
 use gpui_component::{
@@ -11,7 +11,7 @@ use gpui_component::{
 
 use crate::{
     label::single_line,
-    model::{FloatingStrip, ForceView, Page},
+    model::{FloatingStrip, ForceView, Page, day_bounds},
     platform,
 };
 
@@ -40,6 +40,49 @@ impl ForceView {
                     })
                     .flatten()
             })
+    }
+
+    /// Browsing and timing are independent; expose the timer that keeps running.
+    pub(crate) fn timer_context(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let session = self.active.iter().find(|session| session.is_running())?;
+        let id = session.id;
+        let title = session.title.clone();
+        Some(
+            div()
+                .debug_selector(|| "timer-context".into())
+                .w_full()
+                .pb(px(12.))
+                .border_b_1()
+                .border_color(rgb(LINE))
+                .flex()
+                .items_center()
+                .gap(px(12.))
+                .child(
+                    single_line(format!("正在计时 · {title}"), 14.)
+                        .flex_1()
+                        .min_w_0()
+                        .text_color(rgb(MUTED)),
+                )
+                .child(
+                    button("return-current-timer")
+                        .debug_selector(|| "return-current-timer".into())
+                        .h(px(32.))
+                        .flex_shrink_0()
+                        .child(control_label("返回计时", INK))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.select_session(id, window, cx);
+                        })),
+                ),
+        )
+    }
+
+    fn browsing_other_timer(&self) -> bool {
+        self.active.iter().any(|session| {
+            session.is_running()
+                && (self.preparing
+                    || self.completed.is_some()
+                    || self.selected_session != Some(session.id))
+        })
     }
 
     fn panel_navigation(&self, cx: &mut Context<Self>) -> Div {
@@ -269,6 +312,11 @@ impl ForceView {
                                 .track_scroll(&self.panel_scroll[0])
                                 .pr(px(4.))
                                 .pb(px(8.))
+                                .when(self.browsing_other_timer(), |body| {
+                                    body.when_some(self.timer_context(cx), |body, context| {
+                                        body.child(context.mb(px(20.)))
+                                    })
+                                })
                                 .child(if let Some(session) = &self.completed {
                                     self.completed_panel(session, cx).into_any_element()
                                 } else if !self.preparing
@@ -313,7 +361,16 @@ impl ForceView {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(section_heading("这次专注").h(px(32.)).flex().items_center())
+                    .child(
+                        section_heading(if self.selected_task.is_some() {
+                            "任务设置"
+                        } else {
+                            "新建任务"
+                        })
+                        .h(px(32.))
+                        .flex()
+                        .items_center(),
+                    )
                     .child(gpui::Styled::h(field(&self.task_input), px(44.)))
                     .when(task_length > 200, |form| {
                         form.child(
@@ -329,7 +386,7 @@ impl ForceView {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(field_label("专注时长"))
+                    .child(field_label("计时方式"))
                     .child(
                         div()
                             .flex()
@@ -342,7 +399,7 @@ impl ForceView {
                                     (25, "25 分钟"),
                                     (45, "45 分钟"),
                                     (60, "60 分钟"),
-                                    (0, "自由"),
+                                    (0, "不限时"),
                                 ]
                                 .into_iter()
                                 .map(|(minutes, label)| {
@@ -352,6 +409,11 @@ impl ForceView {
                                         self.countdown && self.timer_minutes == minutes
                                     };
                                     choice_button(("duration", minutes as u64), selected, PAPER, cx)
+                                        .tooltip(if minutes == 0 {
+                                            "从零开始累计，手动结束计时".to_owned()
+                                        } else {
+                                            format!("倒计时 {minutes} 分钟，到时自动结束")
+                                        })
                                         .h(px(36.))
                                         .flex_1()
                                         .min_w_0()
@@ -409,15 +471,20 @@ impl ForceView {
             .child(
                 crate::control_style::start_button(
                     "start-focus",
-                    if self.countdown {
-                        format!("开始 {} 分钟", self.timer_minutes)
+                    if self.browsing_other_timer() {
+                        "切换并开始计时".to_owned()
                     } else {
-                        "开始自由计时".to_owned()
+                        "开始计时".to_owned()
                     },
                     action_icon("play").size(px(14.)),
                     disabled,
                 )
                 .debug_selector(|| "start-focus".into())
+                .tooltip(if self.browsing_other_timer() {
+                    "暂停当前专注或结束当前休息，再开始所选任务；已计时间保留"
+                } else {
+                    "开始所选任务的本次计时"
+                })
                 .h(px(44.))
                 .w_full()
                 .on_click(cx.listener(|this, _, window, cx| this.start(window, cx))),
@@ -509,10 +576,16 @@ impl ForceView {
                             .iter()
                             .find(|session| session.task_id == Some(id));
                         let status = active.map_or_else(
-                            || format!("累计 {}", short_time(task.total_seconds)),
+                            || {
+                                if task.total_seconds == 0 {
+                                    "未开始".to_owned()
+                                } else {
+                                    format!("任务累计 {}", short_time(task.total_seconds))
+                                }
+                            },
                             |session| {
                                 format!(
-                                    "{} · {}",
+                                    "{} · 本次 {}",
                                     if session.is_running() {
                                         "计时中"
                                     } else {
@@ -619,16 +692,16 @@ impl ForceView {
             .timestamp_opt(self.now.saturating_add(remaining), 0)
             .single();
         let caption = if session.target_seconds.is_none() {
-            "自由计时".to_owned()
+            "已用时间 · 不限时".to_owned()
         } else if paused {
             format!(
-                "已{} {}",
+                "剩余时间 · 已{} {}",
                 if rest { "休息" } else { "专注" },
                 short_time(elapsed)
             )
         } else {
             format!(
-                "预计 {} 结束",
+                "剩余时间 · 预计 {} 结束",
                 end.map_or(String::new(), |end| end.format("%H:%M").to_string())
             )
         };
@@ -699,7 +772,11 @@ impl ForceView {
                             ))
                             .child(control_label(
                                 if paused {
-                                    "继续计时"
+                                    if self.browsing_other_timer() {
+                                        "切换并继续计时"
+                                    } else {
+                                        "继续计时"
+                                    }
                                 } else {
                                     "暂停计时"
                                 },
@@ -719,7 +796,8 @@ impl ForceView {
                             .debug_selector(|| "running-finish".into())
                             .flex_1()
                             .h(px(44.))
-                            .child(control_label("结束本段", INK))
+                            .child(control_label("结束本次计时", INK))
+                            .tooltip("保存本次计时；任务保留，可再次开始计时")
                             .on_click({
                                 let id = session.id;
                                 cx.listener(move |this, _, _, cx| this.finish(id, cx))
@@ -732,7 +810,7 @@ impl ForceView {
                     .h(px(36.))
                     .child(control_label(
                         if rest {
-                            "回到专注"
+                            "继续专注"
                         } else {
                             "休息 5 分钟"
                         },
@@ -778,7 +856,7 @@ impl ForceView {
                     .child(if rest {
                         "休息结束，可以继续了"
                     } else {
-                        "本段已记录"
+                        "本次计时已保存"
                     }),
             )
             .child(task_heading(next_title))
@@ -812,15 +890,20 @@ impl ForceView {
                             .child(control_label(
                                 if rest {
                                     if return_task.is_some() {
-                                        "回到专注"
+                                        "继续专注"
                                     } else {
                                         "开始专注"
                                     }
                                 } else {
-                                    "继续这件事"
+                                    "再计一次"
                                 },
                                 0xffffff,
                             ))
+                            .tooltip(if rest {
+                                "结束休息，继续原任务的计时"
+                            } else {
+                                "为同一任务开始一次新的计时，原记录保留"
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if rest {
                                     this.return_to_task(window, cx);
@@ -836,6 +919,7 @@ impl ForceView {
                                 .h(px(44.))
                                 .rounded(px(7.))
                                 .child(control_label("休息 5 分钟", INK))
+                                .tooltip("暂停专注并开始休息倒计时；已有专注时间保留")
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.start_break(window, cx)),
                                 ),
@@ -851,6 +935,7 @@ impl ForceView {
                             .small()
                             .icon(control_icon(Icon::new(IconName::Check).size(px(14.)), INK))
                             .child(control_label("完成任务", INK))
+                            .tooltip("从任务列表移出，保留此任务的全部计时记录")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.complete_current_task(window, cx)
                             })),
@@ -927,6 +1012,7 @@ impl ForceView {
             .collect();
         div().debug_selector(|| "records-content".into()).w_full()
             .flex().flex_col().gap(px(20.))
+            .when_some(self.timer_context(cx), |body, context| body.child(context))
             .child(self.activity_calendar(cx))
             .child(div().pt(px(24.)).border_t_1().border_color(rgb(LINE))
                 .flex().items_center().gap(px(20.))
@@ -963,13 +1049,13 @@ impl ForceView {
                     }))))
             .when(self.record_help_open, |body| body.child(
                 div().p(px(12.)).rounded(px(6.)).bg(rgb(SURFACE)).text_size(px(13.)).text_color(rgb(MUTED))
-                    .child("活动图按当天实际专注时间计算，包含进行中的专注，重叠时间只计算一次。记录按结束日期归档；搜索只筛选列表。")
+                    .child("当日专注按本地零点拆分，扣除暂停与休息，重叠专注只计一次。列表显示当天计时，跨日记录在对应日期分别显示；整段时长不含暂停。搜索只筛选列表。")
             ))
             .child(div().flex().flex_col()
                 .children(records.iter().map(|session| self.record_row(session, cx)))
                 .when(records.is_empty(), |body| body.child(
                     div().py(px(32.)).text_size(px(14.)).text_color(rgb(MUTED))
-                        .child(if query.is_empty() { "这一天还没有已结束的计时" } else { "没有匹配的记录" })
+                        .child(if query.is_empty() { "这一天还没有计时记录" } else { "没有匹配的记录" })
                 )))
             .child(div().flex().justify_end().child(
                 button("export-records").ghost().h(px(36.))
@@ -984,6 +1070,9 @@ impl ForceView {
         let id = session.id;
         let expanded = self.record_details == Some(id);
         let help_title = session.title.clone();
+        let (start, end) = day_bounds(self.record_date);
+        let day_seconds = session.elapsed_between(start, end, self.now);
+        let total_seconds = session.elapsed_at(self.now);
         div()
             .debug_selector(move || format!("record-row-{id}"))
             .py(px(12.))
@@ -1053,8 +1142,26 @@ impl ForceView {
                                 div()
                                     .font(timer_font(cx))
                                     .text_size(px(14.))
-                                    .child(clock(session.elapsed_at(self.now))),
+                                    .debug_selector(move || format!("record-day-time-{id}"))
+                                    .child(format!("当日 {}", clock(day_seconds))),
                             )
+                            .when(day_seconds != total_seconds, |body| {
+                                body.child(
+                                    div()
+                                        .text_size(px(12.))
+                                        .text_color(rgb(MUTED))
+                                        .child(format!("整段 {}", clock(total_seconds))),
+                                )
+                            })
+                            .when(session.finished_at.is_none(), |body| {
+                                body.child(div().text_size(px(12.)).text_color(rgb(MUTED)).child(
+                                    if session.is_running() {
+                                        "进行中"
+                                    } else {
+                                        "已暂停"
+                                    },
+                                ))
+                            })
                             .when(session.tag_kind == TagKind::Rest, |body| {
                                 body.child(
                                     div()
@@ -1064,7 +1171,7 @@ impl ForceView {
                                 )
                             }),
                     )
-                    .child(
+                    .children(session.finished_at.map(|_| {
                         destructive_button(("delete-record", id as u64))
                             .ghost()
                             .size(px(28.))
@@ -1072,11 +1179,22 @@ impl ForceView {
                                 Icon::default().path("force-icons/trash.svg").size(px(14.)),
                                 MUTED,
                             ))
-                            .tooltip("删除记录")
+                            .tooltip("删除整段记录（包括所有日期）")
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.delete_record(id, window, cx)
-                            })),
-                    ),
+                            }))
+                    }))
+                    .when(session.finished_at.is_none(), |row| {
+                        row.child(
+                            button(("open-record-timer", id as u64))
+                                .ghost()
+                                .h(px(32.))
+                                .child(control_label("查看计时", INK))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.select_session(id, window, cx)
+                                })),
+                        )
+                    }),
             )
             .when(expanded, |row| {
                 row.child(
@@ -1101,17 +1219,27 @@ impl ForceView {
                                 }
                             ),
                         ))
+                        .child(record_detail("当日", clock(day_seconds)))
+                        .child(record_detail("整段", clock(total_seconds)))
+                        .child(record_detail("暂停", clock(session.paused_at(self.now))))
                         .child(record_detail("开始", record_timestamp(session.started_at)))
                         .child(record_detail(
                             "结束",
-                            session
-                                .finished_at
-                                .map_or_else(|| "尚未结束".to_owned(), record_timestamp),
+                            session.finished_at.map_or_else(
+                                || {
+                                    if session.is_running() {
+                                        "计时中".to_owned()
+                                    } else {
+                                        "已暂停，尚未结束".to_owned()
+                                    }
+                                },
+                                record_timestamp,
+                            ),
                         ))
                         .child(record_detail(
                             "方式",
                             session.target_seconds.map_or_else(
-                                || "自由计时".to_owned(),
+                                || "不限时（手动结束）".to_owned(),
                                 |seconds| format!("{}倒计时", short_time(seconds)),
                             ),
                         )),
@@ -1274,7 +1402,7 @@ impl FloatingStrip {
         } else if completed.is_some_and(|s| s.tag_kind == TagKind::Rest) {
             "休息结束"
         } else if completed.is_some() {
-            "本段结束"
+            "计时已保存"
         } else {
             "未开始"
         };
@@ -1282,11 +1410,11 @@ impl FloatingStrip {
         let (symbol, help) = if model.storage_failed {
             ("play", "展开并重试")
         } else if completed.is_some() && current.is_none() {
-            ("play", "查看本轮记录与下一步")
+            ("play", "查看本次计时与下一步")
         } else if running {
-            ("pause", "暂停")
+            ("pause", "暂停计时")
         } else if current.is_some() {
-            ("play", "继续")
+            ("play", "继续计时")
         } else {
             ("play", "开始专注")
         };
@@ -1385,7 +1513,7 @@ impl FloatingStrip {
                     .ghost()
                     .size(px(28.))
                     .icon(control_icon(action_icon("stop").size(px(14.)), INK))
-                    .tooltip(shortcut("结束本段", "⇧P", "Shift P"))
+                    .tooltip(shortcut("结束本次计时", "⇧P", "Shift P"))
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.dispatch(cx, move |model, _, cx| model.finish(id, cx))
                     }))
@@ -1613,17 +1741,33 @@ fn short_time(seconds: i64) -> String {
     }
 }
 fn session_times(session: &Session) -> String {
-    let at = |timestamp| {
-        Local
-            .timestamp_opt(timestamp, 0)
-            .single()
-            .map_or("--:--".to_owned(), |time| time.format("%H:%M").to_string())
+    let start = Local.timestamp_opt(session.started_at, 0).single();
+    let end = session
+        .finished_at
+        .and_then(|at| Local.timestamp_opt(at, 0).single());
+    let format = match (start, end) {
+        (Some(a), Some(b)) if a.year() != b.year() => "%Y/%m/%d %H:%M",
+        (Some(a), Some(b)) if a.date_naive() == b.date_naive() => "%H:%M",
+        _ => "%m/%d %H:%M",
     };
-    format!(
-        "{}–{}",
-        at(session.started_at),
-        session.finished_at.map_or("现在".to_owned(), at)
-    )
+    let from = start.map_or_else(
+        || "时间不可用".to_owned(),
+        |at| at.format(format).to_string(),
+    );
+    let to = if session.finished_at.is_none() {
+        if session.is_running() {
+            "现在"
+        } else {
+            "已暂停"
+        }
+        .to_owned()
+    } else {
+        end.map_or_else(
+            || "时间不可用".to_owned(),
+            |at| at.format(format).to_string(),
+        )
+    };
+    format!("{from}–{to}")
 }
 
 fn record_timestamp(timestamp: i64) -> String {
@@ -1673,5 +1817,45 @@ fn shortcut(label: &str, mac: &str, other: &str) -> String {
         format!("{label} · ⌘{mac}")
     } else {
         format!("{label} · Ctrl {other}")
+    }
+}
+
+#[cfg(test)]
+mod record_tests {
+    use super::session_times;
+    use chrono::{Local, TimeZone};
+
+    #[test]
+    fn record_time_ranges_show_dates_across_midnight_and_years() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = force_core::Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let at = |y, m, d, h, min| {
+            Local
+                .with_ymd_and_hms(y, m, d, h, min, 0)
+                .earliest()
+                .unwrap()
+                .timestamp()
+        };
+        for (start, end, expected) in [
+            (
+                at(2026, 10, 22, 20, 52),
+                at(2026, 10, 23, 1, 19),
+                "10/22 20:52–10/23 01:19",
+            ),
+            (
+                at(2026, 12, 31, 23, 50),
+                at(2027, 1, 1, 0, 10),
+                "2026/12/31 23:50–2027/01/01 00:10",
+            ),
+            (
+                at(2026, 10, 22, 9, 0),
+                at(2026, 10, 22, 10, 0),
+                "09:00–10:00",
+            ),
+        ] {
+            let session = store.start("Time range", 1, start).unwrap();
+            let session = store.finish(session.id, end).unwrap();
+            assert_eq!(session_times(&session), expected);
+        }
     }
 }

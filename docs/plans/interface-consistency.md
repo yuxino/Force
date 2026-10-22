@@ -36,7 +36,7 @@ Use spacing between columns without a full-height dividing line.
   three states, aligned with the heading above. Setup keeps
   task, duration, tag and start
   together. Running uses a 72-point tabular timer, visible 暂停计时 / 继续计时 and
-  结束本段 actions, and a secondary rest/return action. Completion shows a compact
+  结束本次计时 actions, and a secondary rest/return action. Completion shows a compact
   receipt and next actions without removing task navigation or daily progress.
 - One task list includes unfinished tasks and unfinished legacy sessions without
   a task association. Do not duplicate it as recent tasks and other timers.
@@ -120,11 +120,18 @@ A day change or storage refresh reloads the series; never query once per cell.
   form into view when editing or recovering from an empty focus-tag list.
 - Escape first closes local editing/details/help, then hides management. Feedback
   stays dismissible in the content flow without covering controls.
-- Records provide date navigation, 今天, search, daily focus and ended sessions.
+- Records provide date navigation, 今天, search, daily focus and sessions with
+  investment on the selected date, including running and paused rounds.
   Daily focus includes ongoing investment and is independent of search. List
-  entries use their end date without the separate recent-history API's 500-item
-  cap. Reset scrolling/details when date or search changes. Mark rest explicitly;
-  expanded details show the full task, tag, dated start/end and timing mode.
+  entries use actual interval overlap without the recent-history API's 500-item
+  cap. Retain zero-time start/completion events on their event date. A paused
+  gap alone does not place a record on that date. Reset scrolling/details when
+  date or search changes. Mark rest explicitly;
+  rows show 当日 time and, when different, 整段 time. Cross-day time
+  ranges include dates; unfinished rounds show their state and cannot be deleted.
+  Expanded details show daily/total investment, excluded pause time, full task,
+  tag, dated start/end and timing mode. Following today advances at local
+  midnight; browsing another historical date stays fixed.
   Long values wrap, and details close when the record disappears.
 
 ## Acceptance
@@ -138,6 +145,10 @@ future-cell behavior. Use temporary data only.
 
 GPUI TestPlatform establishes layout bounds and dispatched events, not native
 pixels, real hover appearance, window-manager behavior or IME composition.
+Before native click checks, place the development strip clear of management
+controls: an app-window screenshot can omit a separate floating window that
+still intercepts clicks.
+
 Native acceptance needs the signed app and a real input method, including normal
 key presses after dialogs and reopening. Preserve pre-GPUI AppKit initialization
 and deferred keyboard callbacks. macOS evidence does not accept Windows/Linux

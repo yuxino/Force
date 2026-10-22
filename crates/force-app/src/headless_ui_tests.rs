@@ -5,7 +5,7 @@
 //! native text shaping, raster output, IME or platform-window behavior.
 
 use crate::model::{FloatingStrip, ForceView, Page, day_bounds};
-use chrono::Local;
+use chrono::{Local, TimeZone};
 use gpui::{
     AppContext as _, Bounds, Entity, KeyUpEvent, Keystroke, Modifiers, Pixels, Point, ScrollDelta,
     ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, WindowBounds, WindowHandle,
@@ -658,5 +658,185 @@ fn headless_ui_tag_menu_is_anchored_to_its_visible_control(cx: &mut TestAppConte
             "menu should sit directly below its trigger: {trigger:?}, {option:?}"
         );
         assert_horizontally_inside(option, trigger);
+    }
+}
+
+#[gpui::test]
+fn headless_ui_records_reconcile_cross_day_and_live_rows(cx: &mut TestAppContext) {
+    let date = Local::now().date_naive().pred_opt().unwrap();
+    let midnight = day_bounds(date).0;
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new(cx, width, height);
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.record_date = date;
+            let store = view.store.as_mut().unwrap();
+            let work = store
+                .start("Cross-day focus", 1, midnight - 11_226)
+                .unwrap();
+            store.pause(work.id, midnight - 521).unwrap();
+            store.resume(work.id, midnight + 1_500).unwrap();
+            store.finish(work.id, midnight + 4_740).unwrap();
+            let live = store.start("Still active", 1, midnight + 5_000).unwrap();
+            store.pause(live.id, midnight + 5_060).unwrap();
+            view.refresh(cx);
+        });
+        manager.click("records-tab");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.history.len(), 2);
+            assert_eq!(view.record_stats.focus_seconds, 3_300);
+            let (start, end) = day_bounds(date);
+            assert_eq!(
+                view.history
+                    .iter()
+                    .map(|s| s.elapsed_between(start, end, view.now))
+                    .sum::<i64>(),
+                3_300
+            );
+            assert!(view.active[0].is_paused());
+        });
+        assert_horizontally_inside(
+            manager.bounds("record-day-time-1"),
+            manager.bounds("manager-content"),
+        );
+        manager.click("previous-day");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.history.len(), 1);
+            assert_eq!(view.history[0].title, "Cross-day focus");
+            assert_eq!(view.record_stats.focus_seconds, 10_705);
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_midnight_follows_today_and_preserves_browsed_history(cx: &mut TestAppContext) {
+    let today = Local::now().date_naive();
+    let yesterday = today.pred_opt().unwrap();
+    let older = yesterday.pred_opt().unwrap();
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    for (selected, expected) in [(yesterday, today), (older, older)] {
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.now = day_bounds(yesterday).0 + 3_600;
+            view.record_date = selected;
+            view.tick(cx);
+            assert_eq!(view.record_date, expected);
+            assert_eq!(
+                Local
+                    .timestamp_opt(view.now, 0)
+                    .single()
+                    .unwrap()
+                    .date_naive(),
+                today
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_unfinished_record_deletion_preserves_the_timer(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let now = view.now;
+        let session = view
+            .store
+            .as_mut()
+            .unwrap()
+            .start("Active focus", 1, now - 60)
+            .unwrap();
+        view.refresh(cx);
+        view.delete_record(session.id, window, cx);
+        assert_eq!(
+            view.store
+                .as_ref()
+                .unwrap()
+                .active_sessions()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(view.toast.as_ref().unwrap().0, "请先结束计时，再删除记录。");
+    });
+}
+
+#[gpui::test]
+fn headless_ui_browsing_exposes_current_timer_and_switching_preserves_both_tasks(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new(cx, width, height);
+        let (task_a, session_a) = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let store = view.store.as_mut().unwrap();
+            let task = store.create_task("Current task", 1, view.now - 60).unwrap();
+            let session = store.start_task(task.id, view.now - 60, None).unwrap();
+            view.refresh(cx);
+            view.select_session(session.id, window, cx);
+            (task.id, session.id)
+        });
+        for page in ["records-tab", "settings-tab"] {
+            manager.click(page);
+            assert_horizontally_inside(
+                manager.bounds("timer-context"),
+                manager.bounds("manager-content"),
+            );
+            manager.click("return-current-timer");
+            manager.view.read_with(&manager.cx, |view, _| {
+                assert!(view.page == Page::Focus);
+                assert_eq!(view.selected_session, Some(session_a));
+                assert!(
+                    view.active
+                        .iter()
+                        .find(|s| s.id == session_a)
+                        .unwrap()
+                        .is_running()
+                );
+            });
+        }
+        manager.click("new-task");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(view.preparing);
+            assert!(
+                view.active
+                    .iter()
+                    .find(|s| s.id == session_a)
+                    .unwrap()
+                    .is_running()
+            );
+        });
+        assert_horizontally_inside(
+            manager.bounds("timer-context"),
+            manager.bounds("focus-operation"),
+        );
+        manager.click("return-current-timer");
+        manager.click("new-task");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.task_input
+                .update(cx, |input, cx| input.set_value("Next task", window, cx));
+        });
+        manager.click("start-focus");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(
+                view.active
+                    .iter()
+                    .find(|s| s.id == session_a)
+                    .unwrap()
+                    .is_paused()
+            );
+            assert_eq!(view.active.iter().filter(|s| s.is_running()).count(), 1);
+            assert_eq!(view.strip_session().unwrap().title, "Next task");
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.select_task(task_a, window, cx)
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.click("running-pause");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.strip_session().unwrap().id, session_a);
+            assert_eq!(view.active.iter().filter(|s| s.is_running()).count(), 1);
+            assert!(
+                view.active
+                    .iter()
+                    .any(|s| s.title == "Next task" && s.is_paused())
+            );
+        });
     }
 }

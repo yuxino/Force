@@ -176,14 +176,14 @@ fn main() -> anyhow::Result<()> {
                     MenuItem::action("新任务", NewTask),
                     MenuItem::separator(),
                     MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
-                    MenuItem::action("结束本段", FinishSegment),
+                    MenuItem::action("结束本次计时", FinishSegment),
                     MenuItem::action("休息 5 分钟", StartBreak),
                 ],
             },
             Menu {
                 name: "显示".into(),
                 items: vec![
-                    MenuItem::action("显示 / 隐藏管理窗口", ToggleCompact),
+                    MenuItem::action("显示 / 隐藏主窗口", ToggleCompact),
                     MenuItem::action("计时记录", ShowRecords),
                 ],
             },

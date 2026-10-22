@@ -86,7 +86,7 @@ pub(crate) struct ForceView {
 impl ForceView {
     pub(crate) fn new(data_dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let task_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("写下要做的事，回车开始"));
+            cx.new(|cx| InputState::new(window, cx).placeholder("任务名称，回车开始计时"));
         let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
         let goal_input = cx.new(|cx| InputState::new(window, cx).placeholder("每日目标（分钟）"));
         let record_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索任务或标签"));
@@ -387,7 +387,7 @@ impl ForceView {
             Ok::<_, force_core::Error>((
                 store.tags()?,
                 active,
-                store.sessions_between(start, end)?,
+                store.sessions_overlapping(start, end, self.now)?,
                 store.goal_minutes()?,
                 load_stats(store, self.record_date, self.now)?,
                 completed,
@@ -654,7 +654,7 @@ impl ForceView {
         self.compact = false;
         // A model created in TestAppContext has no attached native windows.
         if self.manager_window.is_some() && crate::platform::show_manager(window, cx).is_err() {
-            self.notify("无法打开管理窗口，请重试。", cx);
+            self.notify("无法打开主窗口，请重试。", cx);
         }
         cx.notify();
     }
@@ -665,7 +665,7 @@ impl ForceView {
         window.focus(&self.focus_handle);
         self.compact = true;
         if self.manager_window.is_some() && crate::platform::hide_manager(window, cx).is_err() {
-            self.notify("无法隐藏管理窗口，请重试。", cx);
+            self.notify("无法隐藏主窗口，请重试。", cx);
         }
         cx.notify();
     }
@@ -928,12 +928,12 @@ impl ForceView {
             .iter()
             .any(|session| session.task_id == Some(id))
         {
-            self.notify("请先结束这件事的计时，再从最近任务移除。", cx);
+            self.notify("请先结束这件事的计时，再从任务列表移除。", cx);
             return;
         }
         let answer = window.prompt(
             PromptLevel::Warning,
-            "从最近任务移除？",
+            "从任务列表移除？",
             Some("所有计时记录都会保留。"),
             &[PromptButton::cancel("取消"), PromptButton::new("移除")],
             cx,
@@ -945,7 +945,7 @@ impl ForceView {
                         if this.selected_task == Some(id) {
                             this.selected_task = None;
                         }
-                        this.notify("已从最近任务移除，记录已保留。", cx);
+                        this.notify("已从任务列表移除，记录已保留。", cx);
                     }
                 });
             }
@@ -1277,10 +1277,14 @@ impl ForceView {
     }
 
     pub(crate) fn delete_record(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.active.iter().any(|session| session.id == id) {
+            self.notify("请先结束计时，再删除记录。", cx);
+            return;
+        }
         let answer = window.prompt(
             PromptLevel::Warning,
             "删除这条记录？",
-            Some("计时记录将被永久删除，统计也会更新。此操作无法撤销。"),
+            Some("整段计时记录（包括跨日部分）将被永久删除，各日期统计也会更新。此操作无法撤销。"),
             &[PromptButton::cancel("取消"), PromptButton::new("删除")],
             cx,
         );
@@ -1329,7 +1333,7 @@ impl ForceView {
         .detach();
     }
 
-    fn tick(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn tick(&mut self, cx: &mut Context<Self>) {
         if self
             .position_changed
             .is_some_and(|since| since.elapsed() >= Duration::from_millis(600))
@@ -1352,6 +1356,10 @@ impl ForceView {
         }
         let previous_date = date_at(self.now);
         self.now = Local::now().timestamp();
+        if previous_date != date_at(self.now) && self.record_date == previous_date {
+            self.record_date = date_at(self.now);
+            self.record_details = None;
+        }
         if self
             .toast
             .as_ref()

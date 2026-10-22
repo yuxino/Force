@@ -21,6 +21,7 @@ impl ForceView {
             .flex()
             .flex_col()
             .gap(px(36.))
+            .when_some(self.timer_context(cx), |body, context| body.child(context))
             .child(settings_section(
                 "计时偏好",
                 div()
@@ -31,7 +32,7 @@ impl ForceView {
                         settings_row()
                             .border_b_1()
                             .border_color(rgb(LINE))
-                            .child(setting_label("计时条置顶"))
+                            .child(setting_label("浮窗始终置顶"))
                             .child(
                                 button("pin-strip")
                                     .debug_selector(|| "settings-pin".into())
@@ -98,7 +99,7 @@ impl ForceView {
                     )
                     .child(
                         settings_row()
-                            .child(setting_label("每日目标"))
+                            .child(setting_label("每日专注目标"))
                             .child(
                                 div()
                                     .debug_selector(|| "goal-input".into())
@@ -140,11 +141,8 @@ impl ForceView {
                                     .h(px(40.))
                                     .w(px(56.))
                                     .px(px(8.))
-                                    .child(control_label("还原", MUTED))
-                                    .tooltip(format!(
-                                        "还原为已保存的每日目标（{} 分钟）",
-                                        self.goal
-                                    ))
+                                    .child(control_label("撤销", MUTED))
+                                    .tooltip(format!("撤销未保存的修改，恢复为 {} 分钟", self.goal))
                                     .unavailable(!self.goal_has_unsaved_changes(cx))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.reset_goal_draft(window, cx)

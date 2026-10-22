@@ -103,6 +103,24 @@ impl Session {
         })
     }
 
+    /// Active investment clipped to a half-open date/range and the snapshot time.
+    /// Pauses contribute nothing; a session can contribute to multiple dates.
+    pub fn elapsed_between(&self, start: i64, end: i64, now: i64) -> i64 {
+        self.intervals.iter().fold(0_i64, |total, interval| {
+            let left = interval.start.max(start);
+            let right = interval.end.unwrap_or(now).min(end).min(now);
+            total.saturating_add(right.saturating_sub(left).max(0))
+        })
+    }
+
+    pub fn paused_at(&self, now: i64) -> i64 {
+        self.finished_at
+            .unwrap_or(now)
+            .saturating_sub(self.started_at)
+            .saturating_sub(self.elapsed_at(now))
+            .max(0)
+    }
+
     pub fn is_running(&self) -> bool {
         self.finished_at.is_none() && self.intervals.last().is_some_and(|i| i.end.is_none())
     }
@@ -294,6 +312,25 @@ impl Store {
             &self.connection,
             "WHERE finished_at >= ?1 AND finished_at < ?2 ORDER BY finished_at DESC, id DESC",
             params![start, end],
+        )
+    }
+
+    /// Sessions with actual investment in the range, including running/paused
+    /// sessions. Retain start/completion events even for zero-second sessions.
+    /// A paused gap alone never makes a session belong to a date.
+    pub fn sessions_overlapping(&self, start: i64, end: i64, now: i64) -> Result<Vec<Session>> {
+        if end <= start || now < start {
+            return Ok(Vec::new());
+        }
+        load_sessions(
+            &self.connection,
+            "WHERE EXISTS (SELECT 1 FROM intervals i WHERE i.session_id = sessions.id
+                AND i.started_at < MIN(?2, ?3)
+                AND MIN(COALESCE(i.ended_at, ?3), ?2, ?3) > MAX(i.started_at, ?1))
+             OR (started_at >= ?1 AND started_at < ?2 AND started_at <= ?3)
+             OR (finished_at >= ?1 AND finished_at < ?2 AND finished_at <= ?3)
+             ORDER BY COALESCE(finished_at, ?3) DESC, started_at DESC, id DESC",
+            params![start, end, now],
         )
     }
 

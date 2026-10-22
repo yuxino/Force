@@ -68,6 +68,21 @@ fn overlapping_focus_is_merged_but_task_investment_and_rest_are_independent() {
             completed_sessions: 3,
         }
     );
+    let rows = store.sessions_overlapping(100, 200, 200).unwrap();
+    assert_eq!(rows.len(), 3);
+    assert_eq!(
+        rows.iter()
+            .map(|s| s.elapsed_between(100, 200, 200))
+            .sum::<i64>(),
+        150
+    );
+    assert_eq!(
+        rows.iter()
+            .filter(|s| s.tag_kind == TagKind::Focus)
+            .map(|s| s.elapsed_between(100, 200, 200))
+            .sum::<i64>(),
+        110
+    );
     // A completed session at 180 belongs to the next [180,200) window.
     assert_eq!(
         store.stats(100, 180, 200).unwrap(),
@@ -445,6 +460,10 @@ fn recent_history_is_bounded_while_exports_retain_every_record() {
     assert_eq!(history.first().unwrap().title, "Task 504");
     assert_eq!(history.last().unwrap().title, "Task 5");
     assert_eq!(store.sessions_between(0, 6_000).unwrap().len(), 505);
+    assert_eq!(
+        store.sessions_overlapping(0, 6_000, 6_000).unwrap().len(),
+        505
+    );
     assert_eq!(store.sessions_between(0, 5).unwrap().len(), 0);
     assert_eq!(store.sessions_between(5, 6).unwrap()[0].title, "Task 0");
     assert!(store.sessions_between(6, 6).unwrap().is_empty());
@@ -532,5 +551,102 @@ fn batched_focus_days_handle_empty_data_and_settled_timed_targets() {
             .focus_totals_for_ranges(&[(0, midnight), (midnight, midnight * 2)], midnight + 200)
             .unwrap(),
         vec![20, 40]
+    );
+}
+
+#[test]
+fn cross_midnight_records_reconcile_daily_total_and_paused_time() {
+    let (_directory, mut store) = database();
+    let midnight = 86_400;
+    // Synthetic 20:52:54–01:19 case: 33:41 paused, 54:00 after midnight.
+    let session = store
+        .start("Cross-day review", 1, midnight - 11_226)
+        .unwrap();
+    store.pause(session.id, midnight - 521).unwrap();
+    store.resume(session.id, midnight + 1_500).unwrap();
+    let session = store.finish(session.id, midnight + 4_740).unwrap();
+    let now = midnight + 5_000;
+    assert_eq!(session.elapsed_at(now), 13_945);
+    assert_eq!(session.paused_at(now), 2_021);
+    let mut split = 0;
+    for (start, end, expected) in [(0, midnight, 10_705), (midnight, midnight * 2, 3_240)] {
+        let rows = store.sessions_overlapping(start, end, now).unwrap();
+        assert_eq!(rows, vec![session.clone()]);
+        let seconds = rows[0].elapsed_between(start, end, now);
+        assert_eq!(seconds, expected);
+        assert_eq!(seconds, store.stats(start, end, now).unwrap().focus_seconds);
+        assert_eq!(
+            store.focus_totals_for_ranges(&[(start, end)], now).unwrap(),
+            vec![seconds]
+        );
+        split += seconds;
+    }
+    assert_eq!(split, session.elapsed_at(now));
+    assert_eq!(session.elapsed_between(midnight, midnight, now), 0);
+    assert_eq!(session.elapsed_between(midnight + 5, midnight, now), 0);
+    assert_eq!(
+        session.elapsed_between(midnight, midnight * 2, midnight + 1_600),
+        100
+    );
+    assert_eq!(session.elapsed_between(midnight * 2, midnight * 3, now), 0);
+}
+
+#[test]
+fn date_records_include_live_sessions_but_not_days_spent_only_paused() {
+    let (_directory, mut store) = database();
+    let day = 86_400;
+    let work = store.start("Long task", 1, day - 100).unwrap();
+    store.pause(work.id, day - 10).unwrap();
+    assert!(
+        store
+            .sessions_overlapping(day, day * 2, day + 500)
+            .unwrap()
+            .is_empty()
+    );
+    store.resume(work.id, day * 2 + 100).unwrap();
+    let now = day * 2 + 200;
+    assert!(
+        store
+            .sessions_overlapping(day, day * 2, now)
+            .unwrap()
+            .is_empty()
+    );
+    let active = store.sessions_overlapping(day * 2, day * 3, now).unwrap();
+    assert_eq!(active.len(), 1);
+    assert!(active[0].is_running());
+    assert_eq!(active[0].elapsed_between(day * 2, day * 3, now), 100);
+    store.pause(work.id, now).unwrap();
+    let paused = store
+        .sessions_overlapping(day * 2, day * 3, now + 50)
+        .unwrap();
+    assert!(paused[0].is_paused());
+    assert_eq!(paused[0].elapsed_between(day * 2, day * 3, now + 50), 100);
+    assert!(
+        store
+            .sessions_overlapping(day * 3, day * 4, now)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        store
+            .sessions_overlapping(day, day, now)
+            .unwrap()
+            .is_empty()
+    );
+    // Zero-second events remain inspectable, on the exact half-open date boundary.
+    let empty = store.start("Empty round", 1, day * 3).unwrap();
+    store.finish(empty.id, day * 3).unwrap();
+    let next = store
+        .sessions_overlapping(day * 3, day * 4, day * 3)
+        .unwrap();
+    assert_eq!(next.len(), 1);
+    assert_eq!(next[0].id, empty.id);
+    assert_eq!(next[0].elapsed_between(day * 3, day * 4, day * 3), 0);
+    assert!(
+        store
+            .sessions_overlapping(0, day * 3, day * 3 - 1)
+            .unwrap()
+            .iter()
+            .all(|s| s.id != empty.id)
     );
 }
