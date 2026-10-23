@@ -5,9 +5,11 @@
 
 mod activity_view;
 mod control_style;
+mod focus_view;
 mod label;
 mod model;
 mod platform;
+mod records_view;
 mod settings_view;
 mod tag_picker;
 mod view;
@@ -49,6 +51,7 @@ impl AssetSource for Assets {
             ))));
         }
         let custom: Option<&'static [u8]> = match path {
+            "force-wordmark.svg" => Some(include_bytes!("../../../assets/wordmark.svg")),
             "force-icons/trash.svg" => Some(include_bytes!("../../../assets/icons/trash.svg")),
             "force-icons/pencil.svg" => Some(include_bytes!("../../../assets/icons/pencil.svg")),
             "force-icons/pin.svg" => Some(include_bytes!("../../../assets/icons/pin.svg")),
@@ -122,24 +125,24 @@ fn main() -> anyhow::Result<()> {
         gpui_component::init(cx);
         Theme::change(ThemeMode::Light, None, cx);
         let theme = Theme::global_mut(cx);
-        theme.primary = rgb(0x252525).into();
+        theme.primary = rgb(view::INK).into();
         theme.primary_hover = rgb(0x414141).into();
         theme.primary_active = rgb(0x111111).into();
         theme.primary_foreground = rgb(0xffffff).into();
         theme.ring = rgb(0x9a9a9a).into();
-        theme.caret = rgb(0x252525).into();
+        theme.caret = rgb(view::INK).into();
         theme.background = rgba(0x00000000).into();
-        theme.popover = rgb(0xfdfdfd).into();
-        theme.popover_foreground = rgb(0x202020).into();
-        theme.foreground = rgb(0x202020).into();
-        theme.muted_foreground = rgb(0x737373).into();
-        theme.border = rgb(0xe1e1e1).into();
-        theme.input = rgb(0xe1e1e1).into();
-        theme.secondary = rgb(0xf2f2f2).into();
+        theme.popover = rgb(view::PAPER).into();
+        theme.popover_foreground = rgb(view::INK).into();
+        theme.foreground = rgb(view::INK).into();
+        theme.muted_foreground = rgb(view::MUTED).into();
+        theme.border = rgb(view::LINE).into();
+        theme.input = rgb(view::LINE).into();
+        theme.secondary = rgb(view::SURFACE).into();
         theme.secondary_hover = rgb(0xe9e9e9).into();
         theme.secondary_active = rgb(0xe0e0e0).into();
         theme.accent = rgb(0xededed).into();
-        theme.accent_foreground = rgb(0x202020).into();
+        theme.accent_foreground = rgb(view::INK).into();
         theme.selection = rgb(0xdcdcdc).into();
         theme.font_size = px(13.);
         theme.radius = px(6.);

@@ -6,7 +6,10 @@ use gpui_component::{
     tooltip::Tooltip,
 };
 
-use crate::label::single_line;
+use crate::{
+    label::single_line,
+    view::{INK, LINE, SURFACE},
+};
 
 const WIDTH: f32 = 220.;
 
@@ -128,7 +131,7 @@ impl TagPicker {
                             .id(("focus-tag-option", id as u64))
                             .debug_selector(move || format!("focus-tag-option-{id}"))
                             .w(px(174.))
-                            .text_color(rgb(0x202020))
+                            .text_color(rgb(INK))
                             .tooltip(move |window, cx| Tooltip::new(help.clone()).build(window, cx))
                     })
                     .checked(Some(id) == selected)
@@ -208,9 +211,9 @@ impl Render for TagPicker {
                     .custom(
                         ButtonCustomVariant::new(cx)
                             .color(rgb(0xffffff).into())
-                            .foreground(rgb(0x202020).into())
-                            .border(rgb(0xe1e1e1).into())
-                            .hover(rgb(0xf2f2f2).into())
+                            .foreground(rgb(INK).into())
+                            .border(rgb(LINE).into())
+                            .hover(rgb(SURFACE).into())
                             .active(rgb(0xe9e9e9).into()),
                     )
                     .cursor_pointer()
@@ -219,15 +222,11 @@ impl Render for TagPicker {
                         button.bg(rgb(0xe9e9e9)).cursor_default()
                     })
                     .tooltip(help)
-                    .child(
-                        single_line(title, 14.)
-                            .w(px(172.))
-                            .text_color(rgb(0x202020)),
-                    )
+                    .child(single_line(title, 14.).w(px(172.)).text_color(rgb(INK)))
                     .child(
                         Icon::new(IconName::ChevronDown)
                             .size(px(13.))
-                            .text_color(rgb(0x202020)),
+                            .text_color(rgb(INK)),
                     )
                     .on_click(cx.listener(Self::toggle)),
             )

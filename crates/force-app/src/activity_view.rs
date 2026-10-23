@@ -32,19 +32,14 @@ impl ForceView {
             .max_w(px(896.))
             .flex()
             .flex_col()
-            .gap(px(16.))
+            .gap(px(12.))
             .child(
                 div()
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(section_heading("专注活动"))
-                    .child(
-                        div()
-                            .text_size(px(13.))
-                            .text_color(rgb(MUTED))
-                            .child("过去一年"),
-                    ),
+                    .child(section_heading("过去一年"))
+                    .child(activity_legend()),
             )
             .child(
                 div()
@@ -200,23 +195,23 @@ impl ForceView {
                             )),
                     ),
             )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .justify_end()
-                    .gap(px(6.))
-                    .text_size(px(13.))
-                    .text_color(rgb(MUTED))
-                    .child("少")
-                    .children(
-                        std::iter::once(EMPTY)
-                            .chain(LEVELS)
-                            .map(|color| div().size(px(12.)).rounded(px(2.)).bg(rgb(color))),
-                    )
-                    .child("多"),
-            )
     }
+}
+
+fn activity_legend() -> Div {
+    div()
+        .flex()
+        .items_center()
+        .gap(px(6.))
+        .text_size(px(13.))
+        .text_color(rgb(MUTED))
+        .child("少")
+        .children(
+            std::iter::once(EMPTY)
+                .chain(LEVELS)
+                .map(|color| div().size(px(12.)).rounded(px(2.)).bg(rgb(color))),
+        )
+        .child("多")
 }
 
 fn activity_color(seconds: i64) -> u32 {
