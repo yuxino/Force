@@ -23,7 +23,7 @@ impl ForceView {
             .gap(px(36.))
             .when_some(self.timer_context(cx), |body, context| body.child(context))
             .child(settings_section(
-                "计时偏好",
+                "计时",
                 div()
                     .debug_selector(|| "settings-timing".into())
                     .flex()
@@ -32,7 +32,7 @@ impl ForceView {
                         settings_row()
                             .border_b_1()
                             .border_color(rgb(LINE))
-                            .child(setting_label("浮窗始终置顶"))
+                            .child(setting_label("浮窗置顶"))
                             .child(
                                 button("pin-strip")
                                     .debug_selector(|| "settings-pin".into())
@@ -194,6 +194,7 @@ impl ForceView {
                                         }
                                     })
                                     .h(px(44.))
+                                    .flex_shrink_0()
                                     .when(editing, |row| row.bg(rgb(SURFACE)))
                                     .flex()
                                     .items_center()
@@ -204,6 +205,7 @@ impl ForceView {
                                         single_line(tag.name.clone(), 14.)
                                             .id(("tag-name", id as u64))
                                             .flex_1()
+                                            .min_w_0()
                                             .tooltip(move |window, cx| {
                                                 Tooltip::new(help_name.clone()).build(window, cx)
                                             }),
@@ -257,11 +259,12 @@ impl ForceView {
                             .id("tag-form")
                             .debug_selector(|| "settings-form".into())
                             .anchor_scroll(Some(self.tag_form_anchor.clone()))
+                            .pt(px(4.))
                             .flex()
                             .flex_col()
                             .gap(px(10.))
                             .when(self.editing_tag.is_some(), |form| {
-                                form.child(field_label("重命名标签").text_size(px(14.)))
+                                form.child(field_label("重命名").text_size(px(14.)))
                             })
                             .child(
                                 div()
@@ -328,18 +331,23 @@ impl ForceView {
             ))
             .child(settings_section(
                 "本地数据",
-                div().flex().items_center().gap(px(12.)).child(
-                    button("data-folder")
-                        .h(px(40.))
-                        .px(px(14.))
-                        .icon(control_icon(IconName::FolderOpen, INK))
-                        .child(control_label("数据文件夹", INK))
-                        .on_click(cx.listener(|this, _, _, cx| cx.reveal_path(&this.data_dir))),
-                ),
+                div()
+                    .min_h(px(56.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        button("data-folder")
+                            .h(px(40.))
+                            .px(px(14.))
+                            .icon(control_icon(IconName::FolderOpen, INK))
+                            .child(control_label("数据文件夹", INK))
+                            .on_click(cx.listener(|this, _, _, cx| cx.reveal_path(&this.data_dir))),
+                    ),
             ))
             .child(
                 div()
-                    .pt(px(24.))
+                    .pt(px(20.))
                     .border_t_1()
                     .border_color(rgb(LINE))
                     .flex()
@@ -377,6 +385,9 @@ impl ForceView {
 fn settings_section(title: &'static str, content: impl IntoElement) -> Div {
     div()
         .w_full()
+        .pt(px(16.))
+        .border_t_1()
+        .border_color(rgb(LINE))
         .flex()
         .items_start()
         .gap(px(32.))
@@ -384,7 +395,7 @@ fn settings_section(title: &'static str, content: impl IntoElement) -> Div {
             div()
                 .w(px(160.))
                 .flex_shrink_0()
-                .pt(px(10.))
+                .pt(px(16.))
                 .child(section_heading(title)),
         )
         .child(div().flex_1().min_w_0().child(content))
@@ -392,8 +403,8 @@ fn settings_section(title: &'static str, content: impl IntoElement) -> Div {
 
 fn settings_row() -> Div {
     div()
-        .min_h(px(64.))
-        .py(px(10.))
+        .min_h(px(56.))
+        .py(px(8.))
         .flex()
         .items_center()
         .gap(px(10.))

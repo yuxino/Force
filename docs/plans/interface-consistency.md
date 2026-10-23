@@ -17,7 +17,9 @@ after the current window borrow ends.
 The strip prioritizes the running session. Browsing a paused task in management
 must not replace the running timer shown on the strip or retarget its controls.
 Without a running session, the strip may show the selected paused session or
-completion state.
+completion state. Give the title the full first line; time and status share the
+second line with fixed pause/resume, finish and open slots. Keep the finish slot
+reserved when unavailable so neighboring controls stay in place.
 
 ## Stable focus workspace
 
@@ -35,8 +37,11 @@ Use spacing between columns without a full-height dividing line.
   content fills the left column and keeps the same left edge and width in all
   three states, aligned with the heading above. Setup keeps
   task, duration, tag and start
-  together. Running uses a 72-point tabular timer, visible 暂停计时 / 继续计时 and
-  结束本次计时 actions, and a secondary rest action. Rest has only a primary
+  together. Running uses a left-aligned tabular timer up to 104 points (80 in
+  compact windows), fitted to the final column width without losing hours, visible 暂停计时 / 继续计时 and
+  结束本次计时 actions, and a secondary rest action. Countdown uses a restrained
+  scale based on elapsed/target time; an early finish keeps its actual fraction,
+  and unlimited sessions show no invented target. Rest has only a primary
   继续专注 / 结束休息 action and secondary pause/resume. Returning to focus ends
   paused rest as well, atomically; global rest follows the running task, while
   a task-local rest follows the viewed task. Completion shows a compact
@@ -47,8 +52,9 @@ Use spacing between columns without a full-height dividing line.
   a row selects it for inspection; starting/resuming requires its explicit action.
   Give the running status a stronger neutral foreground and weight; selection
   continues to identify the task being inspected, independently of what is running.
-  Keep 64-point task rows and an explicitly sized 214-point text column. Align
-  the sidebar heading with the Today goal above, without an extra left inset.
+  Keep 64-point task rows and an explicitly sized 214-point text column. Keep
+  continuous rows with fine dividers and a left selection mark. Align the
+  sidebar right edge with the summary above, without an extra left inset.
   Measure title/status bounds and verify their actual native glyphs. Shape
   single-line labels against final bounds with fresh text runs; GPUI 0.2.2
   built-in ellipsis can keep shortened runs from an earlier width measurement.
@@ -62,10 +68,12 @@ Use spacing between columns without a full-height dividing line.
 
 ## Styling and settings
 
-Use the system font, white surfaces and neutral black/gray hierarchy. The header
-is 68 points high. Today uses a 28-point heading; records/settings use 32-point
-page headings. Section headings are 16 points, body and control labels 14 points,
-and secondary metadata 12–13 points. Compact task/summary durations show seconds
+Use the system font, soft white surfaces and neutral black/gray hierarchy. The
+68-point header aligns the geometric wordmark, two destinations and settings
+with the content grid. Today uses a 16-point heading, 13-point date, 22-point
+accumulated time and a full-width two-point goal line. Task headings are 28 points;
+records/settings use 32-point page headings. Section headings are 16 points, body
+and control labels 14 points, and secondary metadata 13 points. Compact task/summary durations show seconds
 below one minute and omit zero minutes after whole hours. Keep necessary labels and errors visible;
 optional explanations use contextual help. Routine removal icons stay neutral.
 
@@ -95,7 +103,9 @@ Disabled controls remain legible without whole-element opacity. The disabled
 start action uses `#626262` text and icon on `#e9e9e9`; enabled start uses its dark
 primary style. `gpui-component` 0.5.1 hardcodes red button hover text, so labels
 and icons need explicit semantic foregrounds. Do not register duplicate hover
-handlers.
+handlers. Navigation and duration underlines must use a custom variant with a
+stable border color: Ghost variants clear it during hover/press, exactly when
+a newly selected choice must remain identifiable.
 
 ## Activity calendar
 
@@ -113,7 +123,10 @@ the actual date and focus duration. The selected day has a clear outline;
 future dates use a separate pale surface and cannot be selected.
 
 Selecting a cell updates the date and records below without moving the calendar.
-Keep previous/next day buttons beside the date and search at the trailing side.
+Keep previous/next day buttons beside the date and daily total. Put the count
+and search in a separate list toolbar; export remains beside the page heading.
+Rows share a flexible title column, a 112-point duration column and an 80-point
+action column, separated by 20-point gaps.
 Activity uses local midnight boundaries and merged focus intervals, excluding
 pause and rest. Load the whole series with one batch query when records refresh,
 cache it in the model, and update today's cell from the normal statistics tick.

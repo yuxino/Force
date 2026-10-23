@@ -133,6 +133,24 @@ fn assert_same_bounds(actual: Bounds<Pixels>, expected: Bounds<Pixels>) {
 fn headless_ui_manager_layout_is_bounded_at_default_and_minimum_size(cx: &mut TestAppContext) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
         let mut manager = ManagerHarness::new(cx, width, height);
+        // Render the largest normal daily total and goal without reading or
+        // creating a day's worth of real records.
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.today.focus_seconds = 23 * 3_600 + 59 * 60;
+            // Navigation refreshes the saved preference. Keep this temporary
+            // fixture's database and field baseline consistent with the model.
+            view.store
+                .as_mut()
+                .unwrap()
+                .set_goal_minutes(1_439)
+                .unwrap();
+            view.goal = 1_439;
+            view.goal_input
+                .update(cx, |input, cx| input.set_value("1439", window, cx));
+            cx.notify();
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
         let viewport = Bounds::new(Point::default(), size(px(width), px(height)));
         let header = manager.bounds("manager-header");
         let content = manager.bounds("manager-content");
@@ -151,13 +169,20 @@ fn headless_ui_manager_layout_is_bounded_at_default_and_minimum_size(cx: &mut Te
         assert!((form.right() - operation.right()).abs() <= px(4.));
         let goal = manager.bounds("focus-goal");
         let task_heading = manager.bounds("task-list-heading");
-        assert_eq!(goal.left(), tasks.left());
+        assert_horizontally_inside(goal, summary);
+        let total = manager.bounds("focus-day-total");
+        let target = manager.bounds("focus-day-target");
+        assert_horizontally_inside(total, goal);
+        assert_horizontally_inside(target, goal);
+        assert!(total.right() < target.left());
+        assert!((goal.right() - tasks.right()).abs() <= px(1.));
         assert_eq!(task_heading.left(), tasks.left());
         assert!(summary.top() >= header.bottom() - px(1.));
         assert!(summary.bottom() <= viewport.bottom() + px(1.));
         assert!(operation.top() >= summary.bottom() - px(1.));
         assert!(tasks.top() >= summary.bottom() - px(1.));
-        assert!(operation.right() <= tasks.left() + px(1.));
+        assert!((tasks.left() - operation.right() - px(32.)).abs() <= px(1.));
+        assert_eq!(tasks.size.width, px(240.));
         assert!(start.top() >= operation.top() - px(1.));
         assert!(
             start.bottom() <= operation.bottom() + px(1.),
@@ -339,6 +364,148 @@ fn headless_ui_disabled_start_and_timer_transitions_keep_the_manager_stable(
     assert_same_bounds(manager.bounds("focus-tasks"), tasks);
 }
 
+fn assert_countdown_marker(manager: &mut ManagerHarness, elapsed: i64, target: i64) -> Pixels {
+    let track = manager.bounds("countdown-progress-track");
+    let marker = manager.bounds("countdown-progress-current");
+    let fraction = (elapsed as f32 / target as f32).clamp(0., 1.);
+    let expected = track.left() + track.size.width * fraction;
+    assert!((marker.center().x - expected).abs() <= px(1.));
+    assert_horizontally_inside(marker, manager.bounds("focus-operation"));
+    marker.center().x
+}
+
+#[gpui::test]
+fn headless_ui_titles_and_long_timers_stay_bounded_and_actions_remain_reachable(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        for (title, elapsed, target) in [
+            ("A focused task", 378, Some(1_500)),
+            (
+                "这是需要完整保留并允许分行的长中文任务标题，用来检查较窄窗口中的计时数字和操作按钮是否仍然可用而且不会挤入右侧任务列表",
+                100 * 3_600 + 5 * 60 + 7,
+                None,
+            ),
+        ] {
+            let mut manager = ManagerHarness::new(cx, width, height);
+            let session_id = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                let session = view
+                    .store
+                    .as_mut()
+                    .unwrap()
+                    .create_and_start_task(title, view.selected_tag, view.now - elapsed, target)
+                    .unwrap();
+                view.refresh(cx);
+                view.select_session(session.id, window, cx);
+                session.id
+            });
+            manager.cx.update(|window, _| window.refresh());
+            manager.cx.run_until_parked();
+            let summary = manager.bounds("focus-summary");
+            let tasks = manager.bounds("focus-tasks");
+            let operation = manager.bounds("focus-operation");
+            let heading = manager.bounds("focus-task-title");
+            let timer = manager.bounds("focus-timer");
+            assert_horizontally_inside(heading, operation);
+            assert_horizontally_inside(timer, operation);
+            assert!(heading.size.height > px(0.));
+            assert!(heading.size.height <= px(28. * 1.35 * 2. + 1.));
+            assert!(timer.size.width >= operation.size.width - px(4.));
+            assert!(heading.bottom() <= timer.top() + px(1.));
+            manager.view.read_with(&manager.cx, |view, _| {
+                let session = view.current_session().unwrap();
+                assert_eq!(session.id, session_id);
+                assert_eq!(session.title, title);
+                assert_eq!(session.target_seconds, target);
+                assert!(session.elapsed_at(view.now) >= elapsed);
+            });
+
+            if let Some(target) = target {
+                let elapsed = manager.view.read_with(&manager.cx, |view, _| {
+                    view.current_session().unwrap().elapsed_at(view.now)
+                });
+                assert_countdown_marker(&mut manager, elapsed, target);
+            } else {
+                assert!(manager.cx.debug_bounds("countdown-progress").is_none());
+            }
+            let pause = manager.bounds("running-pause");
+            let finish = manager.bounds("running-finish");
+            assert_horizontally_inside(pause, operation);
+            assert_horizontally_inside(finish, operation);
+            assert!(pause.right() < finish.left());
+            if target.is_some() {
+                assert!(pause.top() >= operation.top());
+                assert!(finish.bottom() <= operation.bottom() + px(1.));
+            } else if finish.bottom() > operation.bottom() {
+                manager.scroll("focus-operation", -1_000.);
+            }
+            let pause = manager.bounds("running-pause");
+            let finish = manager.bounds("running-finish");
+            assert!(pause.top() >= operation.top() - px(1.));
+            assert!(finish.bottom() <= operation.bottom() + px(1.));
+            manager.click("running-pause");
+            let paused_elapsed = manager.view.read_with(&manager.cx, |view, _| {
+                let session = view.current_session().unwrap();
+                assert_eq!(session.id, session_id);
+                assert!(session.is_paused());
+                session.elapsed_at(view.now)
+            });
+            let paused_marker =
+                target.map(|target| assert_countdown_marker(&mut manager, paused_elapsed, target));
+            manager.view.update(&mut manager.cx, |view, cx| {
+                view.now += 5 * 60;
+                cx.notify();
+            });
+            manager.cx.update(|window, _| window.refresh());
+            manager.cx.run_until_parked();
+            if let Some(target) = target {
+                assert_eq!(
+                    assert_countdown_marker(&mut manager, paused_elapsed, target),
+                    paused_marker.unwrap()
+                );
+            }
+            manager.click("running-finish");
+            manager.view.read_with(&manager.cx, |view, _| {
+                let completed = view.completed.as_ref().unwrap();
+                assert_eq!(completed.id, session_id);
+                assert_eq!(completed.title, title);
+                assert!(completed.elapsed_at(view.now) >= elapsed);
+                assert!(view.active.is_empty());
+            });
+            assert_horizontally_inside(manager.bounds("focus-task-title"), operation);
+            assert_horizontally_inside(manager.bounds("focus-timer"), operation);
+            if let Some(target) = target {
+                let finished_elapsed = manager.view.read_with(&manager.cx, |view, _| {
+                    view.completed.as_ref().unwrap().elapsed_at(view.now)
+                });
+                assert_eq!(finished_elapsed, paused_elapsed);
+                let marker = assert_countdown_marker(&mut manager, finished_elapsed, target);
+                assert_eq!(marker, paused_marker.unwrap());
+                assert!(marker < manager.bounds("countdown-progress-track").right());
+            } else {
+                assert!(manager.cx.debug_bounds("countdown-progress").is_none());
+            }
+            if manager.bounds("continue-task").bottom() > operation.bottom() {
+                manager.scroll("focus-operation", -1_000.);
+            }
+            let repeat = manager.bounds("continue-task");
+            assert!(repeat.top() >= operation.top() - px(1.));
+            assert!(repeat.bottom() <= operation.bottom() + px(1.));
+            manager.click("continue-task");
+            manager.view.read_with(&manager.cx, |view, _| {
+                assert_eq!(view.active.len(), 1);
+                assert_ne!(view.active[0].id, session_id);
+                assert_eq!(view.active[0].title, title);
+                assert_eq!(view.active[0].target_seconds, target);
+                assert!(view.active[0].is_running());
+                assert!(view.completed.is_none());
+            });
+            assert_same_bounds(manager.bounds("focus-summary"), summary);
+            assert_same_bounds(manager.bounds("focus-tasks"), tasks);
+        }
+    }
+}
+
 #[gpui::test]
 fn headless_ui_task_titles_use_the_row_content_width(cx: &mut TestAppContext) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
@@ -407,11 +574,21 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
         .cx
         .simulate_input("A long running task title that needs two lines in the operation pane");
     manager.click("start-focus");
-    manager.view.update(&mut manager.cx, |view, cx| {
-        // A real feedback state reduces the operation viewport without moving
-        // the summary. It also makes the operation genuinely scrollable.
-        view.notify("无法保存浮窗位置。计时记录不受影响。", cx);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        // Browsing a paused task while another timer runs adds the genuine
+        // return-to-timer context above the operation, without moving summary
+        // or task navigation. A toast is an overlay and cannot force scrolling.
+        let selected = view.selected_session.unwrap();
+        view.store
+            .as_mut()
+            .unwrap()
+            .create_and_start_task("Another running task", view.selected_tag, view.now, None)
+            .unwrap();
+        view.refresh(cx);
+        view.select_session(selected, window, cx);
     });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
     let summary = manager.bounds("focus-summary");
     let tasks = manager.bounds("focus-tasks");
     let header = manager.bounds("manager-header");
@@ -526,7 +703,18 @@ fn headless_ui_activity_days_fit_and_select_records_without_resetting_scroll(
             assert_eq!(view.record_stats.focus_seconds, 1_200);
             assert_eq!(view.history.len(), 20);
         });
-        assert!(manager.cx.debug_bounds("record-row-1").is_some());
+        let row = manager.bounds("record-row-1");
+        let title = manager.bounds("record-title-column-1");
+        let duration = manager.bounds("record-duration-column-1");
+        let action = manager.bounds("record-action-column-1");
+        assert_horizontally_inside(row, manager.bounds("records-content"));
+        for column in [title, duration, action] {
+            assert_horizontally_inside(column, row);
+            assert!(column.size.width > px(0.));
+        }
+        assert!(title.right() < duration.left());
+        assert!(duration.right() < action.left());
+        assert_horizontally_inside(manager.bounds("record-day-time-1"), duration);
         assert!(manager.cx.debug_bounds("record-row-21").is_none());
         manager.scroll("activity-grid", -20.);
         let offset = manager
@@ -586,6 +774,35 @@ fn headless_ui_activity_days_fit_and_select_records_without_resetting_scroll(
     }
 }
 
+fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 3] {
+    let root = strip.debug_bounds("strip-root").unwrap();
+    let title = strip.debug_bounds("strip-title").unwrap();
+    let text = strip.debug_bounds("strip-title-text").unwrap();
+    let time = strip.debug_bounds("strip-time").unwrap();
+    let primary = strip.debug_bounds("strip-primary").unwrap();
+    let finish_slot = strip.debug_bounds("strip-finish-slot").unwrap();
+    let open = strip.debug_bounds("strip-open").unwrap();
+    for child in [title, text, time, primary, finish_slot, open] {
+        assert_horizontally_inside(child, root);
+        assert!(child.top() >= root.top() - px(1.));
+        assert!(child.bottom() <= root.bottom() + px(1.));
+    }
+    assert_horizontally_inside(text, title);
+    assert!(text.size.width >= root.size.width - px(36.));
+    assert!((text.left() - title.left()).abs() <= px(1.));
+    assert!((text.right() - title.right()).abs() <= px(1.));
+    assert!((title.left() - time.left()).abs() <= px(1.));
+    assert!((title.right() - open.right()).abs() <= px(1.));
+    assert!(title.bottom() <= time.top() + px(1.));
+    assert!(title.bottom() <= primary.top() + px(1.));
+    assert!(time.right() <= primary.left());
+    assert!(primary.right() < finish_slot.left());
+    assert!(finish_slot.right() < open.left());
+    assert_eq!(primary.top(), finish_slot.top());
+    assert_eq!(finish_slot.top(), open.top());
+    [primary, finish_slot, open]
+}
+
 #[gpui::test]
 fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborrows(
     cx: &mut TestAppContext,
@@ -621,8 +838,9 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         assert_eq!(view.model.entity_id(), manager.view.entity_id());
     });
 
-    let primary = strip.debug_bounds("strip-primary").unwrap();
-    strip.simulate_click(primary.center(), Modifiers::default());
+    let idle_controls = strip_control_bounds(&mut strip);
+    assert!(strip.debug_bounds("strip-finish").is_none());
+    strip.simulate_click(idle_controls[0].center(), Modifiers::default());
     manager.view.read_with(&manager.cx, |view, _| {
         assert!(view.preparing);
         assert!(!view.compact);
@@ -631,28 +849,89 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         view.task_input
             .update(cx, |input, cx| input.focus(window, cx));
     });
-    manager.cx.simulate_input("One shared timer");
+    let title = "浮窗应当完整保留这段很长的任务名称，显示时仅在全宽标题行内省略";
+    manager.cx.simulate_input(title);
     manager.click("start-focus");
     let started = manager.view.read_with(&manager.cx, |view, _| {
         assert_eq!(view.active.len(), 1);
         assert!(view.active[0].is_running());
+        assert_eq!(view.active[0].title, title);
         view.active[0].id
     });
 
     strip.update(|window, _| window.refresh());
-    let primary = strip.debug_bounds("strip-primary").unwrap();
-    strip.simulate_click(primary.center(), Modifiers::default());
+    strip.run_until_parked();
+    let running_controls = strip_control_bounds(&mut strip);
+    for (actual, expected) in running_controls.into_iter().zip(idle_controls) {
+        assert_same_bounds(actual, expected);
+    }
+    assert_same_bounds(
+        strip.debug_bounds("strip-finish").unwrap(),
+        idle_controls[1],
+    );
+    strip.simulate_click(running_controls[0].center(), Modifiers::default());
     manager.view.read_with(&manager.cx, |view, _| {
         assert_eq!(view.active.len(), 1);
         assert_eq!(view.active[0].id, started);
         assert!(view.active[0].is_paused());
     });
     strip.update(|window, _| window.refresh());
-    let open = strip.debug_bounds("strip-open").unwrap();
-    strip.simulate_click(open.center(), Modifiers::default());
+    strip.run_until_parked();
+    let paused_controls = strip_control_bounds(&mut strip);
+    for (actual, expected) in paused_controls.into_iter().zip(idle_controls) {
+        assert_same_bounds(actual, expected);
+    }
+    strip.simulate_click(paused_controls[2].center(), Modifiers::default());
     manager.view.read_with(&manager.cx, |view, _| {
         assert!(!view.compact);
         assert_eq!(view.active[0].id, started);
+    });
+    strip.simulate_click(paused_controls[1].center(), Modifiers::default());
+    strip.update(|window, _| window.refresh());
+    strip.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.active.is_empty());
+        assert_eq!(view.completed.as_ref().unwrap().id, started);
+    });
+    let completed_controls = strip_control_bounds(&mut strip);
+    for (actual, expected) in completed_controls.into_iter().zip(idle_controls) {
+        assert_same_bounds(actual, expected);
+    }
+    // Debug bounds retain earlier selectors. Dispatch at the now-empty finish
+    // slot instead of mistaking the old finish bounds for a live button.
+    let feedback = manager.view.read_with(&manager.cx, |view, _| {
+        view.toast.as_ref().map(|(text, _)| text.clone())
+    });
+    strip.simulate_click(completed_controls[1].center(), Modifiers::default());
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.active.is_empty());
+        assert_eq!(view.completed.as_ref().unwrap().id, started);
+        assert_eq!(view.toast.as_ref().map(|(text, _)| text.clone()), feedback);
+    });
+
+    let long_session = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let session = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_and_start_task(title, view.selected_tag, view.now - 100 * 3_600 - 7, None)
+            .unwrap();
+        view.refresh(cx);
+        view.select_session(session.id, window, cx);
+        session.id
+    });
+    strip.update(|window, _| window.refresh());
+    strip.run_until_parked();
+    let long_controls = strip_control_bounds(&mut strip);
+    for (actual, expected) in long_controls.into_iter().zip(idle_controls) {
+        assert_same_bounds(actual, expected);
+    }
+    strip.simulate_click(long_controls[0].center(), Modifiers::default());
+    manager.view.read_with(&manager.cx, |view, _| {
+        let session = view.strip_session().unwrap();
+        assert_eq!(session.id, long_session);
+        assert!(session.is_paused());
+        assert!(session.elapsed_at(view.now) >= 100 * 3_600 + 7);
     });
     strip.update(|window, _| window.remove_window());
     strip.run_until_parked();
