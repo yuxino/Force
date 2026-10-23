@@ -171,7 +171,7 @@ impl ForceView {
                         div().debug_selector(|| "record-empty-state".into()).py(px(32.))
                             .flex().items_center().gap(px(12.))
                             .text_size(px(14.)).text_color(rgb(MUTED))
-                            .child(if query.is_empty() { "这一天还没有计时记录" } else { "没有匹配的记录" })
+                            .child(if query.is_empty() { "暂无记录" } else { "没有匹配的记录" })
                             .when(!query.is_empty(), |row| row.child(
                                 button("clear-empty-record-search")
                                     .debug_selector(|| "clear-empty-record-search".into())
@@ -203,8 +203,6 @@ impl ForceView {
             (TagKind::Rest, true, _) => Some("休息"),
             (TagKind::Rest, false, true) => Some("休息中"),
             (TagKind::Rest, false, false) => Some("休息 · 已暂停"),
-            (_, false, true) => Some("进行中"),
-            (_, false, false) => Some("已暂停"),
             _ => None,
         };
 
@@ -390,7 +388,7 @@ impl ForceView {
                                     if session.is_running() {
                                         "计时中".to_owned()
                                     } else {
-                                        "已暂停，尚未结束".to_owned()
+                                        "已暂停".to_owned()
                                     }
                                 },
                                 record_timestamp,

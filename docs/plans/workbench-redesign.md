@@ -8,9 +8,10 @@ contrast, aligned numbers, restrained rules and open lists give the small local
 application a coherent identity. Do not add dashboards, account features,
 illustrations, textures, gradients, marketing slogans or decorative cards.
 
-This is a substantial interface change on `feat/force-workbench-redesign`.
-Prepare a complete reviewable implementation before requesting approval to merge
-main. Preserve the running formal app and all production data during design.
+The owner approved merging this substantial interface change after reviewing the
+design. Preserve the running formal app and all production data during delivery.
+Use short action labels and avoid repeating timer state in captions or log rows;
+keep errors and meaningful distinctions visible.
 
 ## Shared language
 

@@ -249,7 +249,7 @@ impl ForceView {
                                             if self.export_busy {
                                                 "正在导出…"
                                             } else {
-                                                "导出全部记录"
+                                                "导出全部"
                                             },
                                             MUTED,
                                         ))
@@ -360,7 +360,7 @@ impl FloatingStrip {
         } else if completed.is_some_and(|s| s.tag_kind == TagKind::Rest) {
             "休息结束"
         } else if completed.is_some() {
-            "计时已保存"
+            "已保存"
         } else {
             "未开始"
         };
@@ -368,7 +368,7 @@ impl FloatingStrip {
         let (symbol, help) = if model.storage_failed {
             ("play", "展开并重试")
         } else if completed.is_some() && current.is_none() {
-            ("play", "查看本次计时与下一步")
+            ("play", "查看计时")
         } else if running {
             ("pause", "暂停计时")
         } else if current.is_some() {

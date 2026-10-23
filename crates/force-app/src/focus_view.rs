@@ -345,9 +345,9 @@ impl ForceView {
                 crate::control_style::start_button(
                     "start-focus",
                     if self.browsing_other_timer() {
-                        "切换并开始计时".to_owned()
+                        "切换并开始".to_owned()
                     } else {
-                        "开始计时".to_owned()
+                        "开始".to_owned()
                     },
                     action_icon("play").size(px(14.)),
                     disabled,
@@ -456,7 +456,7 @@ impl ForceView {
                                 if task.total_seconds == 0 {
                                     "未开始".to_owned()
                                 } else {
-                                    format!("任务累计 {}", short_time(task.total_seconds))
+                                    format!("累计 {}", short_time(task.total_seconds))
                                 }
                             },
                             |session| {
@@ -612,16 +612,12 @@ impl ForceView {
             .timestamp_opt(self.now.saturating_add(remaining), 0)
             .single();
         let caption = if session.target_seconds.is_none() {
-            "已用时间 · 不限时".to_owned()
+            "已用时间".to_owned()
         } else if paused {
-            format!(
-                "剩余时间 · 已{} {}",
-                if rest { "休息" } else { "专注" },
-                short_time(elapsed)
-            )
+            "剩余时间".to_owned()
         } else {
             format!(
-                "剩余时间 · 预计 {} 结束",
+                "剩余 · {} 结束",
                 end.map_or(String::new(), |end| end.format("%H:%M").to_string())
             )
         };
@@ -641,7 +637,7 @@ impl ForceView {
                     } else if rest {
                         "休息中"
                     } else {
-                        "正在专注"
+                        "专注中"
                     }))
                     .child(task_heading(&session.title))
                     .when(session.tag_name != session.title, |body| {
@@ -723,12 +719,12 @@ impl ForceView {
                         .child(control_label(
                             if paused {
                                 if self.browsing_other_timer() {
-                                    "切换并继续计时"
+                                    "切换并继续"
                                 } else {
-                                    "继续计时"
+                                    "继续"
                                 }
                             } else {
-                                "暂停计时"
+                                "暂停"
                             },
                             if rest { INK } else { 0xffffff },
                         ))
@@ -747,7 +743,7 @@ impl ForceView {
                                 .debug_selector(|| "running-finish".into())
                                 .flex_1()
                                 .h(px(44.))
-                                .child(control_label("结束本次计时", INK))
+                                .child(control_label("结束计时", INK))
                                 .tooltip("保存本次计时；任务保留，可再次开始计时")
                                 .on_click({
                                     let id = session.id;
@@ -794,11 +790,7 @@ impl ForceView {
                             .gap(px(6.))
                             .text_color(rgb(MUTED))
                             .child(Icon::new(IconName::Check).size(px(14.)))
-                            .child(field_label(if rest {
-                                "休息已结束"
-                            } else {
-                                "本次计时已保存"
-                            })),
+                            .child(field_label(if rest { "休息结束" } else { "已保存" })),
                     )
                     .child(task_heading(&session.title))
                     .when(session.tag_name != session.title, |body| {

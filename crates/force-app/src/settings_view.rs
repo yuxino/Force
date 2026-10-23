@@ -23,7 +23,7 @@ impl ForceView {
             .gap(px(36.))
             .when_some(self.timer_context(cx), |body, context| body.child(context))
             .child(settings_section(
-                "计时偏好",
+                "计时",
                 div()
                     .debug_selector(|| "settings-timing".into())
                     .flex()
@@ -32,7 +32,7 @@ impl ForceView {
                         settings_row()
                             .border_b_1()
                             .border_color(rgb(LINE))
-                            .child(setting_label("浮窗始终置顶"))
+                            .child(setting_label("浮窗置顶"))
                             .child(
                                 button("pin-strip")
                                     .debug_selector(|| "settings-pin".into())
@@ -264,7 +264,7 @@ impl ForceView {
                             .flex_col()
                             .gap(px(10.))
                             .when(self.editing_tag.is_some(), |form| {
-                                form.child(field_label("重命名标签").text_size(px(14.)))
+                                form.child(field_label("重命名").text_size(px(14.)))
                             })
                             .child(
                                 div()
