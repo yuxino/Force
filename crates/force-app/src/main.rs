@@ -319,7 +319,9 @@ fn main() -> anyhow::Result<()> {
                 });
                 cx.on_action(move |_: &ClosePanel, cx| {
                     with_force(handle, cx, |this, window, cx| {
-                        if !this.compact
+                        if !this.compact && this.editing_duration.is_some() {
+                            this.cancel_duration_edit(window, cx);
+                        } else if !this.compact
                             && this.page == model::Page::Settings
                             && this.editing_tag.is_some()
                         {

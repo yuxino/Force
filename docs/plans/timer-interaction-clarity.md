@@ -60,3 +60,25 @@ Archiving a label prevents choosing it for new rounds. It does not block
 continuing an already saved paused round: resume its existing session, target,
 title and label snapshot without silently binding to a replacement label. After
 that round ends, starting another requires an available label.
+
+## Custom duration and active adjustments
+
+Keep 25/45/60-minute shortcuts and unlimited timing. 自定义 accepts whole minutes
+from 1 through 1440; invalid input blocks both Start and Return and reports the
+error beside the input. A new-task request while already drafting focuses that
+draft without resetting its name, tag or duration; omit the redundant sidebar
+button in that state.
+
+Running and paused focus rounds expose 调整时长 for their total duration. Saving
+updates the selected round transactionally, preserving its intervals, identity,
+paused/running state and all other timers. The total must exceed elapsed time.
+An expired old deadline cannot be extended after a delayed tick or sleep. Saved
+records and rest durations stay outside this editor. Cancellation, navigation,
+selection changes and completion dismiss the editor. Hiding management preserves
+its draft for reopening. Its Return key
+saves only the visible edit; errors stay by the input. Refresh both windows and
+preserve the adjusted target when returning from rest or reopening the app.
+
+Verify arbitrary and boundary durations, invalid values, keyboard submission,
+running/paused persistence, expiry and storage rollback. Check default/minimum
+native windows and that repeated New preserves drafts.

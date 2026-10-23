@@ -192,6 +192,44 @@ impl Store {
         Ok(session)
     }
 
+    /// Changes an unfinished focus round's total target without changing its
+    /// recorded intervals or running/paused state. A shorter target must still
+    /// leave time remaining; an already expired round cannot be extended.
+    pub fn set_session_target(
+        &mut self,
+        id: i64,
+        target: Option<i64>,
+        now: i64,
+    ) -> Result<Session> {
+        validate_task_target(target)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let session = load_session(&transaction, id)?;
+        let elapsed = session.elapsed_at(now);
+        if session.finished_at.is_some()
+            || session.tag_kind != TagKind::Focus
+            || now < last_boundary(&session)
+            || session
+                .target_seconds
+                .is_some_and(|previous| elapsed >= previous)
+        {
+            return Err(Error::InvalidTransition);
+        }
+        if target.is_some_and(|value| value <= elapsed) {
+            return Err(Error::Validation(
+                "Timer duration must be longer than elapsed time",
+            ));
+        }
+        transaction.execute(
+            "UPDATE sessions SET target_seconds = ?1 WHERE id = ?2",
+            params![target, id],
+        )?;
+        let session = load_session(&transaction, id)?;
+        transaction.commit()?;
+        Ok(session)
+    }
+
     /// Resumes an existing focus round without changing its identity or timer
     /// target. Legacy rounds without a task use the same atomic switching policy
     /// as task focus: pause other running focus and finish all unfinished rest.

@@ -815,3 +815,183 @@ fn archived_tags_allow_existing_rounds_to_resume_but_reject_new_rounds() {
         assert_eq!(previous.elapsed_at(200), 40);
     }
 }
+
+#[test]
+fn target_edits_preserve_running_and_paused_rounds_and_survive_restart() {
+    for paused in [false, true] {
+        let (directory, mut store) = database();
+        let task = store.create_task("Adjust duration", 1, 100).unwrap();
+        let original = store.start_task(task.id, 100, Some(1500)).unwrap();
+        if paused {
+            store.pause(original.id, 130).unwrap();
+        }
+        let other = store.start("Other focus", 1, 140).unwrap();
+        let before = store
+            .active_sessions()
+            .unwrap()
+            .into_iter()
+            .find(|session| session.id == original.id)
+            .unwrap();
+        let stats_before = store.stats(0, 1000, 160).unwrap();
+        let tasks_before = store.tasks(160).unwrap();
+        for target in [Some(2700), Some(600), None, Some(900)] {
+            let updated = store.set_session_target(original.id, target, 160).unwrap();
+            let mut expected = before.clone();
+            expected.target_seconds = target;
+            assert_eq!(updated, expected);
+            assert_eq!(store.stats(0, 1000, 160).unwrap(), stats_before);
+            assert_eq!(store.tasks(160).unwrap(), tasks_before);
+            assert_eq!(
+                store
+                    .active_sessions()
+                    .unwrap()
+                    .into_iter()
+                    .find(|session| session.id == other.id)
+                    .unwrap(),
+                other
+            );
+        }
+        drop(store);
+        let store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let mut expected = before;
+        expected.target_seconds = Some(900);
+        assert_eq!(
+            store
+                .active_sessions()
+                .unwrap()
+                .into_iter()
+                .find(|session| session.id == original.id)
+                .unwrap(),
+            expected
+        );
+    }
+}
+
+#[test]
+fn edited_target_finishes_at_the_new_deadline_without_counting_pauses() {
+    let (_directory, mut store) = database();
+    let task = store.create_task("Shorter round", 1, 100).unwrap();
+    let session = store.start_task(task.id, 100, Some(1500)).unwrap();
+    store.pause(session.id, 200).unwrap();
+    store.resume_focus(session.id, 300).unwrap();
+    let adjusted = store
+        .set_session_target(session.id, Some(600), 400)
+        .unwrap();
+    assert_eq!(adjusted.elapsed_at(400), 200);
+    assert_eq!(adjusted.target_seconds, Some(600));
+    let finished = store.finish_exact_target(session.id, 2000).unwrap();
+    assert_eq!(finished.elapsed_at(2000), 600);
+    assert_eq!(finished.finished_at, Some(800));
+    assert_eq!(finished.paused_at(2000), 100);
+    assert_eq!(store.stats(0, 3000, 2000).unwrap().focus_seconds, 600);
+}
+
+#[test]
+fn invalid_target_edits_leave_elapsed_time_and_target_unchanged() {
+    for paused in [false, true] {
+        let (_directory, mut store) = database();
+        let session = store.start_timed("Keep elapsed", 1, 100, 1500).unwrap();
+        if paused {
+            store.pause(session.id, 300).unwrap();
+        }
+        let before = store.active_sessions().unwrap();
+        for target in [-1, 0, 59, 60, 200, MAX_TARGET_SECONDS + 1] {
+            assert!(matches!(
+                store.set_session_target(session.id, Some(target), 300),
+                Err(Error::Validation(_))
+            ));
+            assert_eq!(store.active_sessions().unwrap(), before);
+        }
+        let adjusted = store
+            .set_session_target(session.id, Some(201), 300)
+            .unwrap();
+        assert_eq!(adjusted.elapsed_at(300), 200);
+        assert_eq!(adjusted.target_seconds, Some(201));
+    }
+}
+
+#[test]
+fn target_edits_reject_expired_rounds_instead_of_resurrecting_them() {
+    for paused in [false, true] {
+        let (_directory, mut store) = database();
+        let session = store.start_timed("Expired round", 1, 100, 60).unwrap();
+        if paused {
+            store.pause(session.id, 170).unwrap();
+        }
+        let before = store.active_sessions().unwrap();
+        for target in [Some(600), None] {
+            assert!(matches!(
+                store.set_session_target(session.id, target, 170),
+                Err(Error::InvalidTransition)
+            ));
+            assert_eq!(store.active_sessions().unwrap(), before);
+        }
+        let finished = store.finish_exact_target(session.id, 170).unwrap();
+        assert_eq!(finished.elapsed_at(170), 60);
+        assert_eq!(finished.finished_at, Some(160));
+    }
+}
+
+#[test]
+fn target_edits_reject_rest_finished_missing_and_backwards_time() {
+    let (_directory, mut store) = database();
+    let focus = store.start_timed("Focus", 1, 100, 1500).unwrap();
+    let rest = store.start_timed("Rest", 4, 100, 300).unwrap();
+    let before = store.active_sessions().unwrap();
+    for (id, now) in [(focus.id, 99), (rest.id, 120)] {
+        assert!(matches!(
+            store.set_session_target(id, Some(600), now),
+            Err(Error::InvalidTransition)
+        ));
+        assert_eq!(store.active_sessions().unwrap(), before);
+    }
+    assert!(matches!(
+        store.set_session_target(i64::MAX, Some(600), 120),
+        Err(Error::NotFound)
+    ));
+    store.pause(focus.id, 130).unwrap();
+    let before = store.active_sessions().unwrap();
+    assert!(matches!(
+        store.set_session_target(focus.id, Some(600), 129),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(store.active_sessions().unwrap(), before);
+    let finished = store.finish(focus.id, 140).unwrap();
+    assert!(matches!(
+        store.set_session_target(focus.id, Some(600), 150),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(store.sessions().unwrap(), vec![finished]);
+}
+
+#[test]
+fn failed_target_write_preserves_the_round_and_all_other_records() {
+    let (_directory, mut store) = database();
+    let session = store.start_timed("Keep round", 1, 100, 1500).unwrap();
+    store.pause(session.id, 120).unwrap();
+    let other = store.start("Other focus", 1, 130).unwrap();
+    let before = store.active_sessions().unwrap();
+    store
+        .connection
+        .execute_batch(
+            "CREATE TRIGGER reject_target AFTER UPDATE OF target_seconds ON sessions
+             BEGIN SELECT RAISE(ABORT, 'test rejection'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.set_session_target(session.id, Some(600), 140),
+        Err(Error::Database(_))
+    ));
+    assert_eq!(store.active_sessions().unwrap(), before);
+    store
+        .connection
+        .execute_batch("DROP TRIGGER reject_target")
+        .unwrap();
+    let adjusted = store
+        .set_session_target(session.id, Some(600), 140)
+        .unwrap();
+    assert!(adjusted.is_paused());
+    assert_eq!(adjusted.elapsed_at(140), 20);
+    assert_eq!(adjusted.target_seconds, Some(600));
+    assert!(store.active_sessions().unwrap().contains(&other));
+}

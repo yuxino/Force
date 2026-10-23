@@ -1424,7 +1424,7 @@ fn headless_ui_completing_an_inactive_task_clears_its_form_without_a_draft_promp
 }
 
 #[gpui::test]
-fn headless_ui_initial_task_draft_is_protected_before_new_selection_and_global_rest(
+fn headless_ui_repeated_new_preserves_draft_before_selection_and_global_rest(
     cx: &mut TestAppContext,
 ) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
@@ -1441,12 +1441,20 @@ fn headless_ui_initial_task_draft_is_protected_before_new_selection_and_global_r
     });
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
-    manager.click("new-task");
-    assert!(manager.cx.has_pending_prompt());
-    manager.cx.simulate_prompt_answer("取消");
-    manager.cx.run_until_parked();
+    assert!(manager.cx.debug_bounds("new-task").is_none());
+    manager.click("duration-custom");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.timer_input
+            .update(cx, |input, cx| input.set_value("37", window, cx));
+        view.new_task(window, cx);
+        view.new_task(window, cx);
         assert_eq!(view.task_input.read(cx).value(), "Initial draft");
+        assert_eq!(view.timer_input.read(cx).value(), "37");
+        assert!(view.custom_duration && view.countdown);
+        assert!(view.task_input.read(cx).focus_handle(cx).is_focused(window));
+    });
+    assert!(!manager.cx.has_pending_prompt());
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.start_global_break(window, cx);
     });
     assert!(manager.cx.has_pending_prompt());
@@ -1463,6 +1471,331 @@ fn headless_ui_initial_task_draft_is_protected_before_new_selection_and_global_r
         assert_eq!(view.tasks.len(), 2);
         assert!(view.tasks.iter().any(|task| task.title == "Initial draft"));
         assert!(view.active.is_empty());
+    });
+}
+
+#[gpui::test]
+fn headless_ui_custom_timer_starts_with_typed_minutes_at_default_and_minimum_size(
+    cx: &mut TestAppContext,
+) {
+    for (width, height, minutes) in [(1040., 780., 37), (780., 620., 1), (780., 620., 1_440)] {
+        let mut manager = ManagerHarness::new(cx, width, height);
+        assert!(manager.cx.debug_bounds("new-task").is_none());
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.task_input.update(cx, |input, cx| {
+                input.set_value("Custom duration", window, cx)
+            });
+        });
+        manager.click("duration-custom");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert_eq!(view.timer_input.read(cx).value(), "25");
+            view.timer_input.update(cx, |input, cx| {
+                input.set_value("", window, cx);
+                input.focus(window, cx);
+            });
+        });
+        manager.cx.simulate_input(&minutes.to_string());
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        let operation = manager.bounds("focus-operation");
+        for selector in [
+            "duration-25",
+            "duration-45",
+            "duration-60",
+            "duration-0",
+            "duration-custom",
+            "duration-input",
+            "start-focus",
+        ] {
+            assert_horizontally_inside(manager.bounds(selector), operation);
+        }
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.can_start_task(cx));
+            assert!(view.timer_duration_error(cx).is_none());
+        });
+        if minutes == 37 {
+            manager.click("start-focus");
+        } else {
+            manager.cx.simulate_keystrokes("enter");
+            manager.cx.run_until_parked();
+        }
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.active.len(), 1);
+            let session = &view.active[0];
+            assert_eq!(session.title, "Custom duration");
+            assert_eq!(session.target_seconds, Some(i64::from(minutes) * 60));
+            assert!(session.is_running());
+            assert_eq!(
+                view.store.as_ref().unwrap().active_sessions().unwrap(),
+                view.active
+            );
+        });
+        manager.bounds("new-task");
+    }
+}
+
+#[gpui::test]
+fn headless_ui_invalid_custom_minutes_block_start_and_presets_restore_validity(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.task_input.update(cx, |input, cx| {
+            input.set_value("Validated duration", window, cx)
+        });
+    });
+    for invalid in ["0", "1441", "", "minutes"] {
+        manager.click("duration-custom");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.timer_input
+                .update(cx, |input, cx| input.set_value(invalid, window, cx));
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.bounds("timer-duration-error");
+        manager.click("start-focus");
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.timer_input.update(cx, |_, cx| {
+                cx.emit(gpui_component::input::InputEvent::PressEnter { secondary: false });
+            });
+            view.task_input.update(cx, |_, cx| {
+                cx.emit(gpui_component::input::InputEvent::PressEnter { secondary: false });
+            });
+        });
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(!view.can_start_task(cx));
+            assert!(view.active.is_empty());
+            assert!(
+                view.store
+                    .as_ref()
+                    .unwrap()
+                    .tasks(view.now)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(view.timer_input.read(cx).value(), invalid);
+        });
+        manager.click("duration-45");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.can_start_task(cx));
+            assert!(view.countdown);
+            assert!(!view.custom_duration);
+            assert!(view.timer_duration_error(cx).is_none());
+            assert_eq!(view.timer_minutes, 45);
+        });
+        manager.click("duration-custom");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert_eq!(view.timer_input.read(cx).value(), "45");
+            view.timer_input
+                .update(cx, |input, cx| input.set_value(invalid, window, cx));
+        });
+        manager.click("duration-0");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(!view.countdown);
+            assert!(view.can_start_task(cx));
+            assert!(view.timer_duration_error(cx).is_none());
+        });
+    }
+    manager.click("start-focus");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.active.len(), 1);
+        assert_eq!(view.active[0].target_seconds, None);
+    });
+}
+
+#[gpui::test]
+fn headless_ui_edit_duration_preserves_running_and_paused_sessions_and_intervals(
+    cx: &mut TestAppContext,
+) {
+    for (target, paused, width, height) in [
+        (Some(1_500), false, 1040., 780.),
+        (Some(1_500), true, 780., 620.),
+        (None, false, 780., 620.),
+        (None, true, 1040., 780.),
+    ] {
+        let mut manager = ManagerHarness::new(cx, width, height);
+        let original = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let now = view.now;
+            let store = view.store.as_mut().unwrap();
+            let session = store
+                .create_and_start_task("Editable duration", 1, now - 180, target)
+                .unwrap();
+            if paused {
+                store.pause(session.id, now - 60).unwrap();
+            }
+            view.refresh(cx);
+            view.select_session(session.id, window, cx);
+            view.active[0].clone()
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.click("edit-duration");
+        let operation = manager.bounds("focus-operation");
+        for selector in ["session-duration-input", "save-duration", "cancel-duration"] {
+            assert_horizontally_inside(manager.bounds(selector), operation);
+        }
+        for invalid in ["0", "1441", "", "minutes", "1"] {
+            manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                view.duration_input
+                    .update(cx, |input, cx| input.set_value(invalid, window, cx));
+            });
+            manager.cx.update(|window, _| window.refresh());
+            manager.cx.run_until_parked();
+            assert_horizontally_inside(manager.bounds("duration-error"), operation);
+            manager.click("save-duration");
+            manager.view.update(&mut manager.cx, |view, cx| {
+                view.duration_input.update(cx, |_, cx| {
+                    cx.emit(gpui_component::input::InputEvent::PressEnter { secondary: false });
+                });
+            });
+            manager.cx.run_until_parked();
+            manager.view.read_with(&manager.cx, |view, cx| {
+                assert!(!view.can_save_duration(cx));
+                assert_eq!(view.editing_duration, Some(original.id));
+                assert_eq!(view.active, vec![original.clone()]);
+                assert_eq!(
+                    view.store.as_ref().unwrap().active_sessions().unwrap(),
+                    vec![original.clone()]
+                );
+            });
+        }
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.duration_input.update(cx, |input, cx| {
+                input.set_value("37", window, cx);
+                input.focus(window, cx);
+            });
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        if target.is_some() {
+            manager.click("save-duration");
+        } else {
+            manager.cx.simulate_keystrokes("enter");
+            manager.cx.run_until_parked();
+        }
+        let mut expected = original;
+        expected.target_seconds = Some(37 * 60);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(view.editing_duration.is_none());
+            assert_eq!(view.active, vec![expected.clone()]);
+            assert_eq!(
+                view.store.as_ref().unwrap().active_sessions().unwrap(),
+                vec![expected.clone()]
+            );
+            assert_eq!(view.active[0].is_paused(), paused);
+        });
+        manager.bounds("edit-duration");
+    }
+}
+
+#[gpui::test]
+fn headless_ui_cancelling_or_leaving_duration_edit_preserves_the_saved_target(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let original = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let store = view.store.as_mut().unwrap();
+        let session = store
+            .create_and_start_task("First task", 1, view.now - 120, Some(1_500))
+            .unwrap();
+        store.create_task("Second task", 1, view.now).unwrap();
+        view.refresh(cx);
+        view.select_session(session.id, window, cx);
+        session
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("edit-duration");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.duration_input
+            .update(cx, |input, cx| input.set_value("37", window, cx));
+        view.hide_manager(window, cx);
+        assert!(view.compact);
+        assert_eq!(view.editing_duration, Some(original.id));
+        assert_eq!(view.duration_input.read(cx).value(), "37");
+        view.show_manager(window, cx);
+        assert_eq!(view.editing_duration, Some(original.id));
+        assert_eq!(view.duration_input.read(cx).value(), "37");
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.bounds("session-duration-input");
+    manager.click("cancel-duration");
+    for destination in ["cancel-duration", "task-row-2", "records-tab", "new-task"] {
+        manager.click("edit-duration");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.duration_input
+                .update(cx, |input, cx| input.set_value("37", window, cx));
+        });
+        manager.click(destination);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(view.editing_duration.is_none());
+            assert_eq!(
+                view.store.as_ref().unwrap().active_sessions().unwrap(),
+                vec![original.clone()]
+            );
+        });
+        assert!(!manager.cx.has_pending_prompt());
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.select_session(original.id, window, cx);
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn headless_ui_expired_session_closes_duration_editor_without_changing_its_target(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let original = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let session = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_and_start_task("Expiring task", 1, view.now - 10, Some(60))
+            .unwrap();
+        view.refresh(cx);
+        view.select_session(session.id, window, cx);
+        session
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("edit-duration");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.duration_input
+            .update(cx, |input, cx| input.set_value("37", window, cx));
+        // Simulate the durable completion boundary without waiting on wall time.
+        let expired = view
+            .store
+            .as_mut()
+            .unwrap()
+            .finish_exact_target(original.id, original.started_at + 60)
+            .unwrap();
+        assert_eq!(expired.target_seconds, Some(60));
+        assert_eq!(expired.elapsed_at(view.now), 60);
+        view.refresh(cx);
+        assert!(view.editing_duration.is_none());
+        assert!(!view.can_save_duration(cx));
+        view.save_duration(window, cx);
+        assert!(view.active.is_empty());
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, _| {
+        let session = view
+            .store
+            .as_ref()
+            .unwrap()
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .find(|session| session.id == original.id)
+            .unwrap();
+        assert_eq!(session.target_seconds, Some(60));
+        assert_eq!(session.elapsed_at(view.now), 60);
     });
 }
 
