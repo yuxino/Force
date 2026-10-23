@@ -59,7 +59,9 @@ Use spacing between columns without a full-height dividing line.
   single-line labels against final bounds with fresh text runs; GPUI 0.2.2
   built-in ellipsis can keep shortened runs from an earlier width measurement.
   Complete titles remain available in tooltips; two-line operation headings wrap.
-- The sidebar contains the single visible 新建 entry. Selected inactive tasks
+- The sidebar contains the single visible 新建 entry when a saved task, timer or
+  completion is selected. Hide it while already preparing a new task; repeated
+  menu/shortcut requests focus that same draft without clearing its fields. Selected inactive tasks
   can be removed from the list while retaining their records. Ending a round
   remains distinct from completing its task.
 - Selection synchronizes task, tag and timing mode and resets the left operation

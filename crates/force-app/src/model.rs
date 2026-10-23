@@ -75,6 +75,10 @@ pub(crate) struct ForceView {
     pub(crate) task_input: Entity<InputState>,
     pub(crate) tag_input: Entity<InputState>,
     pub(crate) goal_input: Entity<InputState>,
+    pub(crate) timer_input: Entity<InputState>,
+    pub(crate) custom_duration: bool,
+    pub(crate) duration_input: Entity<InputState>,
+    pub(crate) editing_duration: Option<i64>,
     pub(crate) record_search: Entity<InputState>,
     pub(crate) record_help_open: bool,
     pub(crate) record_details: Option<i64>,
@@ -103,6 +107,8 @@ impl ForceView {
         let task_input = cx.new(|cx| InputState::new(window, cx).placeholder("任务名称"));
         let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
         let goal_input = cx.new(|cx| InputState::new(window, cx).placeholder("每日目标（分钟）"));
+        let timer_input = cx.new(|cx| InputState::new(window, cx).default_value("25"));
+        let duration_input = cx.new(|cx| InputState::new(window, cx));
         let record_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索任务或标签"));
         let tag_picker = cx.new(TagPicker::new);
         let tag_picker_subscription =
@@ -165,6 +171,38 @@ impl ForceView {
                     this.save_goal(cx);
                 }
             });
+        let timer_subscription = cx.subscribe_in(
+            &timer_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { secondary: false })
+                    && !this.compact
+                    && this.page == Page::Focus
+                    && this.preparing
+                    && this.countdown
+                    && this.custom_duration
+                {
+                    this.start(window, cx);
+                }
+            },
+        );
+        let duration_subscription = cx.subscribe_in(
+            &duration_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { secondary: false })
+                    && !this.compact
+                    && this.page == Page::Focus
+                    && this.editing_duration.is_some()
+                {
+                    this.save_duration(window, cx);
+                }
+            },
+        );
         let search_subscription =
             cx.subscribe(&record_search, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -217,6 +255,10 @@ impl ForceView {
             task_input,
             tag_input,
             goal_input,
+            timer_input,
+            custom_duration: false,
+            duration_input,
+            editing_duration: None,
             record_search,
             record_help_open: false,
             record_details: None,
@@ -241,6 +283,8 @@ impl ForceView {
                 subscription,
                 tag_subscription,
                 goal_subscription,
+                timer_subscription,
+                duration_subscription,
                 search_subscription,
                 tag_picker_subscription,
                 quit_subscription,
@@ -443,6 +487,13 @@ impl ForceView {
                 self.sound_enabled = sound_enabled;
                 self.active = active;
                 self.history = history;
+                if self.editing_duration.is_some_and(|id| {
+                    self.preparing
+                        || self.selected_session != Some(id)
+                        || !self.active.iter().any(|session| session.id == id)
+                }) {
+                    self.editing_duration = None;
+                }
                 if self
                     .record_details
                     .is_some_and(|id| !self.history.iter().any(|record| record.id == id))
@@ -613,6 +664,124 @@ impl ForceView {
             && self.store.is_some()
             && self.task_form_error(cx).is_none()
             && !self.task_has_unsaved_changes(cx)
+            && self.timer_duration_error(cx).is_none()
+    }
+
+    pub(crate) fn is_new_task_form(&self) -> bool {
+        self.preparing && self.selected_task.is_none() && self.completed.is_none()
+    }
+
+    pub(crate) fn timer_duration_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        (self.countdown
+            && self.custom_duration
+            && parse_goal_draft(self.timer_input.read(cx).value().as_ref()).is_none())
+        .then_some("请输入 1–1440 之间的整数分钟数。")
+    }
+
+    pub(crate) fn choose_custom_duration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.custom_duration {
+            let value = self.timer_minutes.to_string();
+            self.timer_input
+                .update(cx, |input, cx| input.set_value(value, window, cx));
+        }
+        self.countdown = true;
+        self.custom_duration = true;
+        self.timer_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn begin_duration_edit(
+        &mut self,
+        id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.preparing || self.selected_session != Some(id) {
+            return;
+        }
+        let Some(session) = self
+            .active
+            .iter()
+            .find(|session| session.id == id && session.tag_kind == TagKind::Focus)
+        else {
+            return;
+        };
+        let elapsed_minutes = session.elapsed_at(Local::now().timestamp()) / 60 + 1;
+        let minutes = session
+            .target_seconds
+            .map_or(25.max(elapsed_minutes), |target| (target + 59) / 60);
+        self.editing_duration = Some(id);
+        self.duration_input.update(cx, |input, cx| {
+            input.set_value(minutes.to_string(), window, cx);
+            input.focus(window, cx);
+        });
+        cx.notify();
+    }
+
+    pub(crate) fn duration_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        let minutes = parse_goal_draft(self.duration_input.read(cx).value().as_ref());
+        let Some(minutes) = minutes else {
+            return Some("请输入 1–1440 之间的整数分钟数。");
+        };
+        let session = self
+            .active
+            .iter()
+            .find(|session| Some(session.id) == self.editing_duration);
+        if session.is_some_and(|session| i64::from(minutes) * 60 <= session.elapsed_at(self.now)) {
+            return Some("总时长须大于已用时间。");
+        }
+        None
+    }
+
+    pub(crate) fn can_save_duration(&self, cx: &gpui::App) -> bool {
+        !self.storage_failed
+            && self.duration_error(cx).is_none()
+            && self.active.iter().any(|session| {
+                Some(session.id) == self.editing_duration
+                    && Some(session.id) == self.selected_session
+                    && session.target_seconds
+                        != parse_goal_draft(self.duration_input.read(cx).value().as_ref())
+                            .map(|minutes| i64::from(minutes) * 60)
+            })
+    }
+
+    pub(crate) fn cancel_duration_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.editing_duration = None;
+        window.focus(&self.focus_handle);
+        cx.notify();
+    }
+
+    pub(crate) fn save_duration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.can_save_duration(cx) {
+            return;
+        }
+        let Some(id) = self.editing_duration else {
+            return;
+        };
+        let Some(minutes) = parse_goal_draft(self.duration_input.read(cx).value().as_ref()) else {
+            return;
+        };
+        let target = Some(i64::from(minutes) * 60);
+        let mut updated = None;
+        if self.write(
+            |store| {
+                updated = Some(store.set_session_target(id, target, Local::now().timestamp())?);
+                Ok(())
+            },
+            cx,
+        ) && let Some(session) = updated
+        {
+            self.timer_minutes = minutes;
+            self.countdown = true;
+            // Editing another paused task must not replace the context of an
+            // ongoing rest or a different running focus task.
+            if self.return_task == session.task_id {
+                self.return_target_seconds = session.target_seconds;
+                self.remember_return_context(cx);
+            }
+            self.cancel_duration_edit(window, cx);
+        }
     }
 
     pub(crate) fn reset_task_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -734,6 +903,14 @@ impl ForceView {
             self.notify(message, cx);
             return;
         }
+        if let Some(message) = self.timer_duration_error(cx) {
+            self.notify(message, cx);
+            return;
+        }
+        if self.countdown && self.custom_duration {
+            self.timer_minutes =
+                parse_goal_draft(self.timer_input.read(cx).value().as_ref()).unwrap_or(25);
+        }
         let title = self.task_input.read(cx).value().trim().to_owned();
         let tag = self.selected_tag;
         let selected = self.selected_task;
@@ -763,6 +940,10 @@ impl ForceView {
     }
 
     fn apply_session_selection(&mut self, session: &Session) {
+        if self.editing_duration != Some(session.id) {
+            self.editing_duration = None;
+        }
+        self.custom_duration = false;
         self.selected_session = Some(session.id);
         self.selected_task = session.task_id;
         self.selected_tag = session.tag_id;
@@ -895,6 +1076,7 @@ impl ForceView {
             self.notify("这件事已变更，请刷新后重试。", cx);
             return;
         };
+        self.editing_duration = None;
         self.selected_task = Some(id);
         self.selected_tag = task.tag_id;
         if let Some(session) = self
@@ -908,6 +1090,10 @@ impl ForceView {
         } else {
             self.selected_session = None;
             self.preparing = true;
+            self.custom_duration = self.countdown && ![25, 45, 60].contains(&self.timer_minutes);
+            let value = self.timer_minutes.to_string();
+            self.timer_input
+                .update(cx, |input, cx| input.set_value(value, window, cx));
         }
         self.reset_focus_scroll();
         self.completed = None;
@@ -919,6 +1105,13 @@ impl ForceView {
     }
 
     pub(crate) fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.is_new_task_form() {
+            self.page = Page::Focus;
+            self.show_manager(window, cx);
+            self.task_input
+                .update(cx, |input, cx| input.focus(window, cx));
+            return;
+        }
         if self.confirm_task_changes(TaskDestination::New, window, cx) {
             return;
         }
@@ -931,6 +1124,8 @@ impl ForceView {
         self.page = Page::Focus;
         self.countdown = true;
         self.timer_minutes = 25;
+        self.custom_duration = false;
+        self.editing_duration = None;
         if !self
             .tags
             .iter()
@@ -1484,6 +1679,7 @@ impl ForceView {
     pub(crate) fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus_handle);
         self.page = page;
+        self.editing_duration = None;
         self.toast = None;
         self.refresh(cx);
         self.show_manager(window, cx);
@@ -1991,6 +2187,7 @@ fn validation_message(message: &str) -> &'static str {
         "Timer duration must be between 1 minute and 24 hours" => {
             "倒计时时长应在 1–1440 分钟之间。"
         }
+        "Timer duration must be longer than elapsed time" => "总时长须大于已用时间。",
         _ => "输入内容无效，请检查后重试。",
     }
 }

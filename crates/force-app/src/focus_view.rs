@@ -262,21 +262,31 @@ impl ForceView {
                     .gap_2()
                     .child(field_label("计时方式"))
                     .child(
-                        div().flex().gap(px(4.)).children(
-                            [
-                                (25, "25 分钟"),
-                                (45, "45 分钟"),
-                                (60, "60 分钟"),
-                                (0, "不限时"),
-                            ]
-                            .into_iter()
-                            .map(|(minutes, label)| {
-                                let selected = if minutes == 0 {
-                                    !self.countdown
-                                } else {
-                                    self.countdown && self.timer_minutes == minutes
-                                };
-                                underline_button(("duration", minutes as u64), selected, true, cx)
+                        div()
+                            .flex()
+                            .gap(px(4.))
+                            .children(
+                                [
+                                    (25, "25 分钟"),
+                                    (45, "45 分钟"),
+                                    (60, "60 分钟"),
+                                    (0, "不限时"),
+                                ]
+                                .into_iter()
+                                .map(|(minutes, label)| {
+                                    let selected = if minutes == 0 {
+                                        !self.countdown
+                                    } else {
+                                        self.countdown
+                                            && !self.custom_duration
+                                            && self.timer_minutes == minutes
+                                    };
+                                    underline_button(
+                                        ("duration", minutes as u64),
+                                        selected,
+                                        true,
+                                        cx,
+                                    )
                                     .debug_selector(move || format!("duration-{minutes}"))
                                     .tooltip(if minutes == 0 {
                                         "从零开始累计，手动结束计时".to_owned()
@@ -289,16 +299,70 @@ impl ForceView {
                                     .px(px(8.))
                                     .child(control_label(label, if selected { INK } else { MUTED }))
                                     .when(selected, |button| button.font_weight(FontWeight::MEDIUM))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.countdown = minutes != 0;
-                                        if minutes != 0 {
-                                            this.timer_minutes = minutes;
-                                        }
-                                        cx.notify();
-                                    }))
-                            }),
-                        ),
-                    ),
+                                    .on_click(cx.listener(
+                                        move |this, _, _, cx| {
+                                            this.countdown = minutes != 0;
+                                            this.custom_duration = false;
+                                            if minutes != 0 {
+                                                this.timer_minutes = minutes;
+                                            }
+                                            cx.notify();
+                                        },
+                                    ))
+                                }),
+                            )
+                            .child(
+                                underline_button(
+                                    "duration-custom",
+                                    self.countdown && self.custom_duration,
+                                    true,
+                                    cx,
+                                )
+                                .debug_selector(|| "duration-custom".into())
+                                .h(px(40.))
+                                .flex_1()
+                                .min_w_0()
+                                .px(px(8.))
+                                .child(control_label(
+                                    "自定义",
+                                    if self.countdown && self.custom_duration {
+                                        INK
+                                    } else {
+                                        MUTED
+                                    },
+                                ))
+                                .on_click(cx.listener(
+                                    |this, _, window, cx| this.choose_custom_duration(window, cx),
+                                )),
+                            ),
+                    )
+                    .when(self.countdown && self.custom_duration, |body| {
+                        body.child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .gap(px(8.))
+                                .child(
+                                    div()
+                                        .debug_selector(|| "duration-input".into())
+                                        .w(px(96.))
+                                        .child(gpui::Styled::h(field(&self.timer_input), px(40.))),
+                                )
+                                .child(control_label("分钟", MUTED)),
+                        )
+                        .when_some(
+                            self.timer_duration_error(cx),
+                            |body, message| {
+                                body.child(
+                                    div()
+                                        .debug_selector(|| "timer-duration-error".into())
+                                        .text_size(px(14.))
+                                        .text_color(rgb(DESTRUCTIVE))
+                                        .child(message),
+                                )
+                            },
+                        )
+                    }),
             )
             .child(
                 div()
@@ -414,16 +478,20 @@ impl ForceView {
                     .items_center()
                     .justify_between()
                     .child(section_heading("任务"))
-                    .child(
-                        button("new-task")
-                            .debug_selector(|| "new-task".into())
-                            .ghost()
-                            .h(px(32.))
-                            .px(px(8.))
-                            .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), INK))
-                            .child(control_label("新建", INK))
-                            .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx))),
-                    ),
+                    .when(!self.is_new_task_form(), |heading| {
+                        heading.child(
+                            button("new-task")
+                                .debug_selector(|| "new-task".into())
+                                .ghost()
+                                .h(px(32.))
+                                .px(px(8.))
+                                .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), INK))
+                                .child(control_label("新建", INK))
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.new_task(window, cx)),
+                                ),
+                        )
+                    }),
             )
             .child(
                 div()
@@ -671,11 +739,34 @@ impl ForceView {
                     ))
                     .child(
                         div()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .gap(px(8.))
                             .text_size(px(13.))
                             .text_color(rgb(MUTED))
-                            .child(caption),
+                            .child(caption)
+                            .when(!rest && self.editing_duration != Some(session.id), |row| {
+                                let id = session.id;
+                                row.child(
+                                    button("edit-duration")
+                                        .debug_selector(|| "edit-duration".into())
+                                        .ghost()
+                                        .h(px(24.))
+                                        .px(px(8.))
+                                        .flex_shrink_0()
+                                        .child(control_label("调整时长", MUTED))
+                                        .tooltip("调整本次计时的总时长，保留已用时间")
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.begin_duration_edit(id, window, cx)
+                                        })),
+                                )
+                            }),
                     ),
             )
+            .when(!rest && self.editing_duration == Some(session.id), |body| {
+                body.child(self.session_duration_control(session, cx))
+            })
             .when_some(
                 session.target_seconds.filter(|target| *target > 0),
                 |body, target| body.child(countdown_progress(elapsed, target)),
@@ -761,6 +852,61 @@ impl ForceView {
                         .child(control_label("休息 5 分钟", MUTED))
                         .on_click(cx.listener(|this, _, window, cx| this.start_break(window, cx))),
                 )
+            })
+    }
+
+    fn session_duration_control(&self, session: &Session, cx: &mut Context<Self>) -> Div {
+        let id = session.id;
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(8.))
+            .when(self.editing_duration == Some(id), |body| {
+                body.child(
+                    div()
+                        .debug_selector(|| "session-duration-editor".into())
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap(px(8.))
+                        .child(control_label("总时长", INK))
+                        .child(
+                            div()
+                                .debug_selector(|| "session-duration-input".into())
+                                .w(px(88.))
+                                .child(gpui::Styled::h(field(&self.duration_input), px(40.))),
+                        )
+                        .child(control_label("分钟", MUTED))
+                        .child(
+                            button("save-duration")
+                                .debug_selector(|| "save-duration".into())
+                                .h(px(40.))
+                                .child(control_label("保存", INK))
+                                .unavailable(!self.can_save_duration(cx))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.save_duration(window, cx)
+                                })),
+                        )
+                        .child(
+                            button("cancel-duration")
+                                .debug_selector(|| "cancel-duration".into())
+                                .ghost()
+                                .h(px(40.))
+                                .child(control_label("取消", MUTED))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.cancel_duration_edit(window, cx)
+                                })),
+                        ),
+                )
+                .when_some(self.duration_error(cx), |body, message| {
+                    body.child(
+                        div()
+                            .debug_selector(|| "duration-error".into())
+                            .text_size(px(14.))
+                            .text_color(rgb(DESTRUCTIVE))
+                            .child(message),
+                    )
+                })
             })
     }
 
