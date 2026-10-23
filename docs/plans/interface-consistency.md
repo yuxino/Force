@@ -38,8 +38,8 @@ Use spacing between columns without a full-height dividing line.
   three states, aligned with the heading above. Setup keeps
   task, duration, tag and start
   together. Running uses a left-aligned tabular timer up to 104 points (80 in
-  compact windows), fitted to the final column width without losing hours, visible 暂停计时 / 继续计时 and
-  结束本次计时 actions, and a secondary rest action. Countdown uses a restrained
+  compact windows), fitted to the final column width without losing hours, visible 暂停 / 继续 and
+  结束计时 actions, and a secondary rest action. Countdown uses a restrained
   scale based on elapsed/target time; an early finish keeps its actual fraction,
   and unlimited sessions show no invented target. Rest has only a primary
   继续专注 / 结束休息 action and secondary pause/resume. Returning to focus ends

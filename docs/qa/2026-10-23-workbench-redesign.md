@@ -2,7 +2,8 @@
 
 Application revision: `b20d6db`, based on `70e94ef`. This is a substantial design
 change on `feat/force-workbench-redesign`; merging main and replacing the formal
-app await the owner's explicit approval.
+app awaited the owner's explicit approval at that revision. The approved delivery
+follow-up below supersedes that pending state.
 
 ## Changes
 
@@ -62,3 +63,31 @@ HTML previews demonstrate the design direction, not exact GPUI raster output or
 all native confirmation dialogs. Native hover, glyphs, automatic scroll targeting,
 input methods and Windows/Linux interactions remain to be checked without
 interrupting the owner's current desktop use. No public release was published.
+
+## Approved delivery and copy follow-up
+
+The owner approved merging and requested less repetitive interface text.
+Application revision `7214aee` shortens the primary actions and timer captions,
+removes the duplicate focus-status line already expressed by record time ranges,
+and keeps rest state, export scope, errors and round/task completion distinct.
+The canonical checks, strict UI Clippy and all 57 feature-enabled application
+tests passed again (114 distinct tests with the default core/process suite).
+[Three-platform CI](https://github.com/yuxino/Force/actions/runs/39953849547)
+passed for that application revision. An independent review found no change to
+model actions, timing or persistence. The updated focus and minimum-size record
+previews were inspected; all twelve design-preview images were refreshed.
+
+[PR #5](https://github.com/yuxino/Force/pull/5) was merged at `a597704`.
+The signed formal bundle was then atomically installed after comparing its
+complete designated requirement with the installed app. Strict signature,
+installed-byte and background version checks passed. Installed SHA-256:
+`5470dfadf2d59a8cb54edade7d368a3e2ee8312c81ff83e1b7fcd5591ae35fdc`.
+The refreshed development bundle SHA-256 is
+`170b6876e071a3e0b86a099a460df10e75c781422a1c4f4282a9bae4e12e5579`.
+
+The active formal process continued without restart. Its previous bundle is
+retained while in use; the earlier unused backup and duplicate formal build were
+removed. Source, data, the current development bundle and reusable build outputs
+remain. No native window was launched, so the native visual/input acceptance
+limits above still apply. The installed version takes effect on the next normal
+restart; no public release was published.
