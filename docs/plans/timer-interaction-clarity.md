@@ -44,3 +44,12 @@ durations. Expanded titles wrap so long names remain readable.
 
 Routine feedback uses one compact transient toast without shifting the workspace.
 Task/goal saves are quiet on success; values and edit actions update in place.
+
+## Failed starts and concurrent edits
+
+Starting an existing task reads its saved title and tag; it must not implicitly
+save an older form snapshot over another instance's edits. Explicit task Save
+remains the metadata-edit action. New-task creation and its first timer round
+share one transaction, including pausing existing focus and ending rest. Any
+failure preserves the draft and previous timers without leaving an empty task.
+Apply the same rule when repeating a legacy round without an associated task.

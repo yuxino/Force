@@ -684,22 +684,10 @@ impl ForceView {
         let target = self.countdown.then_some(i64::from(self.timer_minutes) * 60);
         let now = Local::now().timestamp();
         let mut started = None;
-        let mut task_id = selected;
         let saved = self.write(
             |store| {
-                let id = match selected {
-                    Some(id) => {
-                        store.update_task(id, &title, tag)?;
-                        id
-                    }
-                    None => {
-                        let task = store.create_task(&title, tag, now)?;
-                        task_id = Some(task.id);
-                        task.id
-                    }
-                };
-                started = Some(
-                    match store
+                started = Some(match selected {
+                    Some(id) => match store
                         .active_sessions()?
                         .into_iter()
                         .find(|session| session.task_id == Some(id) && session.is_running())
@@ -707,12 +695,12 @@ impl ForceView {
                         Some(session) => session,
                         None => store.start_task(id, now, target)?,
                     },
-                );
+                    None => store.create_and_start_task(&title, tag, now, target)?,
+                });
                 Ok(())
             },
             cx,
         );
-        self.selected_task = task_id;
         if saved && let Some(session) = started {
             self.accept_started(session, window, cx);
         }
@@ -961,15 +949,15 @@ impl ForceView {
         let mut started = None;
         if self.write(
             |store| {
-                let id = match completed.task_id {
-                    Some(id) => id,
-                    None => {
-                        store
-                            .create_task(&completed.title, completed.tag_id, now)?
-                            .id
-                    }
-                };
-                started = Some(store.start_task(id, now, completed.target_seconds)?);
+                started = Some(match completed.task_id {
+                    Some(id) => store.start_task(id, now, completed.target_seconds)?,
+                    None => store.create_and_start_task(
+                        &completed.title,
+                        completed.tag_id,
+                        now,
+                        completed.target_seconds,
+                    )?,
+                });
                 Ok(())
             },
             cx,

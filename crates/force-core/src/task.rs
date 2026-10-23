@@ -66,24 +66,29 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let tag = available_tag(&transaction, tag_id)?;
-        transaction.execute(
-            "INSERT INTO tasks (title, tag_id, tag_name, tag_kind, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![title, tag.id, tag.name, tag.kind.as_str(), now],
-        )?;
-        let task = Task {
-            id: transaction.last_insert_rowid(),
-            title: title.to_owned(),
-            tag_id,
-            tag_name: tag.name,
-            tag_kind: tag.kind,
-            created_at: now,
-            completed_at: None,
-            total_seconds: 0,
-            session_count: 0,
-        };
+        let task = insert_task(&transaction, title, tag_id, now)?;
         transaction.commit()?;
         Ok(task)
+    }
+
+    /// Creates a saved task and starts its first round atomically. A failed
+    /// start leaves the draft unsaved and all existing timers unchanged.
+    pub fn create_and_start_task(
+        &mut self,
+        title: &str,
+        tag_id: i64,
+        now: i64,
+        target: Option<i64>,
+    ) -> Result<Session> {
+        let title = valid_text(title, 200, "Enter a task title of 1–200 characters")?;
+        validate_task_target(target)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let task = insert_task(&transaction, title, tag_id, now)?;
+        let session = start_task_in_transaction(&transaction, task.id, now, target)?;
+        transaction.commit()?;
+        Ok(session)
     }
 
     /// Edits an unfinished task and its unfinished session. Reopen completed
@@ -177,60 +182,11 @@ impl Store {
     /// target. Starting focus atomically pauses other running focus and ends
     /// all unfinished rest, including paused breaks.
     pub fn start_task(&mut self, id: i64, now: i64, target: Option<i64>) -> Result<Session> {
-        if target.is_some_and(|value| !(MIN_TARGET_SECONDS..=MAX_TARGET_SECONDS).contains(&value)) {
-            return Err(Error::Validation(
-                "Timer duration must be between 1 minute and 24 hours",
-            ));
-        }
+        validate_task_target(target)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let task = task_record(&transaction, id)?;
-        if task.completed_at.is_some() || now < task.created_at {
-            return Err(Error::InvalidTransition);
-        }
-        let tag = available_tag(&transaction, task.tag_id)?;
-        let existing = unfinished_session(&transaction, id)?;
-        if existing
-            .as_ref()
-            .is_some_and(|session| session.is_running() || now < last_boundary(session))
-        {
-            return Err(Error::InvalidTransition);
-        }
-        if tag.kind == TagKind::Focus {
-            let active = load_sessions_in_snapshot(&transaction, "WHERE finished_at IS NULL", [])?;
-            pause_for_focus(
-                &transaction,
-                &active,
-                existing.as_ref().map(|session| session.id),
-                now,
-            )?;
-        }
-        let session_id = if let Some(session) = existing {
-            if session
-                .target_seconds
-                .is_some_and(|value| session.elapsed_at(now) >= value)
-            {
-                return Err(Error::InvalidTransition);
-            }
-            transaction.execute(
-                "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
-                params![session.id, now],
-            )?;
-            session.id
-        } else {
-            transaction.execute(
-                "INSERT INTO sessions (task_id, title, tag_id, tag_name, tag_kind, started_at, target_seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-                params![id, task.title, tag.id, tag.name, tag.kind.as_str(), now, target],
-            )?;
-            let session_id = transaction.last_insert_rowid();
-            transaction.execute(
-                "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
-                params![session_id, now],
-            )?;
-            session_id
-        };
-        let session = load_session(&transaction, session_id)?;
+        let session = start_task_in_transaction(&transaction, id, now, target)?;
         transaction.commit()?;
         Ok(session)
     }
@@ -347,6 +303,88 @@ impl Store {
         transaction.commit()?;
         Ok(session)
     }
+}
+
+fn validate_task_target(target: Option<i64>) -> Result<()> {
+    if target.is_some_and(|value| !(MIN_TARGET_SECONDS..=MAX_TARGET_SECONDS).contains(&value)) {
+        return Err(Error::Validation(
+            "Timer duration must be between 1 minute and 24 hours",
+        ));
+    }
+    Ok(())
+}
+
+fn insert_task(transaction: &Transaction<'_>, title: &str, tag_id: i64, now: i64) -> Result<Task> {
+    let tag = available_tag(transaction, tag_id)?;
+    transaction.execute(
+        "INSERT INTO tasks (title, tag_id, tag_name, tag_kind, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![title, tag.id, tag.name, tag.kind.as_str(), now],
+    )?;
+    Ok(Task {
+        id: transaction.last_insert_rowid(),
+        title: title.to_owned(),
+        tag_id,
+        tag_name: tag.name,
+        tag_kind: tag.kind,
+        created_at: now,
+        completed_at: None,
+        total_seconds: 0,
+        session_count: 0,
+    })
+}
+
+fn start_task_in_transaction(
+    transaction: &Transaction<'_>,
+    id: i64,
+    now: i64,
+    target: Option<i64>,
+) -> Result<Session> {
+    let task = task_record(transaction, id)?;
+    if task.completed_at.is_some() || now < task.created_at {
+        return Err(Error::InvalidTransition);
+    }
+    let tag = available_tag(transaction, task.tag_id)?;
+    let existing = unfinished_session(transaction, id)?;
+    if existing
+        .as_ref()
+        .is_some_and(|session| session.is_running() || now < last_boundary(session))
+    {
+        return Err(Error::InvalidTransition);
+    }
+    if tag.kind == TagKind::Focus {
+        let active = load_sessions_in_snapshot(transaction, "WHERE finished_at IS NULL", [])?;
+        pause_for_focus(
+            transaction,
+            &active,
+            existing.as_ref().map(|session| session.id),
+            now,
+        )?;
+    }
+    let session_id = if let Some(session) = existing {
+        if session
+            .target_seconds
+            .is_some_and(|value| session.elapsed_at(now) >= value)
+        {
+            return Err(Error::InvalidTransition);
+        }
+        transaction.execute(
+            "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
+            params![session.id, now],
+        )?;
+        session.id
+    } else {
+        transaction.execute(
+            "INSERT INTO sessions (task_id, title, tag_id, tag_name, tag_kind, started_at, target_seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![id, task.title, tag.id, tag.name, tag.kind.as_str(), now, target],
+        )?;
+        let session_id = transaction.last_insert_rowid();
+        transaction.execute(
+            "INSERT INTO intervals (session_id, started_at) VALUES (?1, ?2)",
+            params![session_id, now],
+        )?;
+        session_id
+    };
+    load_session(transaction, session_id)
 }
 
 fn pause_for_focus(

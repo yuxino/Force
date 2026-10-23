@@ -127,7 +127,9 @@ A day change or storage refresh reloads the series; never query once per cell.
   errors beside the field. Preserve drafts across navigation. Goal restore uses
   the saved value without a database write. Tag validation covers duplicate names
   across both types, invalid characters and removed edit targets. Scroll the tag
-  form into view when editing or recovering from an empty focus-tag list.
+  form into view when editing or recovering from an empty focus-tag list. Storage
+  retry preserves edited goal text, including invalid drafts; only an untouched
+  field follows the newly loaded saved goal.
 - Escape first closes local editing/details/help, then hides management. Feedback
   uses one compact transient toast without moving the page. Task/goal saves
   are quiet on success; changed controls and values provide confirmation.
@@ -165,3 +167,9 @@ Native acceptance needs the signed app and a real input method, including normal
 key presses after dialogs and reopening. Preserve pre-GPUI AppKit initialization
 and deferred keyboard callbacks. macOS evidence does not accept Windows/Linux
 interaction; Linux minimization/restoration still needs native verification.
+
+Background event/layout acceptance uses temporary data and sends no OS input.
+Unit/headless timer completion stays silent; the normal application retains its
+configured sound. When uninterrupted desktop use is required, do not start or
+activate native preview windows. GPUI 0.2.2 TestPlatform has no native pixel
+renderer, so this path supplies no screenshots or native visual acceptance.

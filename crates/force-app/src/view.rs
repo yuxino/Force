@@ -239,10 +239,12 @@ impl ForceView {
             )
             .child(
                 button("retry-storage")
+                    .debug_selector(|| "retry-storage".into())
                     .child(control_label("重试", INK))
                     .on_click(cx.listener(|this, _, window, cx| {
+                        let preserve_goal_draft = this.goal_has_unsaved_changes(cx);
                         this.open_store(cx);
-                        if !this.storage_failed {
+                        if !this.storage_failed && !preserve_goal_draft {
                             let goal = this.goal.to_string();
                             this.goal_input
                                 .update(cx, |input, cx| input.set_value(goal, window, cx));

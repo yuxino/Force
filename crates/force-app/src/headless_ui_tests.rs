@@ -1182,3 +1182,79 @@ fn headless_ui_initial_task_draft_is_protected_before_new_selection_and_global_r
         assert!(view.active.is_empty());
     });
 }
+
+#[gpui::test]
+fn headless_ui_storage_retry_preserves_goal_drafts_and_loads_an_untouched_goal(
+    cx: &mut TestAppContext,
+) {
+    for draft in [Some("75"), Some("invalid"), None] {
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.click("settings-tab");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            if let Some(draft) = draft {
+                view.goal_input
+                    .update(cx, |input, cx| input.set_value(draft, window, cx));
+            }
+            // A saved value unseen by this window also covers recovery after
+            // startup could not load the goal and left the untouched default.
+            view.store.as_mut().unwrap().set_goal_minutes(90).unwrap();
+            view.store = None;
+            let database = view.data_dir.join("force.sqlite3");
+            let backup = view.data_dir.join("recovery.sqlite3");
+            std::fs::rename(&database, &backup).unwrap();
+            std::fs::write(&database, b"invalid temporary test database").unwrap();
+            view.open_store(cx);
+            assert!(view.storage_failed);
+            assert!(view.store.is_none());
+            assert_eq!(view.goal, 300);
+            std::fs::remove_file(&database).unwrap();
+            std::fs::rename(&backup, &database).unwrap();
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.click("retry-storage");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(!view.storage_failed);
+            assert_eq!(view.goal, 90);
+            assert_eq!(view.goal_input.read(cx).value(), draft.unwrap_or("90"));
+            assert_eq!(view.store.as_ref().unwrap().goal_minutes().unwrap(), 90);
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_starting_a_stale_selected_task_preserves_external_edits(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let task = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_task("Original task", 1, view.now - 100)
+            .unwrap();
+        view.refresh(cx);
+        view.select_task(task.id, window, cx);
+        let mut external = force_core::Store::open(view.data_dir.join("force.sqlite3")).unwrap();
+        external
+            .update_task(task.id, "Updated elsewhere", 2)
+            .unwrap();
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("start-focus");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        let tasks = view.store.as_ref().unwrap().tasks(view.now).unwrap();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].title, "Updated elsewhere");
+        assert_eq!(tasks[0].tag_id, 2);
+        assert_eq!(view.active.len(), 1);
+        let session = &view.active[0];
+        assert!(session.is_running());
+        assert_eq!(session.task_id, Some(tasks[0].id));
+        assert_eq!(session.title, "Updated elsewhere");
+        assert_eq!(session.tag_id, 2);
+        assert_eq!(view.selected_session, Some(session.id));
+        assert_eq!(view.selected_tag, 2);
+        assert_eq!(view.task_input.read(cx).value(), "Updated elsewhere");
+    });
+}

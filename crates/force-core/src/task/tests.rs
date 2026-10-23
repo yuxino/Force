@@ -686,3 +686,68 @@ fn an_unfinished_round_cannot_reclassify_past_rest_as_focus() {
     assert_eq!(store.tasks(150).unwrap()[0].total_seconds, 30);
     assert_eq!(store.stats(0, 200, 150).unwrap().focus_seconds, 10);
 }
+
+#[test]
+fn failed_first_round_rolls_back_new_task_and_preserves_other_timers() {
+    for table in ["sessions", "intervals"] {
+        let (_directory, mut store) = database();
+        let existing = store.create_task("Existing task", 1, 100).unwrap();
+        store.start_task(existing.id, 100, None).unwrap();
+        store.start_timed("Expired rest", 4, 110, 60).unwrap();
+        let tasks_before = store.tasks(200).unwrap();
+        let active_before = store.active_sessions().unwrap();
+        store
+            .connection
+            .execute_batch(&format!(
+                "CREATE TRIGGER reject_first_round BEFORE INSERT ON {table}
+             BEGIN SELECT RAISE(ABORT, 'test rejection'); END;"
+            ))
+            .unwrap();
+        assert!(matches!(
+            store.create_and_start_task("New draft", 1, 200, Some(1500)),
+            Err(Error::Database(_))
+        ));
+        assert_eq!(store.tasks(200).unwrap(), tasks_before);
+        assert_eq!(store.active_sessions().unwrap(), active_before);
+        assert!(store.sessions().unwrap().is_empty());
+        store
+            .connection
+            .execute_batch("DROP TRIGGER reject_first_round")
+            .unwrap();
+        let session = store
+            .create_and_start_task("New draft", 1, 200, Some(1500))
+            .unwrap();
+        assert_eq!(store.tasks(200).unwrap().len(), 2);
+        assert!(session.task_id.is_some());
+        assert_eq!(session.title, "New draft");
+        assert_eq!(session.target_seconds, Some(1500));
+        assert_eq!(
+            store
+                .active_sessions()
+                .unwrap()
+                .iter()
+                .filter(|session| session.is_running())
+                .count(),
+            1
+        );
+    }
+}
+
+#[test]
+fn invalid_first_round_does_not_save_a_new_task() {
+    let (_directory, mut store) = database();
+    for target in [Some(0), Some(MAX_TARGET_SECONDS + 1)] {
+        assert!(matches!(
+            store.create_and_start_task("Draft", 1, 100, target),
+            Err(Error::Validation(_))
+        ));
+        assert!(store.tasks(100).unwrap().is_empty());
+    }
+    store.start("Future timer", 1, 200).unwrap();
+    assert!(matches!(
+        store.create_and_start_task("Draft", 1, 100, None),
+        Err(Error::InvalidTransition)
+    ));
+    assert!(store.tasks(200).unwrap().is_empty());
+    assert_eq!(store.active_sessions().unwrap().len(), 1);
+}

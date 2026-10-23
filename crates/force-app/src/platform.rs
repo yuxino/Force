@@ -283,10 +283,11 @@ pub(crate) fn start_window_drag(window: &gpui::Window) -> anyhow::Result<()> {
     Ok(())
 }
 
+// Synthetic timer completion in unit/headless tests must stay silent.
 pub(crate) fn play_completion_sound() {
-    #[cfg(target_os = "macos")]
+    #[cfg(all(target_os = "macos", not(test)))]
     objc2_app_kit::NSBeep();
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", not(test)))]
     unsafe {
         windows_sys::Win32::System::Diagnostics::Debug::MessageBeep(0);
     }
