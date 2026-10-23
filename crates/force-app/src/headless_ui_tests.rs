@@ -1102,3 +1102,83 @@ fn headless_ui_new_draft_is_saved_without_starting_before_global_rest(cx: &mut T
         );
     });
 }
+
+#[gpui::test]
+fn headless_ui_completing_an_inactive_task_clears_its_form_without_a_draft_prompt(
+    cx: &mut TestAppContext,
+) {
+    for has_record in [false, true] {
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let now = view.now;
+            let store = view.store.as_mut().unwrap();
+            let task = store.create_task("Finished task", 1, now - 100).unwrap();
+            if has_record {
+                let session = store.start_task(task.id, now - 100, None).unwrap();
+                store.finish(session.id, now - 50).unwrap();
+            }
+            view.refresh(cx);
+            view.select_task(task.id, window, cx);
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.click("complete-task");
+        assert!(
+            !manager.cx.has_pending_prompt(),
+            "a completed task's old title must not become an unsaved new draft"
+        );
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.preparing);
+            assert!(view.selected_task.is_none());
+            assert!(view.selected_session.is_none());
+            assert!(view.task_input.read(cx).value().is_empty());
+            assert_eq!(view.tasks.len(), 1);
+            assert!(view.tasks[0].completed_at.is_some());
+            assert!(view.active.is_empty());
+            assert_eq!(view.history.len(), usize::from(has_record));
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_initial_task_draft_is_protected_before_new_selection_and_global_rest(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.store
+            .as_mut()
+            .unwrap()
+            .create_task("Existing task", 1, view.now - 100)
+            .unwrap();
+        view.refresh(cx);
+        view.task_input.update(cx, |input, cx| {
+            input.set_value("Initial draft", window, cx);
+        });
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("new-task");
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("取消");
+    manager.cx.run_until_parked();
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert_eq!(view.task_input.read(cx).value(), "Initial draft");
+        view.start_global_break(window, cx);
+    });
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("取消");
+    manager.cx.run_until_parked();
+    manager.click("task-row-1");
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("保存");
+    manager.cx.run_until_parked();
+    assert!(!manager.cx.has_pending_prompt());
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert_eq!(view.selected_task, Some(1));
+        assert_eq!(view.task_input.read(cx).value(), "Existing task");
+        assert_eq!(view.tasks.len(), 2);
+        assert!(view.tasks.iter().any(|task| task.title == "Initial draft"));
+        assert!(view.active.is_empty());
+    });
+}

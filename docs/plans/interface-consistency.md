@@ -119,8 +119,10 @@ A day change or storage refresh reloads the series; never query once per cell.
   menus. Restore prior focus without overriding a deliberate focus change.
 - Task edits save independently of starting. 保存 / 撤销 appear only for changed
   saved tasks; Return saves that edit without starting a timer. Protect unsaved
-  existing-task edits and new-task drafts before task/session switches or global
-  rest. Completing an inactive task and a finished round uses one 完成任务 action.
+  existing-task edits and new-task drafts, including the initial empty workspace,
+  before task/session switches or global rest. Completing a saved task clears its
+  old form directly; its title must not become a new unsaved draft. Completing an
+  inactive task and a finished round uses one 完成任务 action.
 - Button and Return share validation. Save requires changed, valid input; show
   errors beside the field. Preserve drafts across navigation. Goal restore uses
   the saved value without a database write. Tag validation covers duplicate names
@@ -131,7 +133,8 @@ A day change or storage refresh reloads the series; never query once per cell.
   are quiet on success; changed controls and values provide confirmation.
 - Records provide date navigation, 今天, search, daily focus and sessions with
   investment on the selected date, including running and paused rounds.
-  Daily focus includes ongoing investment and is independent of search. List
+  Daily focus includes ongoing investment and is independent of search. Reuse
+  the same statistics snapshot when the selected date is today. List
   entries use actual interval overlap without the recent-history API's 500-item
   cap. Retain zero-time start/completion events on their event date. A paused
   gap alone does not place a record on that date. Reset scrolling/details when

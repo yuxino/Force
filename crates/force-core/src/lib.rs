@@ -535,12 +535,15 @@ impl Store {
 
     /// Exports every session as UTF-8 CSV, with Unix seconds and readable UTC.
     /// Timestamps outside the calendar range retain seconds and an empty UTC cell.
+    /// Expired countdowns are capped in the export snapshot without writing to
+    /// the database, even when the normal timer tick has not settled them yet.
     pub fn csv_export(&self, now: i64) -> Result<String> {
         let sessions = load_sessions(&self.connection, "ORDER BY started_at, id", [])?;
         let mut csv = String::from(
             "id,title,tag,kind,started_at,finished_at,target_seconds,elapsed_seconds,status,started_at_utc,finished_at_utc\r\n",
         );
         for session in sessions {
+            let session = export_session_snapshot(session, now)?;
             let status = if session.finished_at.is_some() {
                 "completed"
             } else if session.is_running() {
@@ -946,6 +949,37 @@ fn valid_text<'a>(value: &'a str, limit: usize, message: &'static str) -> Result
         return Err(Error::Validation(message));
     }
     Ok(value)
+}
+
+// Mirror exact-target completion on the export's owned snapshot. Exporting must
+// not depend on the UI tick or change a timer while a save dialog is open.
+fn export_session_snapshot(mut session: Session, now: i64) -> Result<Session> {
+    let Some(mut remaining) = session
+        .target_seconds
+        .filter(|_| session.finished_at.is_none())
+    else {
+        return Ok(session);
+    };
+    for index in 0..session.intervals.len() {
+        let interval = &session.intervals[index];
+        let duration = interval
+            .end
+            .unwrap_or(now)
+            .saturating_sub(interval.start)
+            .max(0);
+        if duration >= remaining {
+            let finished_at = interval
+                .start
+                .checked_add(remaining)
+                .ok_or(Error::InvalidData)?;
+            session.intervals[index].end = Some(finished_at);
+            session.intervals.truncate(index + 1);
+            session.finished_at = Some(finished_at);
+            break;
+        }
+        remaining -= duration;
+    }
+    Ok(session)
 }
 
 fn csv_field(value: &str) -> String {

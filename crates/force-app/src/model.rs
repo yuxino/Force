@@ -297,6 +297,10 @@ impl ForceView {
             }
             view.task_input
                 .update(cx, |input, cx| input.set_value(session.title, window, cx));
+        } else {
+            // The initial empty workspace is also a new-task form, so edits
+            // receive the same protection as drafts opened with New.
+            view.preparing = true;
         }
         window.focus(&view.focus_handle);
         cx.spawn(async move |this, cx| {
@@ -1090,6 +1094,8 @@ impl ForceView {
         };
         let now = Local::now().timestamp();
         if self.write(|store| store.complete_task(id, now), cx) {
+            // This form belongs to the task just completed, not a new draft.
+            self.preparing = false;
             self.completed = None;
             self.selected_task = None;
             self.selected_session = None;
@@ -1877,8 +1883,12 @@ fn load_stats(
     let today_date = date_at(now);
     let (start, end) = day_bounds(today_date);
     let today = store.stats(start, end, now)?;
-    let (start, end) = day_bounds(record_date);
-    let record_stats = store.stats(start, end, now)?;
+    let record_stats = if record_date == today_date {
+        today
+    } else {
+        let (start, end) = day_bounds(record_date);
+        store.stats(start, end, now)?
+    };
     Ok((today, record_stats))
 }
 
@@ -1964,6 +1974,34 @@ fn write_export(path: &Path, content: &[u8], database: &Path) -> std::io::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn day_statistics_keep_today_and_historical_records_separate() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+        let today = NaiveDate::from_ymd_opt(2026, 10, 23).unwrap();
+        let yesterday = today.pred_opt().unwrap();
+        let today_start = day_bounds(today).0;
+        let yesterday_start = day_bounds(yesterday).0;
+        let now = today_start + 7_200;
+        let past = store
+            .start("Past focus", 1, yesterday_start + 3_600)
+            .unwrap();
+        store.finish(past.id, yesterday_start + 3_720).unwrap();
+        store.start("Current focus", 1, now - 90).unwrap();
+
+        let (current, selected) = load_stats(&store, today, now).unwrap();
+        assert_eq!(current, selected);
+        assert_eq!(current.focus_seconds, 90);
+        assert_eq!(current.task_seconds, 90);
+        assert_eq!(current.completed_sessions, 0);
+
+        let (current_again, historical) = load_stats(&store, yesterday, now).unwrap();
+        assert_eq!(current_again, current);
+        assert_eq!(historical.focus_seconds, 120);
+        assert_eq!(historical.task_seconds, 120);
+        assert_eq!(historical.completed_sessions, 1);
+    }
 
     #[test]
     fn legacy_focus_toggle_ends_rest_and_pauses_other_focus_without_replacing_the_round() {

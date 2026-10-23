@@ -20,3 +20,11 @@ Verify a synthetic 20:52:54–01:19 round with 3:52:25 investment, 33:41 paused 
 54:00 after midnight. Compare both day rows with statistics/calendar, and test
 ongoing rounds, paused-only dates, zero-time boundaries, parallel focus/rest,
 uncapped history, date rollover and minimum-width layout.
+
+## CSV snapshots
+
+Export applies the exact unpaused countdown deadline to its owned snapshot, even
+when a delayed timer tick has not settled the stored round. Duration, completion
+status and end timestamps agree with normal exact-target completion. Export does
+not change the database; unfinished stopwatch and unexpired countdown states are
+preserved.

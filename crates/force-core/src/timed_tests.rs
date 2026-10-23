@@ -177,3 +177,61 @@ fn a_failed_schema_upgrade_rolls_back_both_column_and_version() {
         .unwrap();
     assert_eq!(title, "Keep this task");
 }
+
+#[test]
+fn export_caps_expired_countdowns_without_writing_to_the_database() {
+    let (_directory, mut store) = database();
+    let running = store.start_timed("Delayed tick", 1, 100, 60).unwrap();
+    let paused = store.start_timed("Delayed pause", 1, 100, 60).unwrap();
+    store.pause(paused.id, 200).unwrap();
+    let resumed = store.start_timed("Excludes pause", 1, 100, 60).unwrap();
+    store.pause(resumed.id, 120).unwrap();
+    store.resume(resumed.id, 200).unwrap();
+    let extra_interval = store
+        .start_timed("Resumed after deadline", 1, 100, 60)
+        .unwrap();
+    store.pause(extra_interval.id, 200).unwrap();
+    store.resume(extra_interval.id, 300).unwrap();
+    let before = store.active_sessions().unwrap();
+    let csv = store.csv_export(1_000).unwrap();
+    for (id, expected_end) in [
+        (running.id, 160),
+        (paused.id, 160),
+        (resumed.id, 240),
+        (extra_interval.id, 160),
+    ] {
+        let row = csv
+            .lines()
+            .find(|row| row.starts_with(&format!("\"{id}\",")))
+            .unwrap();
+        assert!(
+            row.contains(&format!(
+                "\"100\",\"{expected_end}\",\"60\",\"60\",\"completed\""
+            )),
+            "{row}"
+        );
+        assert!(row.ends_with(&format!("\"{}\"", utc_timestamp(Some(expected_end)))));
+    }
+    assert_eq!(store.active_sessions().unwrap(), before);
+    assert!(store.sessions().unwrap().is_empty());
+    for session in before {
+        store.finish_exact_target(session.id, 1_000).unwrap();
+    }
+    assert_eq!(store.csv_export(1_000).unwrap(), csv);
+}
+
+#[test]
+fn export_preserves_unexpired_paused_stopwatch_and_completed_records() {
+    let (_directory, mut store) = database();
+    store.start_timed("Running", 1, 100, 60).unwrap();
+    let paused = store.start_timed("Paused", 1, 100, 60).unwrap();
+    store.pause(paused.id, 110).unwrap();
+    store.start("Stopwatch", 1, 0).unwrap();
+    let completed = store.start_timed("Finished early", 1, 100, 60).unwrap();
+    store.finish(completed.id, 110).unwrap();
+    let csv = store.csv_export(120).unwrap();
+    assert!(csv.contains("\"100\",\"\",\"60\",\"20\",\"running\""));
+    assert!(csv.contains("\"100\",\"\",\"60\",\"10\",\"paused\""));
+    assert!(csv.contains("\"0\",\"\",\"\",\"120\",\"running\""));
+    assert!(csv.contains("\"100\",\"110\",\"60\",\"10\",\"completed\""));
+}
