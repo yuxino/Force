@@ -7,9 +7,9 @@
 use crate::model::{FloatingStrip, ForceView, Page, day_bounds};
 use chrono::{Local, TimeZone};
 use gpui::{
-    AppContext as _, Bounds, Entity, KeyUpEvent, Keystroke, Modifiers, Pixels, Point, ScrollDelta,
-    ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext, WindowBounds, WindowHandle,
-    WindowOptions, point, px, size,
+    AppContext as _, Bounds, Entity, Focusable as _, KeyUpEvent, Keystroke, Modifiers, Pixels,
+    Point, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext,
+    WindowBounds, WindowHandle, WindowOptions, point, px, size,
 };
 use gpui_component::{Root, Theme, ThemeMode};
 use std::path::PathBuf;
@@ -976,7 +976,11 @@ fn headless_ui_task_submit_saves_and_invalid_save_keeps_the_draft(cx: &mut TestA
     });
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
-    assert_same_bounds(manager.bounds("focus-form"), form);
+    let corrected_form = manager.bounds("focus-form");
+    assert_eq!(corrected_form.left(), form.left());
+    assert_eq!(corrected_form.size.width, form.size.width);
+    // Clearing the inline validation error legitimately reduces form height.
+    assert!(corrected_form.size.height < form.size.height);
     assert_same_bounds(manager.bounds("focus-tasks"), tasks);
 }
 
@@ -1257,4 +1261,306 @@ fn headless_ui_starting_a_stale_selected_task_preserves_external_edits(cx: &mut 
         assert_eq!(view.selected_tag, 2);
         assert_eq!(view.task_input.read(cx).value(), "Updated elsewhere");
     });
+}
+
+#[gpui::test]
+fn headless_ui_reopening_the_same_tag_preserves_its_draft(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.navigate(Page::Settings, window, cx);
+        view.begin_edit_tag(1, window, cx);
+        view.tag_input.update(cx, |input, cx| {
+            input.set_value("Pending rename", window, cx)
+        });
+        view.begin_edit_tag(1, window, cx);
+    });
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert_eq!(view.tag_input.read(cx).value(), "Pending rename");
+    });
+    assert!(!manager.cx.has_pending_prompt());
+}
+
+#[gpui::test]
+fn headless_ui_tag_drafts_require_a_choice_before_switching_edit_targets(cx: &mut TestAppContext) {
+    for new_draft in [false, true] {
+        for choice in ["取消", "不保存", "保存"] {
+            let mut manager = ManagerHarness::new(cx, 1040., 780.);
+            manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                view.navigate(Page::Settings, window, cx);
+                if !new_draft {
+                    view.begin_edit_tag(1, window, cx);
+                }
+                view.tag_input
+                    .update(cx, |input, cx| input.set_value("Pending tag", window, cx));
+                view.begin_edit_tag(2, window, cx);
+            });
+            assert!(manager.cx.has_pending_prompt());
+            manager.cx.simulate_prompt_answer(choice);
+            manager.cx.run_until_parked();
+            manager.view.read_with(&manager.cx, |view, cx| {
+                if choice == "取消" {
+                    assert_eq!(view.editing_tag, if new_draft { None } else { Some(1) });
+                    assert_eq!(view.tag_input.read(cx).value(), "Pending tag");
+                } else {
+                    assert_eq!(view.editing_tag, Some(2));
+                    assert_eq!(
+                        view.tag_input.read(cx).value(),
+                        view.tags.iter().find(|tag| tag.id == 2).unwrap().name
+                    );
+                }
+                assert_eq!(
+                    view.tags.iter().any(|tag| tag.name == "Pending tag"),
+                    choice == "保存"
+                );
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn headless_ui_adding_a_tag_does_not_retag_a_saved_task(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let task = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_task("Saved task", 1, view.now)
+            .unwrap();
+        view.refresh(cx);
+        view.select_task(task.id, window, cx);
+        view.navigate(Page::Settings, window, cx);
+        view.tag_input.update(cx, |input, cx| {
+            input.set_value("Additional tag", window, cx)
+        });
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("save-tag");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.tags.iter().any(|tag| tag.name == "Additional tag"));
+        assert_eq!(view.selected_tag, 1);
+        assert!(!view.task_has_unsaved_changes(cx));
+    });
+}
+
+#[gpui::test]
+fn headless_ui_tag_edit_baseline_does_not_turn_external_renames_into_user_edits(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.navigate(Page::Settings, window, cx);
+        view.begin_edit_tag(1, window, cx);
+        let mut external = force_core::Store::open(view.data_dir.join("force.sqlite3")).unwrap();
+        external.rename_tag(1, "External rename").unwrap();
+        view.refresh(cx);
+        view.save_tag(window, cx);
+        view.begin_edit_tag(2, window, cx);
+    });
+    assert!(!manager.cx.has_pending_prompt());
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.editing_tag, Some(2));
+        assert_eq!(
+            view.tags.iter().find(|tag| tag.id == 1).unwrap().name,
+            "External rename"
+        );
+    });
+}
+
+#[gpui::test]
+fn headless_ui_invalid_tag_draft_blocks_save_and_switch_to_new_until_discarded(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.click("settings-tab");
+    manager.click("edit-tag-1");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.tag_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        view.open_tag_settings(window, cx);
+    });
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("保存");
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert_eq!(view.editing_tag, Some(1));
+        assert!(view.tag_input.read(cx).value().is_empty());
+        assert!(view.tag_draft_error(cx).is_some());
+        assert!(!view.can_save_tag(cx));
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.open_tag_settings(window, cx)
+    });
+    manager.cx.simulate_prompt_answer("不保存");
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.editing_tag.is_none());
+        assert!(view.tag_input.read(cx).value().is_empty());
+    });
+}
+
+#[gpui::test]
+fn headless_ui_task_validation_agrees_with_return_and_preserves_invalid_edits(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let task = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_task("Saved task", 1, view.now)
+            .unwrap();
+        view.refresh(cx);
+        view.select_task(task.id, window, cx);
+    });
+    for value in [String::new(), "Long".repeat(51), "Invalid\0name".to_owned()] {
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.task_input
+                .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.bounds("task-title-error");
+        manager.click("save-task");
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.task_input.update(cx, |_, cx| {
+                cx.emit(gpui_component::input::InputEvent::PressEnter { secondary: false })
+            });
+        });
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(!view.can_save_task(cx));
+            assert!(!view.can_start_task(cx));
+            assert_eq!(view.task_input.read(cx).value(), value);
+            assert_eq!(view.tasks[0].title, "Saved task");
+            assert!(view.active.is_empty());
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_removed_task_tag_stays_explicit_and_paused_round_can_resume(
+    cx: &mut TestAppContext,
+) {
+    for paused in [false, true] {
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let now = view.now;
+            let store = view.store.as_mut().unwrap();
+            let tag = store
+                .create_tag("Custom tag", force_core::TagKind::Focus)
+                .unwrap();
+            let task = store.create_task("Saved task", tag.id, now - 100).unwrap();
+            if paused {
+                let session = store.start_task(task.id, now - 100, None).unwrap();
+                store.pause(session.id, now - 50).unwrap();
+            }
+            view.refresh(cx);
+            view.select_task(task.id, window, cx);
+            view.navigate(Page::Settings, window, cx);
+            view.delete_tag(tag.id, window, cx);
+        });
+        assert!(manager.cx.has_pending_prompt());
+        manager.cx.simulate_prompt_answer("删除");
+        manager.cx.run_until_parked();
+        manager.click("focus-tab");
+        if paused {
+            manager.click("running-pause");
+            manager.view.read_with(&manager.cx, |view, _| {
+                assert_eq!(view.active.len(), 1);
+                assert!(view.active[0].is_running());
+                assert_eq!(view.active[0].tag_name, "Custom tag");
+            });
+        } else {
+            manager.bounds("task-tag-error");
+            manager.view.read_with(&manager.cx, |view, cx| {
+                assert_eq!(view.selected_tag, 5);
+                assert!(!view.task_has_unsaved_changes(cx));
+                assert!(!view.can_start_task(cx));
+            });
+            manager.click("new-task");
+            assert!(!manager.cx.has_pending_prompt());
+        }
+    }
+}
+
+#[gpui::test]
+fn headless_ui_empty_record_search_clears_and_returns_keyboard_focus(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 780., 620.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let now = view.now;
+        let session = view
+            .store
+            .as_mut()
+            .unwrap()
+            .start("Visible record", 1, now - 100)
+            .unwrap();
+        view.store
+            .as_mut()
+            .unwrap()
+            .finish(session.id, now - 50)
+            .unwrap();
+        view.record_search
+            .update(cx, |input, cx| input.set_value("No matches", window, cx));
+        view.navigate(Page::Records, window, cx);
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.scroll("records-content", -500.);
+    manager.click("clear-empty-record-search");
+    let focused = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(view.record_search.read(cx).value().is_empty());
+        view.record_search
+            .read(cx)
+            .focus_handle(cx)
+            .is_focused(window)
+    });
+    assert!(focused);
+    manager.bounds("record-row-1");
+    manager.cx.simulate_input("Visible");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert_eq!(view.record_search.read(cx).value(), "Visible")
+    });
+}
+
+#[gpui::test]
+fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 780., 620.);
+    manager.click("settings-tab");
+    let height = manager.bounds("tag-row-1").size.height;
+    assert_eq!(height, px(44.));
+    manager.click("edit-tag-1");
+    assert_eq!(manager.bounds("editing-tag-row-1").size.height, height);
+    // TestPlatform drops native frame callbacks, so ScrollAnchor's deferred
+    // auto-reveal cannot run here. Exercise real wheel events for geometry.
+    manager.scroll("manager-content", -320.);
+    for selector in ["cancel-tag-edit", "save-tag"] {
+        let bounds = manager.bounds(selector);
+        assert!(bounds.top() >= px(68.) && bounds.bottom() <= px(620.));
+        assert!(bounds.left() >= px(0.) && bounds.right() <= px(780.));
+    }
+    manager.click("cancel-tag-edit");
+    manager
+        .view
+        .read_with(&manager.cx, |view, _| assert!(view.editing_tag.is_none()));
+    manager.scroll("manager-content", 500.);
+    manager.click("edit-tag-1");
+    manager.scroll("manager-content", -320.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.tag_input
+            .update(cx, |input, cx| input.set_value("Renamed", window, cx));
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("save-tag");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.editing_tag.is_none());
+        assert_eq!(
+            view.tags.iter().find(|tag| tag.id == 1).unwrap().name,
+            "Renamed"
+        );
+    });
+    assert_eq!(manager.bounds("tag-row-1").size.height, height);
 }

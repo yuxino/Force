@@ -317,14 +317,8 @@ impl ForceView {
             .filter(|tag| tag.kind == TagKind::Focus)
             .cloned()
             .collect();
-        let task_name = self.task_input.read(cx).value();
-        let task_length = task_name.trim().chars().count();
-        let task_valid = (1..=200).contains(&task_length);
         let no_focus_tags = tags.is_empty();
-        let disabled = no_focus_tags
-            || !task_valid
-            || self.storage_failed
-            || self.task_has_unsaved_changes(cx);
+        let disabled = !self.can_start_task(cx);
         let selected = self.selected_tag;
         let tag_name = tags
             .iter()
@@ -372,11 +366,7 @@ impl ForceView {
                                             button("save-task")
                                                 .debug_selector(|| "save-task".into())
                                                 .h(px(32.))
-                                                .unavailable(
-                                                    !task_valid
-                                                        || no_focus_tags
-                                                        || self.storage_failed,
-                                                )
+                                                .unavailable(!self.can_save_task(cx))
                                                 .child(control_label("保存", INK))
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.save_task_changes(cx);
@@ -386,12 +376,13 @@ impl ForceView {
                             }),
                     )
                     .child(gpui::Styled::h(field(&self.task_input), px(44.)))
-                    .when(task_length > 200, |form| {
+                    .when_some(self.task_title_error(cx), |form, message| {
                         form.child(
                             div()
+                                .debug_selector(|| "task-title-error".into())
                                 .text_size(px(14.))
                                 .text_color(rgb(DESTRUCTIVE))
-                                .child("任务名称最多 200 字。"),
+                                .child(message),
                         )
                     }),
             )
@@ -460,6 +451,7 @@ impl ForceView {
                     .when(no_focus_tags, |row| {
                         row.child(
                             button("add-focus-tag")
+                                .debug_selector(|| "add-focus-tag".into())
                                 .small()
                                 .h(px(40.))
                                 .icon(control_icon(IconName::Plus, INK))
@@ -479,6 +471,15 @@ impl ForceView {
                                     Tooltip::new(tag_name.clone()).build(window, cx)
                                 })
                                 .child(self.tag_picker.clone()),
+                        )
+                    })
+                    .when_some(self.task_tag_error(), |form, message| {
+                        form.child(
+                            div()
+                                .debug_selector(|| "task-tag-error".into())
+                                .text_size(px(14.))
+                                .text_color(rgb(DESTRUCTIVE))
+                                .child(message),
                         )
                     }),
             )
@@ -591,6 +592,7 @@ impl ForceView {
                             .active
                             .iter()
                             .find(|session| session.task_id == Some(id));
+                        let running = active.is_some_and(Session::is_running);
                         let status = active.map_or_else(
                             || {
                                 if task.total_seconds == 0 {
@@ -641,7 +643,8 @@ impl ForceView {
                                 .child(
                                     single_line(status, 13.)
                                         .debug_selector(move || format!("task-status-{id}"))
-                                        .text_color(rgb(MUTED)),
+                                        .text_color(rgb(if running { INK } else { MUTED }))
+                                        .when(running, |line| line.font_weight(FontWeight::MEDIUM)),
                                 ),
                         )
                         .on_click(
@@ -685,7 +688,10 @@ impl ForceView {
                                         },
                                         13.,
                                     )
-                                    .text_color(rgb(MUTED)),
+                                    .text_color(rgb(if session.is_running() { INK } else { MUTED }))
+                                    .when(session.is_running(), |line| {
+                                        line.font_weight(FontWeight::MEDIUM)
+                                    }),
                                 ),
                         )
                         .on_click(cx.listener(
@@ -1025,6 +1031,13 @@ impl ForceView {
             })
     }
 
+    fn clear_record_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.record_search.update(cx, |input, cx| {
+            input.set_value("", window, cx);
+            input.focus(window, cx);
+        });
+    }
+
     fn records_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let query = self.record_search.read(cx).value().trim().to_lowercase();
         let records: Vec<_> = self
@@ -1048,14 +1061,11 @@ impl ForceView {
                     .child(field(&self.record_search)
                         .prefix(Icon::new(IconName::Search).size(px(14.)).text_color(rgb(MUTED)))
                         .when(!query.is_empty(), |input| input.suffix(
-                            button("clear-record-search").ghost().size(px(24.))
+                            button("clear-record-search").debug_selector(|| "clear-record-search".into()).ghost().size(px(24.))
                                 .icon(control_icon(Icon::new(IconName::Close).size(px(13.)), MUTED))
                                 .tooltip("清空搜索")
                                 .on_click(cx.listener(|this, _, window, cx| {
-                                    this.record_search.update(cx, |input, cx| {
-                                        input.set_value("", window, cx);
-                                        input.focus(window, cx);
-                                    });
+                                    this.clear_record_search(window, cx);
                                 }))
                         )))))
             .child(div().flex().items_baseline().gap(px(12.))
@@ -1080,8 +1090,16 @@ impl ForceView {
             .child(div().flex().flex_col()
                 .children(records.iter().map(|session| self.record_row(session, cx)))
                 .when(records.is_empty(), |body| body.child(
-                    div().py(px(32.)).text_size(px(14.)).text_color(rgb(MUTED))
+                    div().debug_selector(|| "record-empty-state".into()).py(px(32.))
+                        .flex().items_center().gap(px(12.))
+                        .text_size(px(14.)).text_color(rgb(MUTED))
                         .child(if query.is_empty() { "这一天还没有计时记录" } else { "没有匹配的记录" })
+                        .when(!query.is_empty(), |row| row.child(
+                            button("clear-empty-record-search").debug_selector(|| "clear-empty-record-search".into())
+                                .ghost().h(px(32.)).px(px(8.))
+                                .child(control_label("清空搜索", INK))
+                                .on_click(cx.listener(|this, _, window, cx| this.clear_record_search(window, cx)))
+                        ))
                 )))
             .child(div().flex().justify_end().child(
                 button("export-records").ghost().h(px(36.))

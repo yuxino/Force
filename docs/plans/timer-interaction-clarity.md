@@ -53,3 +53,10 @@ remains the metadata-edit action. New-task creation and its first timer round
 share one transaction, including pausing existing focus and ending rest. Any
 failure preserves the draft and previous timers without leaving an empty task.
 Apply the same rule when repeating a legacy round without an associated task.
+
+## Archived labels and paused rounds
+
+Archiving a label prevents choosing it for new rounds. It does not block
+continuing an already saved paused round: resume its existing session, target,
+title and label snapshot without silently binding to a replacement label. After
+that round ends, starting another requires an available label.

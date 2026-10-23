@@ -751,3 +751,67 @@ fn invalid_first_round_does_not_save_a_new_task() {
     assert!(store.tasks(200).unwrap().is_empty());
     assert_eq!(store.active_sessions().unwrap().len(), 1);
 }
+
+#[test]
+fn archived_tags_allow_existing_rounds_to_resume_but_reject_new_rounds() {
+    for target in [None, Some(1500)] {
+        let (_directory, mut store) = database();
+        let tag = store.create_tag("Project", TagKind::Focus).unwrap();
+        let task = store.create_task("Original task", tag.id, 100).unwrap();
+        let session = store.start_task(task.id, 100, target).unwrap();
+        store.rename_tag(tag.id, "Renamed project").unwrap();
+        let paused = store.pause(session.id, 120).unwrap();
+        store.delete_tag(tag.id).unwrap();
+        // Reusing an archived name for another kind must not rebind old rounds.
+        let replacement = store.create_tag("Renamed project", TagKind::Rest).unwrap();
+        let other = store.start("Other focus", 1, 130).unwrap();
+        let rest = store.start_timed("Rest", 4, 140, 300).unwrap();
+        let tags_before = store.tags().unwrap();
+        let resumed = store.start_task(task.id, 150, Some(2700)).unwrap();
+        let mut expected = paused;
+        expected.intervals.push(Interval {
+            start: 150,
+            end: None,
+        });
+        assert_eq!(resumed, expected);
+        assert_eq!(resumed.tag_name, "Renamed project");
+        assert_eq!(resumed.tag_kind, TagKind::Focus);
+        assert_ne!(resumed.tag_id, replacement.id);
+        assert_eq!(resumed.target_seconds, target);
+        assert_eq!(store.tags().unwrap(), tags_before);
+        let active = store.active_sessions().unwrap();
+        assert!(
+            active
+                .iter()
+                .find(|session| session.id == other.id)
+                .unwrap()
+                .is_paused()
+        );
+        assert!(
+            store
+                .sessions()
+                .unwrap()
+                .iter()
+                .any(|session| session.id == rest.id && session.finished_at == Some(150))
+        );
+        store.finish(session.id, 170).unwrap();
+        assert!(matches!(
+            store.start_task(task.id, 180, target),
+            Err(Error::ArchivedTag)
+        ));
+        store.update_task(task.id, "Reassigned task", 2).unwrap();
+        let next = store.start_task(task.id, 180, target).unwrap();
+        assert_ne!(next.id, session.id);
+        assert_eq!(next.tag_id, 2);
+        let previous = store
+            .sessions()
+            .unwrap()
+            .into_iter()
+            .find(|record| record.id == session.id)
+            .unwrap();
+        assert_eq!(previous.title, "Original task");
+        assert_eq!(previous.tag_id, tag.id);
+        assert_eq!(previous.tag_name, "Renamed project");
+        assert_eq!(previous.elapsed_at(200), 40);
+    }
+}

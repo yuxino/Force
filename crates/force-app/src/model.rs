@@ -39,6 +39,12 @@ enum TaskDestination {
     GlobalBreak,
 }
 
+#[derive(Clone, Copy)]
+enum TagDestination {
+    Edit(i64),
+    New,
+}
+
 pub(crate) struct ForceView {
     pub(crate) store: Option<Store>,
     pub(crate) data_dir: PathBuf,
@@ -74,6 +80,7 @@ pub(crate) struct ForceView {
     pub(crate) record_details: Option<i64>,
     pub(crate) new_tag_kind: TagKind,
     pub(crate) editing_tag: Option<i64>,
+    tag_edit_original: Option<String>,
     pub(crate) toast: Option<(String, Instant)>,
     pub(crate) export_busy: bool,
     pub(crate) now: i64,
@@ -93,8 +100,7 @@ pub(crate) struct ForceView {
 
 impl ForceView {
     pub(crate) fn new(data_dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let task_input =
-            cx.new(|cx| InputState::new(window, cx).placeholder("任务名称，回车开始计时"));
+        let task_input = cx.new(|cx| InputState::new(window, cx).placeholder("任务名称"));
         let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
         let goal_input = cx.new(|cx| InputState::new(window, cx).placeholder("每日目标（分钟）"));
         let record_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索任务或标签"));
@@ -216,6 +222,7 @@ impl ForceView {
             record_details: None,
             new_tag_kind: TagKind::Focus,
             editing_tag: None,
+            tag_edit_original: None,
             toast: None,
             export_busy: false,
             now: Local::now().timestamp(),
@@ -447,9 +454,11 @@ impl ForceView {
                 self.record_stats = record_stats;
                 self.activity_days = activity_days;
                 self.storage_failed = false;
-                if !self.tags.iter().any(|tag| {
+                let preserve_task_tag = self.preparing && self.selected_task.is_some();
+                let selected_tag_available = self.tags.iter().any(|tag| {
                     tag.id == self.selected_tag && (!self.preparing || tag.kind == TagKind::Focus)
-                }) {
+                });
+                if !(preserve_task_tag || selected_tag_available) {
                     self.selected_tag = self
                         .tags
                         .iter()
@@ -562,6 +571,50 @@ impl ForceView {
                 })
     }
 
+    pub(crate) fn task_title_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        task_title_error_for(
+            self.task_input.read(cx).value().as_ref(),
+            self.selected_task.is_some(),
+        )
+    }
+
+    pub(crate) fn task_tag_error(&self) -> Option<&'static str> {
+        if self
+            .tags
+            .iter()
+            .any(|tag| tag.id == self.selected_tag && tag.kind == TagKind::Focus)
+        {
+            None
+        } else if !self.tags.iter().any(|tag| tag.kind == TagKind::Focus) {
+            Some("请先添加专注标签。")
+        } else if self.selected_tag != 0 && !self.tags.iter().any(|tag| tag.id == self.selected_tag)
+        {
+            Some("原标签已移除，请重新选择。")
+        } else {
+            Some("请选择可用的专注标签。")
+        }
+    }
+
+    fn task_form_error(&self, cx: &gpui::App) -> Option<&'static str> {
+        task_title_error_for(self.task_input.read(cx).value().as_ref(), true)
+            .or_else(|| self.task_tag_error())
+    }
+
+    pub(crate) fn can_save_task(&self, cx: &gpui::App) -> bool {
+        self.preparing
+            && !self.storage_failed
+            && self.store.is_some()
+            && self.task_form_error(cx).is_none()
+            && (self.selected_task.is_none() || self.task_has_unsaved_changes(cx))
+    }
+
+    pub(crate) fn can_start_task(&self, cx: &gpui::App) -> bool {
+        !self.storage_failed
+            && self.store.is_some()
+            && self.task_form_error(cx).is_none()
+            && !self.task_has_unsaved_changes(cx)
+    }
+
     pub(crate) fn reset_task_changes(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if let Some(task) = self
             .selected_task
@@ -577,6 +630,13 @@ impl ForceView {
 
     pub(crate) fn save_task_changes(&mut self, cx: &mut Context<Self>) -> bool {
         if !self.preparing {
+            return false;
+        }
+        if let Some(message) = self.task_form_error(cx) {
+            self.notify(message, cx);
+            return false;
+        }
+        if !self.can_save_task(cx) {
             return false;
         }
         let mut saved_id = self.selected_task;
@@ -670,16 +730,12 @@ impl ForceView {
             self.notify("请先重试打开本地数据。", cx);
             return;
         }
+        if let Some(message) = self.task_form_error(cx) {
+            self.notify(message, cx);
+            return;
+        }
         let title = self.task_input.read(cx).value().trim().to_owned();
-        if title.is_empty() {
-            self.notify("先写下这次要做的事。", cx);
-            return;
-        }
         let tag = self.selected_tag;
-        if !self.tags.iter().any(|item| item.id == tag) {
-            self.notify("请为这件事选择一个标签。", cx);
-            return;
-        }
         let selected = self.selected_task;
         let target = self.countdown.then_some(i64::from(self.timer_minutes) * 60);
         let now = Local::now().timestamp();
@@ -1138,6 +1194,15 @@ impl ForceView {
     }
 
     pub(crate) fn begin_edit_tag(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_tag == Some(id) {
+            self.tag_input
+                .update(cx, |input, cx| input.focus(window, cx));
+            self.tag_form_anchor.scroll_to(window, cx);
+            return;
+        }
+        if self.confirm_tag_changes(TagDestination::Edit(id), window, cx) {
+            return;
+        }
         let Some(tag) = self.tags.iter().find(|tag| tag.id == id) else {
             self.notify("这个标签已变更，请刷新后重试。", cx);
             return;
@@ -1145,12 +1210,77 @@ impl ForceView {
         let name = tag.name.clone();
         self.new_tag_kind = tag.kind;
         self.editing_tag = Some(id);
+        self.tag_edit_original = Some(name.clone());
         self.tag_input.update(cx, |input, cx| {
             input.set_value(name, window, cx);
             input.focus(window, cx);
         });
         self.tag_form_anchor.scroll_to(window, cx);
         cx.notify();
+    }
+
+    fn tag_has_unsaved_changes(&self, cx: &gpui::App) -> bool {
+        let name = self.tag_input.read(cx).value();
+        match self.editing_tag {
+            Some(_) => self.tag_edit_original.as_deref() != Some(name.trim()),
+            None => !name.trim().is_empty(),
+        }
+    }
+
+    fn confirm_tag_changes(
+        &mut self,
+        destination: TagDestination,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.tag_has_unsaved_changes(cx) {
+            return false;
+        }
+        let editing = self.editing_tag;
+        let draft = self.tag_input.read(cx).value();
+        let answer = window.prompt(
+            PromptLevel::Info,
+            if editing.is_some() {
+                "保存标签修改？"
+            } else {
+                "保存新标签？"
+            },
+            None,
+            &[
+                PromptButton::cancel("取消"),
+                PromptButton::new("不保存"),
+                PromptButton::new("保存"),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| match answer.await {
+            Ok(choice @ (1 | 2)) => {
+                let _ = cx.update(|window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.editing_tag != editing || this.tag_input.read(cx).value() != draft {
+                            return;
+                        }
+                        if choice == 2 {
+                            if !this.try_save_tag(window, cx) {
+                                return;
+                            }
+                        } else {
+                            this.cancel_tag_edit(window, cx);
+                        }
+                        match destination {
+                            TagDestination::Edit(id) => this.begin_edit_tag(id, window, cx),
+                            TagDestination::New => this.open_tag_settings(window, cx),
+                        }
+                    });
+                });
+            }
+            Ok(_) => {}
+            Err(_) => {
+                let _ = this.update(cx, |this, cx| this.notify("无法确认标签修改，请重试。", cx));
+            }
+        })
+        .detach();
+        true
     }
 
     pub(crate) fn tag_draft_error(&self, cx: &gpui::App) -> Option<&'static str> {
@@ -1166,26 +1296,27 @@ impl ForceView {
             return false;
         }
         let original = match self.editing_tag {
-            Some(id) => match self.tags.iter().find(|tag| tag.id == id) {
-                Some(tag) => Some(tag.name.as_str()),
-                None => return false,
-            },
+            Some(_) => self.tag_edit_original.as_deref(),
             None => None,
         };
         tag_draft_has_changes(self.tag_input.read(cx).value().as_ref(), original)
     }
 
     pub(crate) fn save_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.try_save_tag(window, cx);
+    }
+
+    fn try_save_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         let name = self.tag_input.read(cx).value().to_string();
         if let Some(message) = self.tag_draft_error(cx) {
             self.notify(message, cx);
-            return;
+            return false;
         }
         if !self.can_save_tag(cx) {
             if name.trim().is_empty() {
                 self.notify("请输入 1–40 字的标签名称。", cx);
             }
-            return;
+            return false;
         }
         let editing = self.editing_tag;
         let kind = if editing.is_some() {
@@ -1193,6 +1324,8 @@ impl ForceView {
         } else {
             TagKind::Focus
         };
+        let select_created =
+            self.selected_task.is_none() && (self.preparing || self.active.is_empty());
         let mut created_id = None;
         if self.write(
             |store| {
@@ -1205,7 +1338,8 @@ impl ForceView {
             },
             cx,
         ) {
-            if kind == TagKind::Focus
+            if select_created
+                && kind == TagKind::Focus
                 && let Some(id) = created_id
             {
                 self.selected_tag = id;
@@ -1219,11 +1353,15 @@ impl ForceView {
                 },
                 cx,
             );
+            true
+        } else {
+            false
         }
     }
 
     pub(crate) fn cancel_tag_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.editing_tag = None;
+        self.tag_edit_original = None;
         self.new_tag_kind = TagKind::Focus;
         self.tag_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
@@ -1233,6 +1371,9 @@ impl ForceView {
     }
 
     pub(crate) fn open_tag_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.editing_tag.is_some() && self.confirm_tag_changes(TagDestination::New, window, cx) {
+            return;
+        }
         self.navigate(Page::Settings, window, cx);
         if self.editing_tag.is_some() {
             self.cancel_tag_edit(window, cx);
@@ -1799,11 +1940,27 @@ fn goal_draft_has_unsaved_changes(value: &str, saved: u32) -> bool {
     parse_goal_draft(value) != Some(saved)
 }
 
+fn task_title_error_for(value: &str, required: bool) -> Option<&'static str> {
+    let title = value.trim();
+    if required && title.is_empty() {
+        Some("请输入任务名称。")
+    } else if title.contains('\0') {
+        Some("任务名称包含无效字符。")
+    } else if title.chars().count() > 200 {
+        Some("任务名称最多 200 字。")
+    } else {
+        None
+    }
+}
+
 fn tag_draft_error_for(value: &str, editing: Option<i64>, tags: &[Tag]) -> Option<&'static str> {
     if editing.is_some_and(|id| !tags.iter().any(|tag| tag.id == id)) {
         return Some("这个标签已被移除，请取消后重新选择。");
     }
     let name = value.trim();
+    if editing.is_some() && name.is_empty() {
+        return Some("请输入标签名称。");
+    }
     if name.contains('\0') {
         return Some("标签名称包含无效字符。");
     }

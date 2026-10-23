@@ -45,6 +45,8 @@ Use spacing between columns without a full-height dividing line.
   a task association. Do not duplicate it as recent tasks and other timers.
   Each row shows the title and current state or accumulated investment. Clicking
   a row selects it for inspection; starting/resuming requires its explicit action.
+  Give the running status a stronger neutral foreground and weight; selection
+  continues to identify the task being inspected, independently of what is running.
   Keep 64-point task rows and an explicitly sized 214-point text column. Align
   the sidebar heading with the Today goal above, without an extra left inset.
   Measure title/status bounds and verify their actual native glyphs. Shape
@@ -73,8 +75,14 @@ pinning, completion sound and daily goal. Pinning and sound each use a
 keyboard-accessible button around a passive switch indicator. Tags use 44-point
 rows and a list capped at 240 points. The tag input and 添加 / 保存
 stay on one row at the minimum width. New labels are focus tags; existing rest
-labels remain editable. Daily-goal 保存 / 撤销 appear only while changed. Local data exposes the folder; export is
-owned by records.
+labels remain editable. Highlight the row currently being renamed with the
+existing neutral surface. Re-selecting it preserves its draft; switching edit
+targets protects changed text with Save, Discard or Cancel. Adding a label must
+not change a saved task's label selection, including an archived label. Compare
+tag edits with their original input so external renames do not become apparent
+user changes or get overwritten by an untouched field. Daily-goal 保存 / 撤销
+appear only while changed. Local data exposes the folder; export is owned by
+records.
 
 Single-line inputs and settings controls are 40 points high; main start and
 running actions are 44 points. Set input styled height explicitly because
@@ -124,8 +132,11 @@ A day change or storage refresh reloads the series; never query once per cell.
   old form directly; its title must not become a new unsaved draft. Completing an
   inactive task and a finished round uses one 完成任务 action.
 - Button and Return share validation. Save requires changed, valid input; show
-  errors beside the field. Preserve drafts across navigation. Goal restore uses
-  the saved value without a database write. Tag validation covers duplicate names
+  errors beside the field. Require an available focus label for a new task round
+  or metadata save; continuing a saved paused round retains its label snapshot.
+  Empty edited names and invalid characters show beside their fields, while
+  pristine empty new forms stay quiet. Preserve drafts across navigation. Goal
+  restore uses the saved value without a database write. Tag validation covers duplicate names
   across both types, invalid characters and removed edit targets. Scroll the tag
   form into view when editing or recovering from an empty focus-tag list. Storage
   retry preserves edited goal text, including invalid drafts; only an untouched
@@ -135,6 +146,8 @@ A day change or storage refresh reloads the series; never query once per cell.
   are quiet on success; changed controls and values provide confirmation.
 - Records provide date navigation, 今天, search, daily focus and sessions with
   investment on the selected date, including running and paused rounds.
+  A search with no matches offers a compact clear-search action that restores
+  input focus. A date without records keeps its ordinary empty state.
   Daily focus includes ongoing investment and is independent of search. Reuse
   the same statistics snapshot when the selected date is today. List
   entries use actual interval overlap without the recent-history API's 500-item
@@ -173,3 +186,7 @@ Unit/headless timer completion stays silent; the normal application retains its
 configured sound. When uninterrupted desktop use is required, do not start or
 activate native preview windows. GPUI 0.2.2 TestPlatform has no native pixel
 renderer, so this path supplies no screenshots or native visual acceptance.
+Its platform frame callback is also a no-op: `on_next_frame` and `ScrollAnchor`
+callbacks are not exercised by ordinary headless refreshes. Use simulated wheel
+events to check viewport bounds and controls; verify automatic scroll targeting
+natively instead of changing production behavior to satisfy this test limitation.

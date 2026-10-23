@@ -9,8 +9,8 @@ use crate::{
     label::single_line,
     model::ForceView,
     view::{
-        ControlState, DESTRUCTIVE, INK, LINE, MUTED, button, control_icon, control_label, field,
-        field_label, section_heading,
+        ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, button, control_icon, control_label,
+        field, field_label, section_heading,
     },
 };
 
@@ -184,8 +184,17 @@ impl ForceView {
                             .children(self.tags.iter().map(|tag| {
                                 let id = tag.id;
                                 let help_name = tag.name.clone();
+                                let editing = self.editing_tag == Some(id);
                                 div()
+                                    .debug_selector(move || {
+                                        if editing {
+                                            format!("editing-tag-row-{id}")
+                                        } else {
+                                            format!("tag-row-{id}")
+                                        }
+                                    })
                                     .h(px(44.))
+                                    .when(editing, |row| row.bg(rgb(SURFACE)))
                                     .flex()
                                     .items_center()
                                     .gap(px(12.))
@@ -211,13 +220,14 @@ impl ForceView {
                                     })
                                     .child(
                                         button(("edit-tag", id as u64))
+                                            .debug_selector(move || format!("edit-tag-{id}"))
                                             .ghost()
                                             .size(px(32.))
                                             .icon(control_icon(
                                                 Icon::default()
                                                     .path("force-icons/pencil.svg")
                                                     .size(px(15.)),
-                                                MUTED,
+                                                if editing { INK } else { MUTED },
                                             ))
                                             .tooltip("重命名标签")
                                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -293,6 +303,7 @@ impl ForceView {
                                     .when(self.editing_tag.is_some(), |row| {
                                         row.child(
                                             button("cancel-tag-edit")
+                                                .debug_selector(|| "cancel-tag-edit".into())
                                                 .ghost()
                                                 .h(px(40.))
                                                 .w(px(56.))
@@ -307,6 +318,7 @@ impl ForceView {
                             .when_some(self.tag_draft_error(cx), |form, message| {
                                 form.child(
                                     div()
+                                        .debug_selector(|| "tag-draft-error".into())
                                         .text_size(px(14.))
                                         .text_color(rgb(DESTRUCTIVE))
                                         .child(message),

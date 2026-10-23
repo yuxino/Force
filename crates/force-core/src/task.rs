@@ -179,8 +179,9 @@ impl Store {
     }
 
     /// Reuses a paused session for the same task, preserving its original timer
-    /// target. Starting focus atomically pauses other running focus and ends
-    /// all unfinished rest, including paused breaks.
+    /// target and tag snapshot, even if that tag was archived. New rounds
+    /// require an available tag. Starting focus atomically pauses other running
+    /// focus and ends all unfinished rest, including paused breaks.
     pub fn start_task(&mut self, id: i64, now: i64, target: Option<i64>) -> Result<Session> {
         validate_task_target(target)?;
         let transaction = self
@@ -343,7 +344,6 @@ fn start_task_in_transaction(
     if task.completed_at.is_some() || now < task.created_at {
         return Err(Error::InvalidTransition);
     }
-    let tag = available_tag(transaction, task.tag_id)?;
     let existing = unfinished_session(transaction, id)?;
     if existing
         .as_ref()
@@ -351,6 +351,16 @@ fn start_task_in_transaction(
     {
         return Err(Error::InvalidTransition);
     }
+    let tag = match existing.as_ref() {
+        // Continuing a round retains its snapshot; archival only prevents new
+        // use. Never silently reassign to a replacement tag with the same name.
+        Some(session) => Tag {
+            id: session.tag_id,
+            name: session.tag_name.clone(),
+            kind: session.tag_kind,
+        },
+        None => available_tag(transaction, task.tag_id)?,
+    };
     if tag.kind == TagKind::Focus {
         let active = load_sessions_in_snapshot(transaction, "WHERE finished_at IS NULL", [])?;
         pause_for_focus(
