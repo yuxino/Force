@@ -42,3 +42,21 @@ verified in the signed macOS application.
 The reusable project build cache and latest signed development bundle are kept.
 Disposable fixture source, data, diagnostic log and task worktree are removed
 after stopping the development process. No release was published.
+
+## Subsequent local formal installation
+
+The user subsequently made local formal-app replacement a standing Force
+delivery requirement. The optimized production build from `c8a0fc6` was signed
+and atomically installed at the existing formal-app location. Its bundle ID
+and complete designated requirement match the previous installation.
+
+Installed executable SHA-256:
+`c9b51c48b7096fab37cb83c453d6668f6c9de1153f9b4d3c8960b85a46964a0b`
+
+Strict signature verification and installed `--version` passed. Native launch,
+management-window display, ordinary-key input and Return-to-start passed using
+only disposable data through the installed production bundle. The installation
+left the existing data directory in place. The temporary store, replaced app
+and duplicate packaging output were removed after acceptance; no public release
+was published. CI for the tested application revision `c8a0fc6` passed on macOS,
+Windows and Linux.
