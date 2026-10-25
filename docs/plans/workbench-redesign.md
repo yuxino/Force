@@ -35,8 +35,15 @@ Focus keeps its daily summary and task column stable across preparation,
 running, paused, rest and completion. A thin daily progress line ties the summary
 together. The operation column shares a left-aligned task heading, time area
 and action row. Countdown progress may use a restrained functional scale;
-stopwatch time must not imply an invented target. Timing choices become compact
-text choices rather than a large nested segmented container. Validation remains
+stopwatch time must not imply an invented target. Round setup separates countdown
+and stopwatch modes. Countdown has an always
+visible minute input and compact 25/45/60 shortcuts; arbitrary durations do not
+require a separate custom mode. Task metadata stays above this group. New drafts
+can be saved for later without starting. Primary actions have compact fixed
+widths; keep task completion separate from the save position. Running shows
+剩余时间 / 已用时间 before the digits, an ending estimate while running, and
+elapsed/target while paused. Preserve the minimum-height start action even when
+a different timer context is visible. Validation remains
 beside its field; Save/Discard/Cancel behavior is preserved.
 
 The task list uses continuous 64-point rows, subtle rules and a left selection

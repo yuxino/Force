@@ -156,7 +156,7 @@ impl ForceView {
                                 .pb(px(8.))
                                 .when(self.browsing_other_timer(), |body| {
                                     body.when_some(self.timer_context(cx), |body, context| {
-                                        body.child(context.mb(px(20.)))
+                                        body.child(context.mb(px(12.)))
                                     })
                                 })
                                 .child(if let Some(session) = &self.completed {
@@ -195,7 +195,7 @@ impl ForceView {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(20.))
+            .gap(px(16.))
             .child(
                 div()
                     .flex()
@@ -260,115 +260,6 @@ impl ForceView {
                     .flex()
                     .flex_col()
                     .gap_2()
-                    .child(field_label("计时方式"))
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(4.))
-                            .children(
-                                [
-                                    (25, "25 分钟"),
-                                    (45, "45 分钟"),
-                                    (60, "60 分钟"),
-                                    (0, "不限时"),
-                                ]
-                                .into_iter()
-                                .map(|(minutes, label)| {
-                                    let selected = if minutes == 0 {
-                                        !self.countdown
-                                    } else {
-                                        self.countdown
-                                            && !self.custom_duration
-                                            && self.timer_minutes == minutes
-                                    };
-                                    underline_button(
-                                        ("duration", minutes as u64),
-                                        selected,
-                                        true,
-                                        cx,
-                                    )
-                                    .debug_selector(move || format!("duration-{minutes}"))
-                                    .tooltip(if minutes == 0 {
-                                        "从零开始累计，手动结束计时".to_owned()
-                                    } else {
-                                        format!("倒计时 {minutes} 分钟，到时自动结束")
-                                    })
-                                    .h(px(40.))
-                                    .flex_1()
-                                    .min_w_0()
-                                    .px(px(8.))
-                                    .child(control_label(label, if selected { INK } else { MUTED }))
-                                    .when(selected, |button| button.font_weight(FontWeight::MEDIUM))
-                                    .on_click(cx.listener(
-                                        move |this, _, _, cx| {
-                                            this.countdown = minutes != 0;
-                                            this.custom_duration = false;
-                                            if minutes != 0 {
-                                                this.timer_minutes = minutes;
-                                            }
-                                            cx.notify();
-                                        },
-                                    ))
-                                }),
-                            )
-                            .child(
-                                underline_button(
-                                    "duration-custom",
-                                    self.countdown && self.custom_duration,
-                                    true,
-                                    cx,
-                                )
-                                .debug_selector(|| "duration-custom".into())
-                                .h(px(40.))
-                                .flex_1()
-                                .min_w_0()
-                                .px(px(8.))
-                                .child(control_label(
-                                    "自定义",
-                                    if self.countdown && self.custom_duration {
-                                        INK
-                                    } else {
-                                        MUTED
-                                    },
-                                ))
-                                .on_click(cx.listener(
-                                    |this, _, window, cx| this.choose_custom_duration(window, cx),
-                                )),
-                            ),
-                    )
-                    .when(self.countdown && self.custom_duration, |body| {
-                        body.child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .gap(px(8.))
-                                .child(
-                                    div()
-                                        .debug_selector(|| "duration-input".into())
-                                        .w(px(96.))
-                                        .child(gpui::Styled::h(field(&self.timer_input), px(40.))),
-                                )
-                                .child(control_label("分钟", MUTED)),
-                        )
-                        .when_some(
-                            self.timer_duration_error(cx),
-                            |body, message| {
-                                body.child(
-                                    div()
-                                        .debug_selector(|| "timer-duration-error".into())
-                                        .text_size(px(14.))
-                                        .text_color(rgb(DESTRUCTIVE))
-                                        .child(message),
-                                )
-                            },
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .flex()
-                    .flex_col()
-                    .gap_2()
                     .child(field_label("标签"))
                     .when(no_focus_tags, |row| {
                         row.child(
@@ -406,25 +297,175 @@ impl ForceView {
                     }),
             )
             .child(
-                crate::control_style::start_button(
-                    "start-focus",
-                    if self.browsing_other_timer() {
-                        "切换并开始".to_owned()
-                    } else {
-                        "开始".to_owned()
-                    },
-                    action_icon("play").size(px(14.)),
-                    disabled,
-                )
-                .debug_selector(|| "start-focus".into())
-                .tooltip(if self.browsing_other_timer() {
-                    "暂停当前专注或结束当前休息，再开始所选任务；已计时间保留"
-                } else {
-                    "开始所选任务的本次计时"
-                })
-                .h(px(44.))
-                .w_full()
-                .on_click(cx.listener(|this, _, window, cx| this.start(window, cx))),
+                div()
+                    .debug_selector(|| "timer-setup".into())
+                    .pt(px(16.))
+                    .border_t_1()
+                    .border_color(rgb(LINE))
+                    .flex()
+                    .flex_col()
+                    .gap(px(16.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(16.))
+                            .child(field_label("计时方式"))
+                            .child(div().flex().gap(px(4.)).children(
+                                [(true, "倒计时"), (false, "正计时")].into_iter().map(
+                                    |(countdown, label)| {
+                                        let selected = self.countdown == countdown;
+                                        choice_button(
+                                            if countdown {
+                                                "duration-custom"
+                                            } else {
+                                                "duration-0"
+                                            },
+                                            selected,
+                                            SURFACE,
+                                            cx,
+                                        )
+                                        .debug_selector(move || {
+                                            if countdown {
+                                                "duration-custom".into()
+                                            } else {
+                                                "duration-0".into()
+                                            }
+                                        })
+                                        .h(px(36.))
+                                        .px(px(16.))
+                                        .tooltip(if countdown {
+                                            "设定时长，到时自动结束"
+                                        } else {
+                                            "从零开始累计，手动结束计时"
+                                        })
+                                        .child(control_label(
+                                            label,
+                                            if selected { INK } else { MUTED },
+                                        ))
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                if countdown {
+                                                    this.choose_custom_duration(window, cx);
+                                                } else {
+                                                    this.choose_timer_preset(0, window, cx);
+                                                }
+                                            }),
+                                        )
+                                    },
+                                ),
+                            )),
+                    )
+                    .child(
+                        div()
+                            .h(px(44.))
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .when(self.countdown, |row| {
+                                row.child(
+                                    div()
+                                        .debug_selector(|| "duration-input".into())
+                                        .w(px(88.))
+                                        .flex_shrink_0()
+                                        .child(
+                                            gpui::Styled::h(field(&self.timer_input), px(44.))
+                                                .text_size(px(20.)),
+                                        ),
+                                )
+                                .child(control_label("分钟", MUTED))
+                                .child(div().w(px(8.)).flex_shrink_0())
+                                .children(
+                                    [25, 45, 60].into_iter().map(|minutes| {
+                                        let selected = self
+                                            .timer_input
+                                            .read(cx)
+                                            .value()
+                                            .trim()
+                                            .parse::<u32>()
+                                            .ok()
+                                            == Some(minutes);
+                                        underline_button(
+                                            ("duration", minutes as u64),
+                                            selected,
+                                            true,
+                                            cx,
+                                        )
+                                        .debug_selector(move || format!("duration-{minutes}"))
+                                        .h(px(36.))
+                                        .w(px(44.))
+                                        .px(px(4.))
+                                        .tooltip(format!("倒计时 {minutes} 分钟"))
+                                        .child(control_label(
+                                            minutes.to_string(),
+                                            if selected { INK } else { MUTED },
+                                        ))
+                                        .on_click(
+                                            cx.listener(move |this, _, window, cx| {
+                                                this.choose_timer_preset(minutes, window, cx);
+                                            }),
+                                        )
+                                    }),
+                                )
+                            })
+                            .when(!self.countdown, |row| {
+                                row.child(
+                                    div().font(timer_font(cx)).text_size(px(28.)).child("00:00"),
+                                )
+                                .child(control_label("开始累计", MUTED))
+                            }),
+                    )
+                    .when_some(self.timer_duration_error(cx), |body, message| {
+                        body.child(
+                            div()
+                                .debug_selector(|| "timer-duration-error".into())
+                                .text_size(px(14.))
+                                .text_color(rgb(DESTRUCTIVE))
+                                .child(message),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "prepare-actions".into())
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .child(
+                        crate::control_style::start_button(
+                            "start-focus",
+                            if self.browsing_other_timer() {
+                                "切换并开始".to_owned()
+                            } else {
+                                "开始专注".to_owned()
+                            },
+                            action_icon("play").size(px(14.)),
+                            disabled,
+                        )
+                        .debug_selector(|| "start-focus".into())
+                        .tooltip(if self.browsing_other_timer() {
+                            "暂停当前专注或结束当前休息，再开始所选任务；已计时间保留"
+                        } else {
+                            "开始所选任务的本次计时"
+                        })
+                        .h(px(44.))
+                        .w(px(144.))
+                        .on_click(cx.listener(|this, _, window, cx| this.start(window, cx))),
+                    )
+                    .when(self.selected_task.is_none(), |row| {
+                        row.child(
+                            button("save-new-task")
+                                .debug_selector(|| "save-new-task".into())
+                                .h(px(44.))
+                                .px(px(20.))
+                                .unavailable(!self.can_save_task(cx))
+                                .child(control_label("保存任务", INK))
+                                .tooltip("加入任务列表，稍后再开始计时")
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.save_task_changes(cx);
+                                })),
+                        )
+                    }),
             )
             .when_some(
                 self.selected_task.filter(|id| {
@@ -439,6 +480,7 @@ impl ForceView {
                             .debug_selector(|| "complete-task".into())
                             .ghost()
                             .h(px(36.))
+                            .w(px(112.))
                             .child(control_label("完成任务", MUTED))
                             .tooltip("从任务列表移出，保留全部计时记录")
                             .unavailable(self.task_has_unsaved_changes(cx))
@@ -477,7 +519,20 @@ impl ForceView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(section_heading("任务"))
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(8.))
+                            .child(section_heading("任务"))
+                            .child(
+                                div()
+                                    .debug_selector(|| "task-count".into())
+                                    .text_size(px(13.))
+                                    .text_color(rgb(MUTED))
+                                    .child((tasks.len() + standalone.len()).to_string()),
+                            ),
+                    )
                     .when(!self.is_new_task_form(), |heading| {
                         heading.child(
                             button("new-task")
@@ -680,15 +735,20 @@ impl ForceView {
             .timestamp_opt(self.now.saturating_add(remaining), 0)
             .single();
         let caption = if session.target_seconds.is_none() {
-            "已用时间".to_owned()
-        } else if paused {
-            "剩余时间".to_owned()
+            "已用时间"
         } else {
-            format!(
-                "剩余 · {} 结束",
-                end.map_or(String::new(), |end| end.format("%H:%M").to_string())
-            )
+            "剩余时间"
         };
+        let detail = session.target_seconds.map(|target| {
+            if paused {
+                format!("已用 {} / 共 {}", short_time(elapsed), short_time(target))
+            } else {
+                format!(
+                    "预计 {} 结束",
+                    end.map_or(String::new(), |end| end.format("%H:%M").to_string())
+                )
+            }
+        });
         div()
             .debug_selector(|| "focus-running".into())
             .w_full()
@@ -728,15 +788,6 @@ impl ForceView {
                     .flex()
                     .flex_col()
                     .gap(px(12.))
-                    .child(timer_readout(
-                        if session.target_seconds.is_some() {
-                            remaining
-                        } else {
-                            elapsed
-                        },
-                        compact,
-                        cx,
-                    ))
                     .child(
                         div()
                             .flex()
@@ -762,7 +813,17 @@ impl ForceView {
                                         })),
                                 )
                             }),
-                    ),
+                    )
+                    .child(timer_readout(
+                        if session.target_seconds.is_some() {
+                            remaining
+                        } else {
+                            elapsed
+                        },
+                        compact,
+                        cx,
+                    ))
+                    .when_some(detail, |body, detail| body.child(field_label(&detail))),
             )
             .when(!rest && self.editing_duration == Some(session.id), |body| {
                 body.child(self.session_duration_control(session, cx))
@@ -775,11 +836,12 @@ impl ForceView {
                 div()
                     .flex()
                     .gap(px(12.))
+                    .flex_wrap()
                     .when(rest, |row| {
                         row.child(
                             primary_button("return-from-rest")
                                 .debug_selector(|| "return-from-rest".into())
-                                .flex_1()
+                                .w(px(144.))
                                 .h(px(44.))
                                 .child(control_label(
                                     if self.return_focus_task().is_some() {
@@ -801,7 +863,7 @@ impl ForceView {
                             primary_button("running-pause")
                         })
                         .debug_selector(|| "running-pause".into())
-                        .flex_1()
+                        .w(px(144.))
                         .h(px(44.))
                         .icon(control_icon(
                             action_icon(if paused { "play" } else { "pause" }).size(px(14.)),
@@ -832,7 +894,7 @@ impl ForceView {
                         row.child(
                             button("running-finish")
                                 .debug_selector(|| "running-finish".into())
-                                .flex_1()
+                                .w(px(116.))
                                 .h(px(44.))
                                 .child(control_label("结束计时", INK))
                                 .tooltip("保存本次计时；任务保留，可再次开始计时")
@@ -847,8 +909,10 @@ impl ForceView {
                 body.child(
                     button("running-rest")
                         .debug_selector(|| "running-rest".into())
+                        .w(px(124.))
                         .ghost()
                         .h(px(36.))
+                        .px(px(12.))
                         .child(control_label("休息 5 分钟", MUTED))
                         .on_click(cx.listener(|this, _, window, cx| this.start_break(window, cx))),
                 )
@@ -977,7 +1041,7 @@ impl ForceView {
                     .child(
                         primary_button("continue-task")
                             .debug_selector(|| "continue-task".into())
-                            .flex_1()
+                            .w(px(144.))
                             .h(px(44.))
                             .rounded(px(6.))
                             .child(control_label(
@@ -1012,7 +1076,7 @@ impl ForceView {
                         row.child(
                             button("rest-five")
                                 .debug_selector(|| "rest-five".into())
-                                .flex_1()
+                                .w(px(124.))
                                 .h(px(44.))
                                 .rounded(px(6.))
                                 .child(control_label("休息 5 分钟", INK))
@@ -1027,6 +1091,7 @@ impl ForceView {
                 body.child(
                     button("complete-task")
                         .debug_selector(|| "complete-task".into())
+                        .w(px(112.))
                         .ghost()
                         .h(px(36.))
                         .child(control_label("完成任务", MUTED))

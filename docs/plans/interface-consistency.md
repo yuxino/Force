@@ -36,8 +36,12 @@ Use spacing between columns without a full-height dividing line.
 - Setup, running and completion replace only the left operation area. Its
   content fills the left column and keeps the same left edge and width in all
   three states, aligned with the heading above. Setup keeps
-  task, duration, tag and start
-  together. Running uses a left-aligned tabular timer up to 104 points (80 in
+  task name and tag together, then a separate round setup. Use compact
+  倒计时 / 正计时 choices; countdown always exposes one editable minute field
+  with 25/45/60 shortcuts beside it. Mode switches retain that input. New task
+  drafts offer 保存任务 beside 开始专注; saving creates no timer. Keep compact
+  primary actions rather than stretching them across the column. Running uses a
+  left-aligned tabular timer up to 104 points (80 in
   compact windows), fitted to the final column width without losing hours, visible 暂停 / 继续 and
   结束计时 actions, and a secondary rest action. Countdown uses a restrained
   scale based on elapsed/target time; an early finish keeps its actual fraction,
@@ -140,6 +144,10 @@ A day change or storage refresh reloads the series; never query once per cell.
   within an opaque list capped at 240 points. Selection uses stable tag IDs.
   Navigation, hiding management, completion and changed options dismiss stale
   menus. Restore prior focus without overriding a deliberate focus change.
+- New tasks can be saved without starting, including when their round duration
+  is invalid; only starting validates that duration. Saving preserves mode and
+  minutes and must not pause another round. Keep 完成任务 away from the former
+  保存任务 position so a second click cannot complete a freshly saved task.
 - Task edits save independently of starting. 保存 / 撤销 appear only for changed
   saved tasks; Return saves that edit without starting a timer. Protect unsaved
   existing-task edits and new-task drafts, including the initial empty workspace,
@@ -181,7 +189,9 @@ A day change or storage refresh reloads the series; never query once per cell.
 Check default/minimum sizes, long task and tag names, fixed summary/sidebar
 bounds across setup/running/completion, independent scrolling, selection without
 starting, explicit start without window hiding, running-strip stability, empty
-records, validation, keyboard actions, dialogs and close/reopen. Measure the
+records, validation, keyboard actions, dialogs and close/reopen. Keep the full
+start/switch action inside the minimum-height viewport when
+the running-timer context is present. Measure the
 internal task title/status widths and the full activity grid, selected day and
 future-cell behavior. Use temporary data only.
 
@@ -201,7 +211,10 @@ Unit/headless timer completion stays silent; the normal application retains its
 configured sound. When uninterrupted desktop use is required, do not start or
 activate native preview windows. GPUI 0.2.2 TestPlatform has no native pixel
 renderer, so this path supplies no screenshots or native visual acceptance.
-Its platform frame callback is also a no-op: `on_next_frame` and `ScrollAnchor`
+The debug bounds map retains removed selectors between frames: a retained
+selector does not establish that a control remains rendered. Assert current model
+state and actual dispatched actions instead. Its platform frame callback is also
+a no-op: `on_next_frame` and `ScrollAnchor`
 callbacks are not exercised by ordinary headless refreshes. Use simulated wheel
 events to check viewport bounds and controls; verify automatic scroll targeting
 natively instead of changing production behavior to satisfy this test limitation.
