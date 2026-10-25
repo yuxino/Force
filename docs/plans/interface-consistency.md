@@ -8,9 +8,10 @@ resizing or navigating management must not move the strip. Starting or resuming
 a timer preserves the windows the user has open; closing management is explicit.
 macOS and Windows hide management on close; Linux currently minimizes it.
 
-The primary navigation has 专注 and 记录. 专注 supports current work; 记录 supports
-date-based review. Settings is a secondary gear control. Strip pinning belongs
-in settings; CSV export appears only in records. Both windows share one model
+The primary navigation has 日历 and 记录. 日历 is the stable scheduling and
+review surface; 记录 supports date-based detail. Task/timer details are contextual,
+without a third primary navigation destination. Settings is a secondary gear
+control. Strip pinning belongs in settings; CSV export appears only in records. Both windows share one model
 and store. Inputs belong to management, and strip actions dispatch to that window
 after the current window borrow ends.
 
@@ -113,6 +114,21 @@ handlers. Navigation and duration underlines must use a custom variant with a
 stable border color: Ghost variants clear it during hover/press, exactly when
 a newly selected choice must remain identifiable.
 
+## Calendar context editing
+
+Keep the month visible while viewing a date or editing an arrangement. Use a
+360-point anchored panel with intrinsic height; optional notes expand inside its
+scrolling fields. Keep Save and Cancel together immediately below the form.
+Closing, Escape, outside clicks and navigation suspend a changed draft; show
+继续草稿 on the month. Explicit Cancel discards it. Selecting a different editor
+protects changed work with Save, Discard or Cancel. The timeline is an explicit
+secondary view with a visible return to the month. Actual records stay read-only.
+
+Keep the anchored parent in GPUI's normal paint pass. Input and tag menus defer
+their own drawing; GPUI 0.2.2 rejects nested deferred draws. Verify an actual tag
+menu selection outside the parent panel, followed by Escape, in the native app.
+Read-only detail titles wrap rather than relying on an unconstrained canvas line.
+
 ## Activity calendar
 
 Records begin with a real-data 53-week calendar: seven rows per week from Monday
@@ -183,6 +199,30 @@ A day change or storage refresh reloads the series; never query once per cell.
   timing mode without repeating row labels or durations. Following today advances at local
   midnight; browsing another historical date stays fixed.
   Long values wrap, and details close when the record disappears.
+
+## Design review before native implementation
+
+Begin structural UI changes with a relevant real-product reference and a short
+interaction contract: what remains visible, what each action opens, how work is
+saved or retained, and the exact close/return target. Use one current owning
+description; remove conflicting old navigation or layout instructions before
+reusing an existing container. Available width or height does not justify
+stretching a small edit into an entire workspace.
+
+Build and review one coherent clickable prototype before changing the native
+composition. Reuse the same synthetic data at 1040 × 780 and 780 × 620: empty
+dates, long names, busy dates, plans, actual work and untimed completions. Walk
+through direct review, create/save in place, edit/cancel, invalid-input recovery,
+and returning from details to the current task. Check all exits, changed-date
+drafts, actual text, action proximity and keyboard-focus restoration. Fix the
+observed failure before moving to the next stage.
+
+Repeat those same journeys in the signed native app, including ordinary keys
+after dialogs and reopening. Compare prototype and native screenshots at the
+same size. Compilation, test counts and container bounds support correctness;
+they do not establish a usable composition or complete task flow. State which
+journeys were actually covered instead of declaring the design accepted from a
+passing automated suite.
 
 ## Acceptance
 

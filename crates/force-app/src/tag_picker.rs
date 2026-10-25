@@ -28,6 +28,7 @@ pub(crate) struct TagPicker {
     focus_handle: FocusHandle,
     return_focus: Option<FocusHandle>,
     trigger_bounds: Option<Bounds<Pixels>>,
+    trigger_width: f32,
     trigger_was_open: bool,
     menu: Option<Entity<PopupMenu>>,
     dismiss_subscription: Option<Subscription>,
@@ -43,6 +44,7 @@ impl TagPicker {
             focus_handle: cx.focus_handle().tab_stop(false),
             return_focus: None,
             trigger_bounds: None,
+            trigger_width: WIDTH,
             trigger_was_open: false,
             menu: None,
             dismiss_subscription: None,
@@ -56,6 +58,18 @@ impl TagPicker {
 
     pub(crate) fn is_enabled(&self) -> bool {
         self.enabled
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.menu.is_some()
+    }
+
+    pub(crate) fn set_trigger_width(&mut self, width: f32, cx: &mut Context<Self>) {
+        let width = width.max(48.);
+        if self.trigger_width != width {
+            self.trigger_width = width;
+            cx.notify();
+        }
     }
 
     pub(crate) fn synchronize(
@@ -222,7 +236,11 @@ impl Render for TagPicker {
                         button.bg(rgb(0xe9e9e9)).cursor_default()
                     })
                     .tooltip(help)
-                    .child(single_line(title, 14.).w(px(172.)).text_color(rgb(INK)))
+                    .child(
+                        single_line(title, 14.)
+                            .w(px(self.trigger_width - 48.))
+                            .text_color(rgb(INK)),
+                    )
                     .child(
                         Icon::new(IconName::ChevronDown)
                             .size(px(13.))

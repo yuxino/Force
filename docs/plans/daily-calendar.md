@@ -2,7 +2,7 @@
 
 Force opens on a calendar for planning what to do at specific times and reviewing
 what actually happened. Calendar and Records are the primary destinations;
-Task/timer details remain available from the current activity and recorded events,
+task/timer details remain available from the current activity and recorded events,
 without a separate focus mode. The floating timer remains independent.
 
 ## Data and behavior
@@ -28,42 +28,69 @@ tasks sum independently here, unlike the merged focus statistic. Same-task round
 and related plans share one entry; moved markers remain explicit. Query the
 visible month in batches and update live durations from cached intervals.
 
-Clicking a day opens its existing timeline, with a 月历 action to return. Month
-navigation and returning to today preserve the overview. Adding an arrangement
-from another month starts on that month's first day. Date selection supports
-future dates, with real planned-day and activity marks.
-The selected day's clock grid has proportional time placement and readable
-overlap lanes. A compact editor handles title, date, times, label and note;
-existing linked-task titles are preserved. Date/selection changes protect drafts,
-and ordinary navigation or hiding preserves them. Starting a plan uses existing
-transactional task switching and keeps a paused round's recorded target.
+Clicking a day opens a compact summary over the month, keeping the month grid and
+its position visible. Selecting an arrangement shows its details and actions;
+editing or adding opens a compact editor in the same context. Actual sessions and
+untimed completions show read-only details. The explicit 查看当天时间轴 action
+opens the existing day timeline. 返回月历 and the 日历 tab return to the month.
+Month navigation and returning to today preserve the overview. Adding an
+arrangement from another month starts on that month's first day. Date selection
+supports future dates, with real planned-day and activity marks.
+
+The editor groups title, date, times and label together; notes expand only when
+needed. Existing linked-task titles are preserved. Save and Cancel remain visible
+at the bottom of the popup, including at the minimum window size and with notes
+expanded. Do not show a second Add action while the editor is open. Save validates
+and writes the occurrence transactionally, closes the popup in place and selects
+the saved date. A failed save keeps every field and its error available for
+correction. Explicit Cancel discards the draft and closes the popup.
+
+Close, outside click, Escape, ordinary date or record inspection, and navigation
+to Records or Settings suspend a changed draft without prompting or saving it.
+继续草稿 restores the same editor and original month selection; changing its date
+field does not change the draft's identity or lose its target date. An unchanged
+editor closes without creating a suspended draft. Opening a different editor or
+starting a plan protects a changed draft with Save, Discard or Cancel; saving an
+old draft must not redirect the newly requested destination. A tag menu handles
+its own Escape first; the next Escape closes the popup. Closing or saving the
+popup returns keyboard focus to the calendar. Escape at the month root hides
+management while preserving suspended drafts and running timers.
+
+The day timeline keeps its proportional clock placement, readable overlap lanes
+and real actual intervals alongside scheduled blocks. Its sidebar pairs date
+navigation with the current timer, next arrangement and completion progress.
+Empty clock slots create an arrangement directly. Starting an arrangement uses
+existing transactional task switching, keeps the calendar visible and preserves
+a paused round's recorded target. A contextual 返回计时 action returns to the
+current running or paused round without changing timing.
 
 No external calendar sync, inferred completion in other applications, reminders,
 background automatic starts, accounts or network services are introduced.
 
 ## Validation
 
-Canonical checks and strict UI-enabled Clippy pass. The calendar change has
-78 core unit tests, 2 interrupted-process integration tests, and 91 app tests.
-UI regressions cover minimum/default bounds, hour-slot creation, draft prompts,
-related actual timestamps, completion, rescheduling and local overlap widths.
+Focused GPUI regressions cover month context, six-row months, long titles and
+overflow, minimum/default bounds, expanded notes and visible actions, draft
+suspension and continuation, changed dates, explicit discard, read-only details,
+validation errors, tag selection outside the popup and two-stage Escape. Existing
+coverage retains hour-slot creation, related actual timestamps, completion,
+rescheduling, failed-storage retry and local overlap widths.
 
-Signed native macOS acceptance used disposable data: ordinary keyboard input,
-create/save/restart, start/end timing, complete a task and return to the calendar,
-move an arrangement to tomorrow, and inspect default/minimum window layouts.
-The formal app retains the same bundle and signing requirement. GPUI tests do
-not establish native IME composition or Windows/Linux interaction; those remain
-unverified. No public release is included.
+Canonical checks and strict UI-enabled Clippy pass. The complete app suite has
+103 passing tests; core coverage has 78 unit tests and 2 interrupted-process
+integration tests.
 
-The month sidebar pairs date navigation with the current timer, next arrangement
-and completion progress. Empty clock slots create an arrangement directly.
-Scheduled blocks retain their planned times; related actual intervals also remain
-visible at their real times. Starting an arrangement keeps the calendar visible.
-Use ordinary arrangement, timer and record wording; do not introduce a focus mode.
+Signed native macOS preview with disposable data has verified default and minimum
+window composition, full detail titles, expanded notes with nearby actions,
+close/continue and explicit Cancel, changed-date draft recovery, tag selection
+outside the popup, save in place and timeline return. Ordinary key presses work
+after the native draft-confirmation dialog and after hiding/reopening management.
+With a hidden draft retained, the native timeline opens at 08:00 for a future day
+and moves to 13:00 before a newly selected day's 14:00 arrangement. TestPlatform
+does not execute GPUI's next-frame callback, so automated coverage checks the
+scroll request and its consumption rather than claiming rendered scroll geometry.
 
-Month overview regressions cover full day-title bounds, top alignment, overflow,
-six-row months, minimum/default sizes, same-day detail navigation, month/today
-navigation, add defaults and failed-storage retry. Signed macOS preview with
-synthetic data confirms the month overview's native text and date alignment at
-the default size. Minimum-size bounds and events are GPUI coverage; native window
-resizing and Windows/Linux interaction remain outside this verification.
+GPUI tests establish layout bounds and dispatched events; they do not establish
+native text shaping, IME composition or Windows/Linux interaction. Native IME and
+physical Windows/Linux acceptance remain unverified. No public release is
+included.

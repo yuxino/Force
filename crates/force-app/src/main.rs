@@ -5,6 +5,7 @@
 
 mod activity_view;
 mod agenda_model;
+mod agenda_popover_view;
 mod agenda_view;
 mod control_style;
 mod focus_view;
@@ -328,33 +329,7 @@ fn main() -> anyhow::Result<()> {
                     })
                 });
                 cx.on_action(move |_: &ClosePanel, cx| {
-                    with_force(handle, cx, |this, window, cx| {
-                        if !this.compact && this.page == model::Page::Agenda && this.agenda.editing
-                        {
-                            this.cancel_plan_edit(window, cx);
-                        } else if !this.compact && this.editing_duration.is_some() {
-                            this.cancel_duration_edit(window, cx);
-                        } else if !this.compact
-                            && this.page == model::Page::Settings
-                            && this.editing_tag.is_some()
-                        {
-                            this.cancel_tag_edit(window, cx);
-                        } else if !this.compact
-                            && this.page == model::Page::Records
-                            && this.record_details.is_some()
-                        {
-                            this.record_details = None;
-                            cx.notify();
-                        } else if !this.compact
-                            && this.page == model::Page::Records
-                            && this.record_help_open
-                        {
-                            this.record_help_open = false;
-                            cx.notify();
-                        } else if !this.compact {
-                            this.compact(window, cx);
-                        }
-                    })
+                    with_force(handle, cx, |this, window, cx| this.close_panel(window, cx))
                 });
                 with_force(handle, cx, |this, window, cx| this.show_manager(window, cx));
             }

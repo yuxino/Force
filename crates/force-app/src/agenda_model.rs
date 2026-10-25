@@ -4,8 +4,8 @@ use std::{cell::Cell, collections::BTreeMap};
 use chrono::{Datelike, Days, Local, Months, NaiveDate, Timelike};
 use force_core::{PlanDraft, PlanEntry, Session, Stats, TagKind, Task};
 use gpui::{
-    AppContext as _, Context, Entity, Focusable as _, PromptButton, PromptLevel, ScrollHandle,
-    Subscription, Window,
+    AppContext as _, Context, Entity, FocusHandle, Focusable as _, PromptButton, PromptLevel,
+    ScrollHandle, Subscription, Window,
 };
 use gpui_component::input::{InputEvent, InputState};
 
@@ -41,6 +41,12 @@ pub(crate) struct AgendaState {
     pub(crate) date: NaiveDate,
     pub(crate) month: NaiveDate,
     pub(crate) month_overview: bool,
+    /// A compact contextual view over the unchanged month calendar.
+    pub(crate) popup_open: bool,
+    pub(crate) calendar_focus: FocusHandle,
+    /// `editing` retains a draft even while this editor is suspended.
+    pub(crate) editor_visible: bool,
+    pub(crate) note_expanded: bool,
     pub(crate) month_days: BTreeMap<NaiveDate, Vec<AgendaMonthItem>>,
     pub(crate) plans: Vec<PlanEntry>,
     pub(crate) planned_days: Vec<NaiveDate>,
@@ -71,6 +77,8 @@ pub(crate) struct AgendaState {
     month_plans: Vec<PlanEntry>,
     baseline: Option<PlanInputSnapshot>,
     original_plan: Option<PlanEntry>,
+    /// Stable editor origin; changing the target date never changes draft identity.
+    draft_origin_date: Option<NaiveDate>,
     generation: u64,
     tag_options: Vec<FocusTagOption>,
     _subscriptions: Vec<Subscription>,
@@ -87,7 +95,11 @@ impl AgendaState {
                 .multi_line(true)
                 .placeholder("备注（可选）")
         });
-        let tag_picker = cx.new(TagPicker::new);
+        let tag_picker = cx.new(|cx| {
+            let mut picker = TagPicker::new(cx);
+            picker.set_trigger_width(128., cx);
+            picker
+        });
         let mut subscriptions = Vec::new();
         for input in [&title_input, &date_input, &start_input, &end_input] {
             subscriptions.push(cx.subscribe_in(
@@ -100,6 +112,7 @@ impl AgendaState {
                     } else if matches!(event, InputEvent::PressEnter { secondary: false })
                         && this.page == Page::Agenda
                         && this.agenda.editing
+                        && this.agenda.editor_visible
                         && !this.compact
                     {
                         this.save_plan(window, cx);
@@ -116,7 +129,12 @@ impl AgendaState {
             }),
         );
         subscriptions.push(cx.subscribe(&tag_picker, |this, _, event: &TagPicked, cx| {
-            if this.agenda.draft_task.is_none()
+            if this.page == Page::Agenda
+                && this.agenda.editing
+                && this.agenda.editor_visible
+                && !this.compact
+                && !this.storage_failed
+                && this.agenda.draft_task.is_none()
                 && this
                     .tags
                     .iter()
@@ -132,6 +150,10 @@ impl AgendaState {
             date,
             month: date.with_day(1).unwrap_or(date),
             month_overview: true,
+            popup_open: false,
+            calendar_focus: cx.focus_handle().tab_stop(false),
+            editor_visible: false,
+            note_expanded: false,
             month_days: BTreeMap::new(),
             plans: Vec::new(),
             planned_days: Vec::new(),
@@ -161,6 +183,7 @@ impl AgendaState {
             month_plans: Vec::new(),
             baseline: None,
             original_plan: None,
+            draft_origin_date: None,
             calendar_scroll_target: Cell::new(Some(
                 Local::now().hour().saturating_sub(1) as u16 * 60,
             )),
@@ -185,14 +208,10 @@ impl AgendaState {
 
 #[derive(Clone, Copy)]
 enum AgendaDestination {
-    Date(NaiveDate),
-    Month(NaiveDate),
-    New(Option<i64>),
-    Plan(i64),
-    Edit(i64),
-    Record(i64),
-    Completion(i64),
-    Start(i64),
+    New { task: Option<i64>, day: NaiveDate },
+    NewAt { hour: u16, day: NaiveDate },
+    Edit { id: i64, day: NaiveDate },
+    Start { id: i64, day: NaiveDate },
 }
 
 impl ForceView {
@@ -346,6 +365,7 @@ impl ForceView {
             .map(|tag| tag.id);
         let enabled = self.page == Page::Agenda
             && self.agenda.editing
+            && self.agenda.editor_visible
             && self.agenda.draft_task.is_none()
             && !self.compact
             && !self.storage_failed;
@@ -403,7 +423,11 @@ impl ForceView {
                             return;
                         }
                         if choice == 0 {
-                            if let Some(focus) = &return_focus {
+                            if this.page != Page::Agenda {
+                                window.focus(&this.focus_handle);
+                            } else if !this.agenda.editor_visible {
+                                window.focus(&this.agenda.calendar_focus);
+                            } else if let Some(focus) = &return_focus {
                                 window.focus(focus);
                             } else {
                                 this.focus_agenda_editor(window, cx);
@@ -413,26 +437,32 @@ impl ForceView {
                         if choice == 2 {
                             this.save_plan(window, cx);
                             if this.agenda.editing {
+                                // A failed save must reveal the retained draft
+                                // and its validation/storage error, even if the
+                                // requested action came from another page.
+                                this.resume_agenda_draft(window, cx);
                                 return;
                             }
                         } else {
                             this.cancel_plan_edit(window, cx);
                         }
                         match destination {
-                            AgendaDestination::Date(day) => {
-                                this.select_agenda_date(day, window, cx)
+                            AgendaDestination::New { task, day } => {
+                                this.select_agenda_date(day, window, cx);
+                                this.begin_plan(task, window, cx);
                             }
-                            AgendaDestination::Month(month) => this.select_agenda_month(month, cx),
-                            AgendaDestination::New(task) => this.begin_plan(task, window, cx),
-                            AgendaDestination::Plan(id) => this.select_plan(id, window, cx),
-                            AgendaDestination::Edit(id) => this.edit_plan(id, window, cx),
-                            AgendaDestination::Record(id) => {
-                                this.select_agenda_record(id, window, cx)
+                            AgendaDestination::NewAt { hour, day } => {
+                                this.select_agenda_date(day, window, cx);
+                                this.begin_plan_at(hour, window, cx);
                             }
-                            AgendaDestination::Completion(id) => {
-                                this.select_agenda_completion(id, window, cx)
+                            AgendaDestination::Edit { id, day } => {
+                                this.select_agenda_date(day, window, cx);
+                                this.edit_plan(id, window, cx);
                             }
-                            AgendaDestination::Start(id) => this.start_plan_timer(id, window, cx),
+                            AgendaDestination::Start { id, day } => {
+                                this.select_agenda_date(day, window, cx);
+                                this.start_plan_timer(id, window, cx);
+                            }
                         }
                     });
                 });
@@ -442,16 +472,101 @@ impl ForceView {
         true
     }
 
+    /// Closing a contextual view never commits a plan or loses a changed draft.
+    pub(crate) fn suspend_agenda_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agenda.editing && !self.agenda_has_unsaved_changes(cx) {
+            self.cancel_plan_edit(window, cx);
+            return;
+        }
+        self.agenda.popup_open = false;
+        self.agenda.editor_visible = false;
+        self.agenda
+            .tag_picker
+            .update(cx, |picker, cx| picker.dismiss(window, false, cx));
+        window.focus(&self.agenda.calendar_focus);
+        cx.notify();
+    }
+
+    pub(crate) fn agenda_has_suspended_draft(&self, cx: &gpui::App) -> bool {
+        self.agenda.editing && !self.agenda.editor_visible && self.agenda_has_unsaved_changes(cx)
+    }
+
+    pub(crate) fn resume_agenda_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.agenda.editing {
+            return;
+        }
+        let origin = self.agenda.draft_origin_date.unwrap_or(self.agenda.date);
+        self.agenda.date = origin;
+        self.agenda.month = origin.with_day(1).unwrap_or(origin);
+        self.agenda.month_overview = true;
+        self.agenda.popup_open = true;
+        self.agenda.editor_visible = true;
+        self.page = Page::Agenda;
+        self.clear_agenda_selection();
+        self.refresh_agenda(cx);
+        self.focus_agenda_editor(window, cx);
+        cx.notify();
+    }
+
+    /// Month selection opens a small summary rather than replacing the calendar.
+    pub(crate) fn open_agenda_day(
+        &mut self,
+        day: NaiveDate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !(1..=9999).contains(&day.year()) {
+            return;
+        }
+        self.suspend_agenda_popup(window, cx);
+        self.agenda.month_overview = true;
+        self.select_agenda_date(day, window, cx);
+        self.clear_agenda_selection();
+        self.agenda.popup_open = true;
+        self.agenda.editor_visible = false;
+        window.focus(&self.agenda.calendar_focus);
+        cx.notify();
+    }
+
+    pub(crate) fn open_agenda_timeline(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_agenda_popup(window, cx);
+        self.agenda.month_overview = false;
+        self.agenda.popup_open = false;
+        self.page = Page::Agenda;
+        window.focus(&self.focus_handle);
+        self.agenda.calendar_scroll_target.set(Some(
+            if self.agenda.date == Local::now().date_naive() {
+                Local::now().hour().saturating_sub(1) as u16 * 60
+            } else {
+                8 * 60
+            },
+        ));
+        cx.notify();
+    }
+
+    /// Every calendar-home entry suspends an edit instead of discarding it.
+    pub(crate) fn prepare_agenda_overview(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        self.suspend_agenda_popup(window, cx);
+        self.agenda.month_overview = true;
+        self.clear_agenda_selection();
+        true
+    }
+
     pub(crate) fn select_agenda_date(
         &mut self,
         day: NaiveDate,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if !(1..=9999).contains(&day.year()) || day == self.agenda.date {
+        if !(1..=9999).contains(&day.year()) {
             return;
         }
-        if self.confirm_agenda_changes(AgendaDestination::Date(day), window, cx) {
+        self.suspend_agenda_popup(window, cx);
+        if day == self.agenda.date {
             return;
         }
         self.agenda.date = day;
@@ -462,9 +577,10 @@ impl ForceView {
             } else {
                 8 * 60
             }));
-        self.agenda.month = day.with_day(1).unwrap_or(day);
+        if !self.agenda.month_overview || !agenda_visible_dates(self.agenda.month).contains(&day) {
+            self.agenda.month = day.with_day(1).unwrap_or(day);
+        }
         self.clear_agenda_selection();
-        self.agenda.editing = false;
         self.agenda
             .calendar_scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
@@ -502,24 +618,36 @@ impl ForceView {
         let Some(month) = month.filter(|month| (1..=9999).contains(&month.year())) else {
             return;
         };
-        if self.confirm_agenda_changes(AgendaDestination::Month(month), window, cx) {
-            return;
-        }
+        self.suspend_agenda_popup(window, cx);
         self.select_agenda_month(month, cx);
     }
 
     fn select_agenda_month(&mut self, month: NaiveDate, cx: &mut Context<Self>) {
         self.agenda.month = month;
-        self.agenda.editing = false;
+        self.agenda.popup_open = false;
+        self.agenda.editor_visible = false;
         self.refresh_agenda(cx);
     }
 
     pub(crate) fn begin_plan_at(&mut self, hour: u16, window: &mut Window, cx: &mut Context<Self>) {
-        if self.agenda.editing || hour > 23 {
+        if self.agenda.editor_visible || hour > 23 {
             return;
         }
-        self.begin_plan(None, window, cx);
+        if self.confirm_agenda_changes(
+            AgendaDestination::NewAt {
+                hour,
+                day: self.agenda.date,
+            },
+            window,
+            cx,
+        ) {
+            return;
+        }
         if self.agenda.editing {
+            self.cancel_plan_edit(window, cx);
+        }
+        self.begin_plan(None, window, cx);
+        if self.agenda.editor_visible {
             self.agenda.start_input.update(cx, |input, cx| {
                 input.set_value(format!("{hour:02}:00"), window, cx)
             });
@@ -536,12 +664,22 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.agenda.editing && self.agenda.edit_id.is_none() && self.agenda.draft_task == task_id
+        if self.agenda.editing
+            && self.agenda.edit_id.is_none()
+            && self.agenda.draft_task == task_id
+            && self.agenda.draft_origin_date == Some(self.agenda.date)
         {
-            self.focus_agenda_editor(window, cx);
+            self.resume_agenda_draft(window, cx);
             return;
         }
-        if self.confirm_agenda_changes(AgendaDestination::New(task_id), window, cx) {
+        if self.confirm_agenda_changes(
+            AgendaDestination::New {
+                task: task_id,
+                day: self.agenda.date,
+            },
+            window,
+            cx,
+        ) {
             return;
         }
         let task = task_id
@@ -578,6 +716,12 @@ impl ForceView {
             9 * 60
         };
         self.agenda.editing = true;
+        self.agenda.editor_visible = true;
+        self.agenda.popup_open = true;
+        self.agenda.month_overview = true;
+        self.agenda.note_expanded = false;
+        self.agenda.draft_origin_date = Some(self.agenda.date);
+        self.page = Page::Agenda;
         self.agenda.edit_id = None;
         self.agenda.original_plan = None;
         self.agenda.draft_task = task_id;
@@ -607,9 +751,17 @@ impl ForceView {
 
     pub(crate) fn edit_plan(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         if self.agenda.editing && self.agenda.edit_id == Some(id) {
+            self.resume_agenda_draft(window, cx);
             return;
         }
-        if self.confirm_agenda_changes(AgendaDestination::Edit(id), window, cx) {
+        if self.confirm_agenda_changes(
+            AgendaDestination::Edit {
+                id,
+                day: self.agenda.date,
+            },
+            window,
+            cx,
+        ) {
             return;
         }
         let Some(plan) = self
@@ -622,6 +774,12 @@ impl ForceView {
             return;
         };
         self.agenda.editing = true;
+        self.agenda.editor_visible = true;
+        self.agenda.popup_open = true;
+        self.agenda.month_overview = true;
+        self.agenda.note_expanded = !plan.note.is_empty();
+        self.agenda.draft_origin_date = Some(self.agenda.date);
+        self.page = Page::Agenda;
         self.agenda.edit_id = Some(id);
         self.agenda.original_plan = Some(plan.clone());
         self.agenda.draft_task = Some(plan.task_id);
@@ -738,6 +896,12 @@ impl ForceView {
         ) && let Some(plan) = saved
         {
             self.agenda.editing = false;
+            self.agenda.editor_visible = false;
+            self.agenda.popup_open = false;
+            self.agenda.month_overview = true;
+            self.agenda.note_expanded = false;
+            self.agenda.draft_origin_date = None;
+            self.agenda.original_plan = None;
             self.agenda.baseline = None;
             self.agenda.edit_id = None;
             self.agenda.error = None;
@@ -752,6 +916,7 @@ impl ForceView {
                 .tag_picker
                 .update(cx, |picker, cx| picker.dismiss(window, false, cx));
             self.refresh_agenda(cx);
+            window.focus(&self.agenda.calendar_focus);
             self.notify("安排已保存。", cx);
         } else if conflict {
             self.agenda.error = Some("这项安排已在别处更改，请取消后重新打开。".to_owned());
@@ -761,6 +926,10 @@ impl ForceView {
 
     pub(crate) fn cancel_plan_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.agenda.editing = false;
+        self.agenda.editor_visible = false;
+        self.agenda.popup_open = false;
+        self.agenda.note_expanded = false;
+        self.agenda.draft_origin_date = None;
         self.agenda.edit_id = None;
         self.agenda.baseline = None;
         self.agenda.original_plan = None;
@@ -769,7 +938,7 @@ impl ForceView {
         self.agenda
             .tag_picker
             .update(cx, |picker, cx| picker.dismiss(window, false, cx));
-        window.focus(&self.focus_handle);
+        window.focus(&self.agenda.calendar_focus);
         cx.notify();
     }
 
@@ -780,21 +949,21 @@ impl ForceView {
     }
 
     pub(crate) fn select_plan(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
-        if self.confirm_agenda_changes(AgendaDestination::Plan(id), window, cx) {
-            return;
-        }
         if !self.agenda.plans.iter().any(|plan| plan.id == id) {
             return;
         }
-        self.agenda.editing = false;
+        self.suspend_agenda_popup(window, cx);
         self.clear_agenda_selection();
+        self.agenda.popup_open = self.agenda.month_overview;
         self.agenda.selected_plan = Some(id);
         if let Some(plan) = self.agenda.plans.iter().find(|plan| plan.id == id) {
             self.agenda
                 .calendar_scroll_target
                 .set(Some(plan.start_minute.saturating_sub(60)));
         }
-        self.agenda.error = None;
+        if !self.agenda.editing {
+            self.agenda.error = None;
+        }
         cx.notify();
     }
 
@@ -804,16 +973,16 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.confirm_agenda_changes(AgendaDestination::Record(id), window, cx) {
-            return;
-        }
         if !self.agenda.records.iter().any(|record| record.id == id) {
             return;
         }
-        self.agenda.editing = false;
+        self.suspend_agenda_popup(window, cx);
         self.clear_agenda_selection();
+        self.agenda.popup_open = self.agenda.month_overview;
         self.agenda.selected_record = Some(id);
-        self.agenda.error = None;
+        if !self.agenda.editing {
+            self.agenda.error = None;
+        }
         cx.notify();
     }
 
@@ -823,16 +992,16 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.confirm_agenda_changes(AgendaDestination::Completion(id), window, cx) {
-            return;
-        }
         if !self.agenda.completed_tasks.iter().any(|task| task.id == id) {
             return;
         }
-        self.agenda.editing = false;
+        self.suspend_agenda_popup(window, cx);
         self.clear_agenda_selection();
+        self.agenda.popup_open = self.agenda.month_overview;
         self.agenda.selected_completion = Some(id);
-        self.agenda.error = None;
+        if !self.agenda.editing {
+            self.agenda.error = None;
+        }
         cx.notify();
     }
 
@@ -926,7 +1095,14 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.confirm_agenda_changes(AgendaDestination::Start(id), window, cx) {
+        if self.confirm_agenda_changes(
+            AgendaDestination::Start {
+                id,
+                day: self.agenda.date,
+            },
+            window,
+            cx,
+        ) {
             return;
         }
         if self.confirm_task_changes(TaskDestination::AgendaPlan(id), window, cx) {
