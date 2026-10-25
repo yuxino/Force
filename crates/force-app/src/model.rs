@@ -1698,12 +1698,47 @@ impl ForceView {
     }
 
     pub(crate) fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        if page == Page::Agenda && !self.prepare_agenda_overview(window, cx) {
+            return;
+        }
+        if self.page == Page::Agenda && page != Page::Agenda {
+            self.suspend_agenda_popup(window, cx);
+        }
         window.focus(&self.focus_handle);
         self.page = page;
         self.editing_duration = None;
         self.toast = None;
         self.refresh(cx);
         self.show_manager(window, cx);
+    }
+
+    pub(crate) fn close_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.compact {
+            return;
+        }
+        if self.page == Page::Agenda && self.agenda.tag_picker.read(cx).is_open() {
+            self.agenda
+                .tag_picker
+                .update(cx, |picker, cx| picker.dismiss(window, true, cx));
+        } else if self.page == Page::Agenda && self.agenda.popup_open {
+            self.suspend_agenda_popup(window, cx);
+        } else if self.editing_duration.is_some() {
+            self.cancel_duration_edit(window, cx);
+        } else if self.page == Page::Agenda && !self.agenda.month_overview
+            || self.page == Page::Focus
+        {
+            self.navigate(Page::Agenda, window, cx);
+        } else if self.page == Page::Settings && self.editing_tag.is_some() {
+            self.cancel_tag_edit(window, cx);
+        } else if self.page == Page::Records && self.record_details.is_some() {
+            self.record_details = None;
+            cx.notify();
+        } else if self.page == Page::Records && self.record_help_open {
+            self.record_help_open = false;
+            cx.notify();
+        } else {
+            self.compact(window, cx);
+        }
     }
 
     pub(crate) fn compact(&mut self, window: &mut Window, cx: &mut Context<Self>) {

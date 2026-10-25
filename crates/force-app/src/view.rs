@@ -133,7 +133,7 @@ impl ForceView {
                                             if self.page == page { INK } else { MUTED },
                                         ))
                                         .on_click(cx.listener(move |this, _, window, cx| {
-                                            if this.page != page {
+                                            if page == Page::Agenda || this.page != page {
                                                 this.navigate(page, window, cx);
                                             }
                                         }))

@@ -8,7 +8,7 @@ use crate::{
     model::{ForceView, Page, day_bounds},
     view::{
         ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, action_icon, button, choice_button,
-        clock, control_icon, control_label, field, field_label, primary_button, section_heading,
+        clock, control_icon, control_label, field_label, primary_button, section_heading,
         short_time, timer_font,
     },
 };
@@ -43,7 +43,8 @@ struct CalendarBlock {
 
 impl ForceView {
     pub(crate) fn agenda_panel(&self, window: &mut Window, cx: &mut Context<Self>) -> Div {
-        if !self.agenda.editing
+        if !self.agenda.month_overview
+            && !self.agenda.editor_visible
             && let Some(minute) = self.agenda.calendar_scroll_target.take()
         {
             let scroll = self.agenda.calendar_scroll.clone();
@@ -52,7 +53,7 @@ impl ForceView {
                 window.refresh();
             });
         }
-        if self.agenda.month_overview && !self.agenda.editing {
+        if self.agenda.month_overview {
             return self.agenda_month_overview(window, cx);
         }
         let content_width = f32::from(window.bounds().size.width).min(976.) - 80.;
@@ -85,14 +86,10 @@ impl ForceView {
                         body.child(self.storage_notice(cx))
                     })
                     .when(!self.storage_failed, |body| {
-                        if self.agenda.editing {
-                            body.child(self.agenda_editor(cx))
-                        } else {
-                            body.child(self.agenda_calendar_grid(day_width, cx))
-                                .when_some(self.agenda_selected_detail(cx), |body, detail| {
-                                    body.child(detail)
-                                })
-                        }
+                        body.child(self.agenda_calendar_grid(day_width, cx))
+                            .when_some(self.agenda_selected_detail(cx), |body, detail| {
+                                body.child(detail)
+                            })
                     }),
             )
     }
@@ -298,9 +295,7 @@ impl ForceView {
                                 .tooltip(help)
                                 .child(content)
                                 .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.agenda.month_overview = false;
-                                    this.select_agenda_date(date, window, cx);
-                                    cx.notify();
+                                    this.open_agenda_day(date, window, cx);
                                 })),
                         ),
                 );
@@ -309,6 +304,8 @@ impl ForceView {
         }
         div()
             .debug_selector(|| "manager-content".into())
+            .track_focus(&self.agenda.calendar_focus)
+            .tab_stop(false)
             .flex_1()
             .min_h_0()
             .w_full()
@@ -334,6 +331,18 @@ impl ForceView {
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(month.format("%Y 年 %-m 月").to_string()),
                     )
+                    .when(self.agenda_has_suspended_draft(cx), |header| {
+                        header.child(
+                            button("agenda-resume-draft")
+                                .debug_selector(|| "agenda-resume-draft".into())
+                                .ghost()
+                                .h(px(32.))
+                                .child(control_label("继续草稿", MUTED))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.resume_agenda_draft(window, cx);
+                                })),
+                        )
+                    })
                     .child(
                         button("agenda-overview-previous")
                             .debug_selector(|| "agenda-overview-previous".into())
@@ -369,30 +378,45 @@ impl ForceView {
                                 this.refresh_agenda(cx);
                             })),
                     )
-                    .child(
-                        primary_button("agenda-overview-add")
-                            .debug_selector(|| "agenda-overview-add".into())
-                            .h(px(36.))
-                            .px(px(12.))
-                            .unavailable(self.storage_failed)
-                            .icon(control_icon(
-                                IconName::Plus,
-                                if self.storage_failed { MUTED } else { 0xffffff },
-                            ))
-                            .child(control_label(
-                                "添加安排",
-                                if self.storage_failed { MUTED } else { 0xffffff },
-                            ))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                if this.agenda.date.month() != this.agenda.month.month()
-                                    || this.agenda.date.year() != this.agenda.month.year()
-                                {
-                                    this.select_agenda_date(this.agenda.month, window, cx);
-                                }
-                                this.agenda.month_overview = false;
-                                this.begin_plan(None, window, cx);
-                            })),
-                    ),
+                    .when_some(self.strip_session(), |header, session| {
+                        let id = session.id;
+                        header.child(
+                            button("agenda-overview-timer")
+                                .debug_selector(|| "agenda-overview-timer".into())
+                                .ghost()
+                                .h(px(32.))
+                                .tooltip(format!("返回计时：{}", session.title))
+                                .child(control_label("返回计时", INK))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.select_session(id, window, cx);
+                                })),
+                        )
+                    })
+                    .when(!self.agenda.editor_visible, |header| {
+                        header.child(
+                            primary_button("agenda-overview-add")
+                                .debug_selector(|| "agenda-overview-add".into())
+                                .h(px(36.))
+                                .px(px(12.))
+                                .unavailable(self.storage_failed)
+                                .icon(control_icon(
+                                    IconName::Plus,
+                                    if self.storage_failed { MUTED } else { 0xffffff },
+                                ))
+                                .child(control_label(
+                                    "添加安排",
+                                    if self.storage_failed { MUTED } else { 0xffffff },
+                                ))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    if this.agenda.date.month() != this.agenda.month.month()
+                                        || this.agenda.date.year() != this.agenda.month.year()
+                                    {
+                                        this.select_agenda_date(this.agenda.month, window, cx);
+                                    }
+                                    this.begin_plan(None, window, cx);
+                                })),
+                        )
+                    }),
             )
             .when(self.storage_failed, |body| {
                 body.child(self.storage_notice(cx))
@@ -427,6 +451,9 @@ impl ForceView {
                                 .children(weeks),
                         ),
                 )
+            })
+            .when(self.agenda.popup_open && !self.storage_failed, |body| {
+                body.child(self.agenda_popover(window, cx))
             })
     }
 
@@ -839,14 +866,10 @@ impl ForceView {
                             .ghost()
                             .h(px(32.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
-                            .child(control_label("月历", INK))
-                            .when(!self.agenda.editing, |button| {
-                                button.on_click(cx.listener(|this, _, _, cx| {
-                                    this.agenda.month_overview = true;
-                                    cx.notify();
-                                }))
-                            })
-                            .unavailable(self.agenda.editing),
+                            .child(control_label("返回月历", INK))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.navigate(Page::Agenda, window, cx);
+                            })),
                     )
                     .child(
                         div()
@@ -937,137 +960,6 @@ impl ForceView {
                             .count(),
                         short_time(self.agenda.stats.focus_seconds)
                     )),
-            )
-    }
-
-    fn agenda_editor(&self, cx: &mut Context<Self>) -> Div {
-        let linked_task = self
-            .agenda
-            .draft_task
-            .and_then(|id| self.tasks.iter().find(|task| task.id == id));
-        div()
-            .debug_selector(|| "agenda-editor".into())
-            .flex_1()
-            .min_h_0()
-            .flex()
-            .flex_col()
-            .gap(px(14.))
-            .child(section_heading(if self.agenda.edit_id.is_some() {
-                "编辑安排"
-            } else {
-                "添加安排"
-            }))
-            .child(
-                div()
-                    .id("agenda-editor-scroll")
-                    .debug_selector(|| "agenda-editor-scroll".into())
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_y_scroll()
-                    .track_scroll(&self.agenda.editor_scroll)
-                    .pr(px(4.))
-                    .flex()
-                    .flex_col()
-                    .gap(px(14.))
-                    .child(
-                        agenda_field("要做什么").child(
-                            div().debug_selector(|| "agenda-title-input".into()).child(
-                                field(&self.agenda.title_input)
-                                    .disabled(self.agenda.draft_task.is_some()),
-                            ),
-                        ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .gap(px(12.))
-                            .child(
-                                agenda_field("日期").flex_1().min_w(px(120.)).child(
-                                    div()
-                                        .debug_selector(|| "agenda-date-input".into())
-                                        .child(field(&self.agenda.date_input)),
-                                ),
-                            )
-                            .child(
-                                agenda_field("开始").w(px(88.)).flex_shrink_0().child(
-                                    div()
-                                        .debug_selector(|| "agenda-start-input".into())
-                                        .child(field(&self.agenda.start_input)),
-                                ),
-                            )
-                            .child(
-                                agenda_field("结束").w(px(88.)).flex_shrink_0().child(
-                                    div()
-                                        .debug_selector(|| "agenda-end-input".into())
-                                        .child(field(&self.agenda.end_input)),
-                                ),
-                            ),
-                    )
-                    .child(agenda_field("标签").child(if let Some(task) = linked_task {
-                        div()
-                            .h(px(40.))
-                            .flex()
-                            .items_center()
-                            .text_size(px(14.))
-                            .child(task.tag_name.clone())
-                            .into_any_element()
-                    } else {
-                        div()
-                            .w_full()
-                            .max_w(px(240.))
-                            .h(px(40.))
-                            .child(self.agenda.tag_picker.clone())
-                            .into_any_element()
-                    }))
-                    .child(
-                        agenda_field("备注").child(
-                            div()
-                                .debug_selector(|| "agenda-note-input".into())
-                                .child(field(&self.agenda.note_input)),
-                        ),
-                    ),
-            )
-            .when_some(self.agenda.error.as_ref(), |body, message| {
-                body.child(
-                    div()
-                        .debug_selector(|| "agenda-error".into())
-                        .text_size(px(14.))
-                        .text_color(rgb(DESTRUCTIVE))
-                        .whitespace_normal()
-                        .child(message.clone()),
-                )
-            })
-            .child(
-                div()
-                    .debug_selector(|| "agenda-editor-actions".into())
-                    .flex_shrink_0()
-                    .flex()
-                    .gap(px(10.))
-                    .child(
-                        primary_button("agenda-save")
-                            .debug_selector(|| "agenda-save".into())
-                            .h(px(40.))
-                            .w(px(112.))
-                            .unavailable(self.storage_failed)
-                            .child(control_label(
-                                "保存安排",
-                                if self.storage_failed { MUTED } else { 0xffffff },
-                            ))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| this.save_plan(window, cx)),
-                            ),
-                    )
-                    .child(
-                        button("agenda-cancel")
-                            .debug_selector(|| "agenda-cancel".into())
-                            .h(px(40.))
-                            .child(control_label("取消", MUTED))
-                            .on_click(
-                                cx.listener(|this, _, window, cx| {
-                                    this.cancel_plan_edit(window, cx)
-                                }),
-                            ),
-                    ),
             )
     }
 
@@ -1471,7 +1363,7 @@ impl ForceView {
         blocks
     }
 
-    fn agenda_selected_detail(&self, cx: &mut Context<Self>) -> Option<Div> {
+    pub(crate) fn agenda_selected_detail(&self, cx: &mut Context<Self>) -> Option<Div> {
         if let Some(plan) = self
             .agenda
             .plans
@@ -1492,7 +1384,7 @@ impl ForceView {
             return Some(
                 detail_section()
                     .debug_selector(|| "agenda-record-detail".into())
-                    .child(single_line(session.title.clone(), 17.))
+                    .child(detail_title("agenda-record-title", &session.title))
                     .child(field_label(&format!(
                         "{} · 当天{} {}",
                         if session.is_running() {
@@ -1544,7 +1436,7 @@ impl ForceView {
             .map(|task| {
                 detail_section()
                     .debug_selector(|| "agenda-completion-detail".into())
-                    .child(single_line(task.title.clone(), 17.))
+                    .child(detail_title("agenda-completion-title", &task.title))
                     .child(field_label("已完成，未计时"))
             })
     }
@@ -1572,7 +1464,7 @@ impl ForceView {
             .sum();
         detail_section()
             .debug_selector(|| "agenda-plan-detail".into())
-            .child(single_line(plan.title.clone(), 17.))
+            .child(detail_title("agenda-plan-title", &plan.title))
             .child(
                 div()
                     .text_size(px(13.))
@@ -1715,12 +1607,14 @@ impl ForceView {
     }
 }
 
-fn agenda_field(label: &str) -> Div {
+fn detail_title(selector: &'static str, title: &str) -> Div {
     div()
-        .flex()
-        .flex_col()
-        .gap(px(6.))
-        .child(field_label(label))
+        .debug_selector(move || selector.into())
+        .flex_shrink_0()
+        .text_size(px(17.))
+        .text_color(rgb(INK))
+        .whitespace_normal()
+        .child(title.to_owned())
 }
 
 fn detail_section() -> Div {
