@@ -1,26 +1,37 @@
 <p align="center">
-  <img src="assets/icon.svg" width="88" alt="Force" />
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/wordmark-dark.svg" />
+    <img src="assets/wordmark.svg" width="152" height="32" alt="Force" />
+  </picture>
 </p>
 
-# Force
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/readme-cover-dark.png" />
+    <img src="assets/readme-cover.png" width="100%" alt="事情迟迟没开始。日子照常过去。" />
+  </picture>
+</p>
 
-**Plan your day. Keep a record.**
+<p align="center"><strong>日程 · 专注 · 记录</strong></p>
 
-A local-first desktop calendar for scheduling tasks and recording time spent on them, built with Rust and GPUI.
+<p align="center">日历安排任务，浮动计时器记录投入，记录页回顾每天的进展。</p>
 
-- **Plan your day** — schedule tasks at specific times; actual sessions and task completions appear in the calendar automatically.
-- **Track your time** — a floating timer with countdown and stopwatch modes.
-- **See your progress** — tasks, daily time goals, and a year of activity history.
-- **Keep it yours** — offline storage, no account, and CSV export.
+<p align="center">
+  <a href="https://github.com/yuxino/Force/issues">反馈</a> ·
+  <a href="LICENSE">MIT License</a>
+</p>
 
-## Run from source
+<br />
 
-Install Rust and the required platform development tools, then run:
+<details>
+<summary>从源码运行</summary>
+
+安装 Rust 和对应平台的开发工具后，在仓库目录运行：
 
 ```sh
 cargo run --bin force --locked
 ```
 
-Supports macOS, Windows, and Linux. Native interaction testing on Windows and Linux is still in progress.
+Force 使用 Rust 与 GPUI 构建，支持 macOS、Windows 和 Linux。Windows 与 Linux 的原生交互验证仍在进行中。
 
-[MIT License](LICENSE)
+</details>
