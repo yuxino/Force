@@ -435,3 +435,60 @@ fn atomic_plan_edit_does_not_resurrect_a_moved_or_deleted_occurrence() {
     assert_eq!(first.plans_for_day(day()).unwrap(), vec![marker]);
     assert_eq!(first.plans_for_day(next.day).unwrap(), vec![next]);
 }
+
+#[test]
+fn month_occurrences_use_half_open_range_and_keep_moved_markers_without_deleted_plans() {
+    let (_directory, mut store) = database();
+    let original = store.create_plan(&draft(), 100).unwrap();
+    let tomorrow = day().succ_opt().unwrap();
+    let next = store.postpone_plan(original.id, tomorrow, 110).unwrap();
+    let deleted = store.create_plan(&draft(), 120).unwrap();
+    store.delete_plan(deleted.id).unwrap();
+    let marker = store.plans_for_day(day()).unwrap().remove(0);
+    assert_eq!(
+        store.plans_between(day(), tomorrow).unwrap(),
+        vec![marker.clone()]
+    );
+    assert_eq!(
+        store
+            .plans_between(day(), tomorrow.succ_opt().unwrap())
+            .unwrap(),
+        vec![marker, next.clone()]
+    );
+    assert_eq!(
+        store
+            .plans_between(tomorrow, tomorrow.succ_opt().unwrap())
+            .unwrap(),
+        vec![next]
+    );
+    assert!(store.plans_between(tomorrow, day()).unwrap().is_empty());
+    assert!(store.plans_between(day(), day()).unwrap().is_empty());
+}
+
+#[test]
+fn month_occurrences_validate_rows_and_accept_final_exclusive_boundary() {
+    let (_directory, mut store) = database();
+    let mut value = draft();
+    value.day = NaiveDate::from_ymd_opt(9999, 12, 31).unwrap();
+    let plan = store.create_plan(&value, 100).unwrap();
+    let end = NaiveDate::from_ymd_opt(10000, 1, 1).unwrap();
+    assert_eq!(
+        store.plans_between(value.day, end).unwrap(),
+        vec![plan.clone()]
+    );
+    assert!(matches!(
+        store.plans_between(NaiveDate::from_ymd_opt(0, 1, 1).unwrap(), day()),
+        Err(Error::Validation(_))
+    ));
+    store
+        .connection
+        .execute(
+            "UPDATE agenda_entries SET title = '' WHERE id = ?1",
+            [plan.id],
+        )
+        .unwrap();
+    assert!(matches!(
+        store.plans_between(value.day, end),
+        Err(Error::InvalidData)
+    ));
+}

@@ -20,6 +20,132 @@ fn settle(manager: &mut ManagerHarness) {
     manager.cx.run_until_parked();
 }
 
+fn day_manager(cx: &mut TestAppContext, width: f32, height: f32, page: Page) -> ManagerHarness {
+    let mut manager = ManagerHarness::new_on_page(cx, width, height, page);
+    manager.view.update_in(&mut manager.cx, |view, _, cx| {
+        view.agenda.month_overview = false;
+        cx.notify();
+    });
+    settle(&mut manager);
+    manager
+}
+
+#[gpui::test]
+fn agenda_ui_month_overview_shows_task_titles_and_overflow_inside_each_day(
+    cx: &mut TestAppContext,
+) {
+    use crate::agenda_model::AgendaMonthItem;
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            let date = NaiveDate::from_ymd_opt(2026, 8, 15).unwrap();
+            view.agenda.date = date;
+            view.agenda.month = date.with_day(1).unwrap();
+            view.agenda.month_days.insert(
+                date,
+                (0..5)
+                    .map(|index| AgendaMonthItem {
+                        title: format!("复习操作系统与整理当天的学习记录 {index}"),
+                        seconds: 1800,
+                        planned: false,
+                        completed: index == 0,
+                        rest: false,
+                        moved: false,
+                    })
+                    .collect(),
+            );
+            cx.notify();
+        });
+        settle(&mut manager);
+        let viewport = Bounds::new(Point::default(), size(px(width), px(height)));
+        let grid = manager.bounds("agenda-overview-grid");
+        let day = manager.bounds("agenda-month-day-2026-08-15");
+        let title = manager.bounds("agenda-month-title-2026-08-15-0");
+        assert_inside(grid, viewport);
+        assert_inside(day, grid);
+        assert_inside(title, day);
+        assert!(title.size.width >= px(80.));
+        assert_inside(manager.bounds("agenda-month-more-2026-08-15"), day);
+        let date_header = manager.bounds("agenda-month-date-header-2026-08-15");
+        assert!(date_header.top() - day.top() <= px(10.));
+        let empty_day = manager.bounds("agenda-month-day-2026-08-14");
+        let empty_header = manager.bounds("agenda-month-date-header-2026-08-14");
+        assert!(
+            (date_header.top() - day.top() - (empty_header.top() - empty_day.top())).abs() < px(1.)
+        );
+        assert_inside(manager.bounds("agenda-month-day-2026-08-31"), grid);
+        manager.click("agenda-month-day-2026-08-15");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(!view.agenda.month_overview);
+            assert_eq!(
+                view.agenda.date,
+                NaiveDate::from_ymd_opt(2026, 8, 15).unwrap()
+            );
+            assert!(view.active.is_empty());
+        });
+        manager.bounds("agenda-day-grid");
+        manager.click("agenda-back-to-month");
+        manager
+            .view
+            .read_with(&manager.cx, |view, _| assert!(view.agenda.month_overview));
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_month_navigation_today_and_add_keep_the_correct_date(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let today = Local::now().date_naive();
+    manager.click("agenda-overview-next");
+    manager.click("agenda-overview-today");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.agenda.month_overview);
+        assert_eq!(view.agenda.month, today.with_day(1).unwrap());
+    });
+    manager.click("agenda-overview-next");
+    let month = manager
+        .view
+        .read_with(&manager.cx, |view, _| view.agenda.month);
+    manager.click("agenda-overview-add");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.agenda.editing);
+        assert_eq!(view.agenda.date, month);
+        assert_eq!(
+            view.agenda.date_input.read(cx).value(),
+            month.format("%Y-%m-%d").to_string()
+        );
+        assert!(view.active.is_empty());
+    });
+    assert_inside(
+        manager.bounds("agenda-save"),
+        manager.bounds("agenda-editor"),
+    );
+}
+
+#[gpui::test]
+fn agenda_ui_failed_month_storage_keeps_retry_visible_and_prevents_new_plans(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    manager.view.update_in(&mut manager.cx, |view, _, cx| {
+        view.storage_failed = true;
+        cx.notify();
+    });
+    settle(&mut manager);
+    let viewport = Bounds::new(Point::default(), size(px(780.), px(620.)));
+    assert_inside(manager.bounds("retry-storage"), viewport);
+    manager.click("agenda-overview-add");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.agenda.editing);
+        assert!(view.active.is_empty());
+    });
+    manager.click("retry-storage");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.storage_failed);
+        assert!(view.agenda.month_overview);
+    });
+    assert_inside(manager.bounds("agenda-overview-grid"), viewport);
+}
+
 fn assert_inside(child: Bounds<Pixels>, parent: Bounds<Pixels>) {
     let tolerance = px(1.);
     assert!(
@@ -140,7 +266,7 @@ fn second_click(manager: &mut ManagerHarness, position: Point<Pixels>) {
 #[gpui::test]
 fn agenda_ui_calendar_and_editor_fit_default_and_minimum_windows(cx: &mut TestAppContext) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
-        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let mut manager = day_manager(cx, width, height, Page::Agenda);
         manager.view.update_in(&mut manager.cx, |view, _, cx| {
             let date = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
             view.agenda.date = date;
@@ -194,7 +320,7 @@ fn agenda_ui_calendar_and_editor_fit_default_and_minimum_windows(cx: &mut TestAp
 
 #[gpui::test]
 fn agenda_ui_only_overlapping_events_share_the_day_column(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let mut manager = day_manager(cx, 780., 620., Page::Agenda);
     manager.view.update_in(&mut manager.cx, |view, _, cx| {
         let store = view.store.as_mut().unwrap();
         for (title, start, end) in [
@@ -237,7 +363,7 @@ fn agenda_ui_only_overlapping_events_share_the_day_column(cx: &mut TestAppContex
 fn agenda_ui_clicking_an_empty_hour_prefills_the_slot_and_saves_without_starting(
     cx: &mut TestAppContext,
 ) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let mut manager = day_manager(cx, 780., 620., Page::Agenda);
     let tomorrow = Local::now().date_naive().succ_opt().unwrap();
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.select_agenda_date(tomorrow, window, cx)
@@ -285,7 +411,7 @@ fn agenda_ui_saving_a_dated_plan_creates_no_timer_and_return_updates_same_plan(
     cx: &mut TestAppContext,
 ) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
-        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let mut manager = day_manager(cx, width, height, Page::Agenda);
         let tomorrow = Local::now()
             .date_naive()
             .checked_add_days(Days::new(1))
@@ -344,7 +470,7 @@ fn agenda_ui_saving_a_dated_plan_creates_no_timer_and_return_updates_same_plan(
 
 #[gpui::test]
 fn agenda_ui_invalid_time_preserves_the_entire_draft_and_writes_nothing(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let mut manager = day_manager(cx, 780., 620., Page::Agenda);
     let date = Local::now().date_naive();
     manager.click("agenda-add");
     for (start, end) in [
@@ -408,7 +534,7 @@ fn agenda_ui_invalid_time_preserves_the_entire_draft_and_writes_nothing(cx: &mut
 fn agenda_ui_selection_and_date_changes_protect_edits_with_save_discard_cancel(
     cx: &mut TestAppContext,
 ) {
-    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let mut manager = day_manager(cx, 1040., 780., Page::Agenda);
     let first = seed_plan(&mut manager, "First arrangement");
     seed_plan(&mut manager, "Other arrangement");
     select_first_plan(&mut manager);
@@ -496,7 +622,7 @@ fn agenda_ui_selection_and_date_changes_protect_edits_with_save_discard_cancel(
 fn agenda_ui_starting_a_plan_saves_a_focus_draft_and_resumes_the_original_round(
     cx: &mut TestAppContext,
 ) {
-    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let mut manager = day_manager(cx, 1040., 780., Page::Agenda);
     let (original_id, other_id, task_id) =
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             let now = Local::now().timestamp();
@@ -590,7 +716,7 @@ fn agenda_ui_starting_a_plan_saves_a_focus_draft_and_resumes_the_original_round(
 fn agenda_ui_checking_and_postponing_arrangements_never_rewrites_actual_time(
     cx: &mut TestAppContext,
 ) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let mut manager = day_manager(cx, 780., 620., Page::Agenda);
     let plan = seed_plan(&mut manager, "A timed arrangement");
     let original = manager.view.update_in(&mut manager.cx, |view, window, cx| {
         let original = view
@@ -642,7 +768,7 @@ fn agenda_ui_checking_and_postponing_arrangements_never_rewrites_actual_time(
 fn agenda_ui_actual_work_and_untimed_completions_appear_automatically_without_duplicates(
     cx: &mut TestAppContext,
 ) {
-    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let mut manager = day_manager(cx, 1040., 780., Page::Agenda);
     let yesterday = Local::now().date_naive().pred_opt().unwrap();
     manager.view.update_in(&mut manager.cx, |view, _, cx| {
         view.agenda.date = yesterday;
@@ -720,7 +846,7 @@ fn agenda_ui_actual_work_and_untimed_completions_appear_automatically_without_du
 
 #[gpui::test]
 fn agenda_ui_global_task_completion_cannot_offer_to_undo_an_occurrence(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let mut manager = day_manager(cx, 1040., 780., Page::Agenda);
     let plan = seed_plan(&mut manager, "Already completed task");
     let completed_at = manager.view.update_in(&mut manager.cx, |view, window, cx| {
         let now = Local::now().timestamp();
@@ -749,7 +875,7 @@ fn agenda_ui_global_task_completion_cannot_offer_to_undo_an_occurrence(cx: &mut 
 
 #[gpui::test]
 fn agenda_ui_plan_tag_selection_is_independent_from_the_focus_draft(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let mut manager = day_manager(cx, 1040., 780., Page::Agenda);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.new_task(window, cx);
         view.selected_tag = 1;
@@ -802,7 +928,7 @@ fn agenda_ui_plan_tag_selection_is_independent_from_the_focus_draft(cx: &mut Tes
 fn agenda_ui_hiding_reopening_and_navigation_keep_an_unsaved_calendar_draft(
     cx: &mut TestAppContext,
 ) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let mut manager = day_manager(cx, 780., 620., Page::Agenda);
     let date = Local::now().date_naive();
     manager.click("agenda-add");
     fill_plan(
@@ -845,7 +971,7 @@ fn agenda_ui_hiding_reopening_and_navigation_keep_an_unsaved_calendar_draft(
 fn agenda_ui_double_click_cannot_undo_completion_or_accidentally_start_a_round(
     cx: &mut TestAppContext,
 ) {
-    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let mut manager = day_manager(cx, 1040., 780., Page::Agenda);
     seed_plan(&mut manager, "One deliberate action");
     select_first_plan(&mut manager);
     let done = manager.bounds("agenda-plan-done").center();

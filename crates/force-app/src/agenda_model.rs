@@ -1,5 +1,5 @@
 //! Calendar selection and drafts are independent from the actual timer lifecycle.
-use std::cell::Cell;
+use std::{cell::Cell, collections::BTreeMap};
 
 use chrono::{Datelike, Days, Local, Months, NaiveDate, Timelike};
 use force_core::{PlanDraft, PlanEntry, Session, Stats, TagKind, Task};
@@ -25,9 +25,23 @@ struct PlanInputSnapshot {
     tag: i64,
 }
 
+/// One real task (or unassociated legacy round) shown directly in a month day.
+/// Planned duration is never treated as actual investment.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct AgendaMonthItem {
+    pub(crate) title: String,
+    pub(crate) seconds: i64,
+    pub(crate) planned: bool,
+    pub(crate) completed: bool,
+    pub(crate) rest: bool,
+    pub(crate) moved: bool,
+}
+
 pub(crate) struct AgendaState {
     pub(crate) date: NaiveDate,
     pub(crate) month: NaiveDate,
+    pub(crate) month_overview: bool,
+    pub(crate) month_days: BTreeMap<NaiveDate, Vec<AgendaMonthItem>>,
     pub(crate) plans: Vec<PlanEntry>,
     pub(crate) planned_days: Vec<NaiveDate>,
     pub(crate) actual_days: Vec<NaiveDate>,
@@ -52,6 +66,9 @@ pub(crate) struct AgendaState {
     pub(crate) inspector_scroll: ScrollHandle,
     pub(crate) editor_scroll: ScrollHandle,
     pub(crate) calendar_scroll_target: Cell<Option<u16>>,
+    month_records: Vec<Session>,
+    month_completions: Vec<Task>,
+    month_plans: Vec<PlanEntry>,
     baseline: Option<PlanInputSnapshot>,
     original_plan: Option<PlanEntry>,
     generation: u64,
@@ -114,6 +131,8 @@ impl AgendaState {
         Self {
             date,
             month: date.with_day(1).unwrap_or(date),
+            month_overview: true,
+            month_days: BTreeMap::new(),
             plans: Vec::new(),
             planned_days: Vec::new(),
             actual_days: Vec::new(),
@@ -137,6 +156,9 @@ impl AgendaState {
             calendar_scroll: ScrollHandle::default(),
             inspector_scroll: ScrollHandle::default(),
             editor_scroll: ScrollHandle::default(),
+            month_records: Vec::new(),
+            month_completions: Vec::new(),
+            month_plans: Vec::new(),
             baseline: None,
             original_plan: None,
             calendar_scroll_target: Cell::new(Some(
@@ -188,8 +210,8 @@ impl ForceView {
         let snapshot = (|| -> force_core::Result<_> {
             let mut records = store.sessions_overlapping(start, end, self.now)?;
             merge_active_records(&mut records, &self.active, &[self.agenda.date], self.now);
-            // One bounded visible-month batch, never one query per cell. The
-            // temporary records are reduced to dates before entering UI state.
+            // Keep one bounded visible-month snapshot for both the overview
+            // and query-free live timer updates; never query per calendar cell.
             let mut month_records =
                 store.sessions_overlapping(visible_start, visible_end, self.now)?;
             merge_active_records(&mut month_records, &self.active, &visible_dates, self.now);
@@ -197,17 +219,44 @@ impl ForceView {
                 store.completed_tasks_between(visible_start, visible_end, self.now)?;
             let actual_days =
                 agenda_actual_dates(&visible_dates, &month_records, &month_completions, self.now);
+            let month_plans = store.plans_between(range_first, range_end)?;
+            let mut planned_days: Vec<_> = month_plans.iter().map(|plan| plan.day).collect();
+            planned_days.sort_unstable();
+            planned_days.dedup();
             Ok((
                 store.plans_for_day(self.agenda.date)?,
-                store.plan_days_between(range_first, range_end)?,
+                planned_days,
                 actual_days,
                 records,
                 store.completed_tasks_between(start, end, self.now)?,
                 store.stats(start, end, self.now)?,
+                month_records,
+                month_completions,
+                month_plans,
             ))
         })();
         match snapshot {
-            Ok((plans, planned_days, actual_days, records, completed_tasks, stats)) => {
+            Ok((
+                plans,
+                planned_days,
+                actual_days,
+                records,
+                completed_tasks,
+                stats,
+                month_records,
+                month_completions,
+                month_plans,
+            )) => {
+                self.agenda.month_days = agenda_month_days(
+                    &visible_dates,
+                    &month_records,
+                    &month_completions,
+                    &month_plans,
+                    self.now,
+                );
+                self.agenda.month_records = month_records;
+                self.agenda.month_completions = month_completions;
+                self.agenda.month_plans = month_plans;
                 self.agenda.plans = plans;
                 self.agenda.planned_days = planned_days;
                 self.agenda.actual_days = actual_days;
@@ -257,7 +306,21 @@ impl ForceView {
             &[self.agenda.date],
             self.now,
         );
-        if agenda_visible_dates(self.agenda.month).contains(&today)
+        let visible_dates = agenda_visible_dates(self.agenda.month);
+        merge_active_records(
+            &mut self.agenda.month_records,
+            &self.active,
+            &visible_dates,
+            self.now,
+        );
+        self.agenda.month_days = agenda_month_days(
+            &visible_dates,
+            &self.agenda.month_records,
+            &self.agenda.month_completions,
+            &self.agenda.month_plans,
+            self.now,
+        );
+        if visible_dates.contains(&today)
             && !self.agenda.actual_days.contains(&today)
             && !agenda_actual_dates(&[today], &self.active, &[], self.now).is_empty()
         {
@@ -1028,6 +1091,101 @@ fn agenda_actual_dates(
         .collect()
 }
 
+#[derive(Clone, Copy, Eq, Ord, PartialEq, PartialOrd)]
+enum MonthItemIdentity {
+    Task(i64),
+    Session(i64),
+    MovedPlan(i64),
+}
+
+fn agenda_month_days(
+    dates: &[NaiveDate],
+    records: &[Session],
+    completed: &[Task],
+    plans: &[PlanEntry],
+    now: i64,
+) -> BTreeMap<NaiveDate, Vec<AgendaMonthItem>> {
+    dates
+        .iter()
+        .map(|day| {
+            let (start, end) = day_bounds(*day);
+            let mut items = BTreeMap::<MonthItemIdentity, AgendaMonthItem>::new();
+            for record in records
+                .iter()
+                .filter(|record| record_touches_day(record, *day, now))
+            {
+                let identity = record
+                    .task_id
+                    .map(MonthItemIdentity::Task)
+                    .unwrap_or(MonthItemIdentity::Session(record.id));
+                let item = items.entry(identity).or_insert_with(|| AgendaMonthItem {
+                    title: record.title.clone(),
+                    seconds: 0,
+                    planned: false,
+                    completed: false,
+                    rest: record.tag_kind == TagKind::Rest,
+                    moved: false,
+                });
+                item.seconds = item
+                    .seconds
+                    .saturating_add(record.elapsed_between(start, end, now));
+            }
+            for task in completed.iter().filter(|task| {
+                task.completed_at
+                    .is_some_and(|stamp| stamp >= start && stamp < end && stamp <= now)
+            }) {
+                let item = items
+                    .entry(MonthItemIdentity::Task(task.id))
+                    .or_insert_with(|| AgendaMonthItem {
+                        title: task.title.clone(),
+                        seconds: 0,
+                        planned: false,
+                        completed: false,
+                        rest: task.tag_kind == TagKind::Rest,
+                        moved: false,
+                    });
+                item.completed = true;
+            }
+            for plan in plans.iter().filter(|plan| plan.day == *day) {
+                let moved = plan.moved_to.is_some();
+                let identity = if moved {
+                    MonthItemIdentity::MovedPlan(plan.id)
+                } else {
+                    MonthItemIdentity::Task(plan.task_id)
+                };
+                items
+                    .entry(identity)
+                    .and_modify(|item| {
+                        // An occurrence check never completes an actual task.
+                        // A combined plan stays pending until every occurrence
+                        // is complete; moved markers retain their own identity.
+                        if item.planned {
+                            item.completed &= plan.completed_at.is_some();
+                        }
+                    })
+                    .or_insert_with(|| AgendaMonthItem {
+                        title: plan.title.clone(),
+                        seconds: 0,
+                        planned: true,
+                        completed: plan.completed_at.is_some(),
+                        rest: false,
+                        moved,
+                    });
+            }
+            let mut items: Vec<_> = items.into_values().collect();
+            // Actual work remains first even when a task has no timer minutes.
+            // Within it, the most substantial work is immediately visible.
+            items.sort_by(|left, right| {
+                (left.planned, left.moved)
+                    .cmp(&(right.planned, right.moved))
+                    .then_with(|| right.seconds.cmp(&left.seconds))
+                    .then_with(|| left.title.cmp(&right.title))
+            });
+            (*day, items)
+        })
+        .collect()
+}
+
 pub(crate) fn agenda_clock(minute: u16) -> String {
     format!("{:02}:{:02}", minute / 60, minute % 60)
 }
@@ -1083,12 +1241,12 @@ fn validate_plan_fields(draft: &PlanInputSnapshot) -> Result<(NaiveDate, u16, u1
 #[cfg(test)]
 mod tests {
     use super::{
-        PlanInputSnapshot, agenda_actual_dates, agenda_clock, agenda_visible_dates,
-        merge_active_records, parse_plan_time, validate_plan_fields,
+        PlanInputSnapshot, agenda_actual_dates, agenda_clock, agenda_month_days,
+        agenda_visible_dates, merge_active_records, parse_plan_time, validate_plan_fields,
     };
     use crate::model::day_bounds;
     use chrono::{Datelike, Days, NaiveDate};
-    use force_core::{Interval, Session, TagKind, Task};
+    use force_core::{Interval, PlanEntry, Session, TagKind, Task};
     fn draft() -> PlanInputSnapshot {
         PlanInputSnapshot {
             title: "Read".into(),
@@ -1261,5 +1419,190 @@ mod tests {
         assert!(validate_plan_fields(&d).is_ok());
         d.note.push('\u{1b}');
         assert!(validate_plan_fields(&d).is_err());
+    }
+
+    fn month_record(id: i64, task: Option<i64>, start: i64, end: Option<i64>) -> Session {
+        Session {
+            id,
+            task_id: task,
+            title: "Same visible title".into(),
+            tag_id: 1,
+            tag_name: "Work".into(),
+            tag_kind: TagKind::Focus,
+            started_at: start,
+            finished_at: end,
+            target_seconds: None,
+            intervals: vec![Interval { start, end }],
+        }
+    }
+
+    fn month_plan(id: i64, task_id: i64, day: NaiveDate) -> PlanEntry {
+        PlanEntry {
+            id,
+            task_id,
+            title: "Scheduled title".into(),
+            day,
+            start_minute: 540,
+            end_minute: 600,
+            note: String::new(),
+            completed_at: None,
+            moved_to: None,
+            created_at: day_bounds(day).0,
+        }
+    }
+
+    #[test]
+    fn month_overview_clips_actual_intervals_and_does_not_turn_paused_days_into_work() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let previous = day.pred_opt().unwrap();
+        let next = day.succ_opt().unwrap();
+        let start = day_bounds(day).0;
+        let end = day_bounds(day).1;
+        let across = month_record(1, Some(1), start - 120, Some(start + 180));
+        let mut paused = month_record(2, Some(2), start - 1000, Some(end + 240));
+        paused.intervals = vec![
+            Interval {
+                start: start - 1000,
+                end: Some(start - 900),
+            },
+            Interval {
+                start: end + 120,
+                end: Some(end + 240),
+            },
+        ];
+        let days = agenda_month_days(
+            &[previous, day, next],
+            &[across, paused],
+            &[],
+            &[],
+            end + 300,
+        );
+        assert_eq!(
+            days[&previous].iter().map(|item| item.seconds).sum::<i64>(),
+            220
+        );
+        assert_eq!(days[&day].len(), 1);
+        assert_eq!(days[&day][0].seconds, 180);
+        assert_eq!(days[&next].len(), 1);
+        assert_eq!(days[&next][0].seconds, 120);
+    }
+
+    #[test]
+    fn month_overview_combines_task_rounds_and_plans_but_keeps_legacy_and_rest_identity() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let start = day_bounds(day).0;
+        let mut rest = month_record(5, None, start + 3000, Some(start + 3060));
+        rest.tag_kind = TagKind::Rest;
+        let records = [
+            month_record(1, Some(1), start, Some(start + 120)),
+            month_record(2, Some(1), start + 300, Some(start + 480)),
+            month_record(3, None, start + 600, Some(start + 660)),
+            month_record(4, None, start + 900, Some(start + 960)),
+            rest,
+        ];
+        let completed = Task {
+            id: 1,
+            title: "Completed renamed task".into(),
+            tag_id: 1,
+            tag_name: "Work".into(),
+            tag_kind: TagKind::Focus,
+            created_at: start,
+            completed_at: Some(start + 3600),
+            total_seconds: 9000,
+            session_count: 2,
+        };
+        let plans = [month_plan(1, 1, day), month_plan(2, 1, day)];
+        let days = agenda_month_days(&[day], &records, &[completed], &plans, start + 4000);
+        let items = &days[&day];
+        assert_eq!(items.len(), 4);
+        assert_eq!(items[0].seconds, 300);
+        assert_eq!(items[0].title, "Same visible title");
+        assert!(items[0].completed);
+        assert!(!items[0].planned);
+        assert_eq!(items.iter().filter(|item| item.rest).count(), 1);
+        assert_eq!(items.iter().map(|item| item.seconds).sum::<i64>(), 480);
+    }
+
+    #[test]
+    fn month_overview_shows_untimed_completion_and_moved_plan_without_inventing_minutes() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let start = day_bounds(day).0;
+        let completed = Task {
+            id: 1,
+            title: "Untimed completed task".into(),
+            tag_id: 1,
+            tag_name: "Work".into(),
+            tag_kind: TagKind::Focus,
+            created_at: start,
+            completed_at: Some(start + 60),
+            total_seconds: 9000,
+            session_count: 2,
+        };
+        let mut moved = month_plan(1, 1, day);
+        moved.moved_to = Some(2);
+        let plans = [moved, month_plan(3, 3, day)];
+        let days = agenda_month_days(&[day], &[], &[completed], &plans, start + 120);
+        let items = &days[&day];
+        assert_eq!(items.len(), 3);
+        assert!(items.iter().all(|item| item.seconds == 0));
+        assert_eq!(items[0].title, "Untimed completed task");
+        assert!(items[0].completed);
+        assert!(!items[0].planned);
+        assert!(items[1].planned);
+        assert!(!items[1].moved);
+        assert!(items[2].moved);
+    }
+
+    #[test]
+    fn month_overview_open_interval_updates_from_the_same_snapshot_across_midnight() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let start = day_bounds(day).0;
+        let records = [month_record(1, Some(1), start - 60, None)];
+        let at_midnight = agenda_month_days(&[day], &records, &[], &[], start);
+        assert_eq!(at_midnight[&day].len(), 1);
+        assert_eq!(at_midnight[&day][0].seconds, 0);
+        let later = agenda_month_days(&[day], &records, &[], &[], start + 90);
+        assert_eq!(later[&day][0].seconds, 90);
+        assert!(!later[&day][0].planned);
+    }
+
+    #[test]
+    fn month_overview_occurrence_completion_keeps_other_plans_and_actual_tasks_unfinished() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let start = day_bounds(day).0;
+        let mut done = month_plan(1, 1, day);
+        done.completed_at = Some(start + 60);
+        let mut pending = month_plan(2, 1, day);
+        let mut moved = month_plan(3, 1, day);
+        moved.completed_at = Some(start + 60);
+        moved.moved_to = Some(4);
+        let days = agenda_month_days(
+            &[day],
+            &[],
+            &[],
+            &[done.clone(), pending.clone(), moved.clone()],
+            start + 300,
+        );
+        assert_eq!(days[&day].len(), 2);
+        assert!(days[&day][0].planned);
+        assert!(!days[&day][0].completed);
+        assert!(days[&day][1].moved);
+        assert!(days[&day][1].completed);
+
+        pending.completed_at = Some(start + 120);
+        let all_done = agenda_month_days(&[day], &[], &[], &[done.clone(), pending], start + 300);
+        assert!(all_done[&day][0].completed);
+
+        let actual = agenda_month_days(
+            &[day],
+            &[month_record(1, Some(1), start, Some(start + 120))],
+            &[],
+            &[done, moved],
+            start + 300,
+        );
+        assert!(!actual[&day][0].planned);
+        assert!(!actual[&day][0].completed);
+        assert!(actual[&day][1].moved);
+        assert!(actual[&day][1].completed);
     }
 }
