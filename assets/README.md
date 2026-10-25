@@ -9,3 +9,5 @@
 - `readme-cover.png` / `readme-cover-dark.png`：README 的黑字与白字透明图。文案为「事情迟迟没开始。日子照常过去。」，从右至左竖排。
 
 修改轮廓时，同步 `logo.svg`、两个字标和 `icon.svg` 中的猫形路径。在仓库根目录运行 `swift scripts/generate-icons.swift`，即可通过系统矢量渲染重新生成 PNG、ICNS 和 ICO，不再另存一套绘制坐标。
+
+README 的明暗图片通过链接上的 `#gh-light-mode-only` / `#gh-dark-mode-only` 跟随 GitHub 页面主题。验收需覆盖系统主题与 GitHub 主题相反的组合；仅检查本地 `prefers-color-scheme` 不能证明 GitHub 显示正确。
