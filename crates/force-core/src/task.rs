@@ -44,7 +44,7 @@ pub(super) fn migrate_v2(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch(SCHEMA)?;
             transaction.pragma_update(None, "user_version", 3)?;
         }
-        3 | SCHEMA_VERSION => (),
+        3 | 4 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -353,7 +353,12 @@ fn validate_task_target(target: Option<i64>) -> Result<()> {
     Ok(())
 }
 
-fn insert_task(transaction: &Transaction<'_>, title: &str, tag_id: i64, now: i64) -> Result<Task> {
+pub(super) fn insert_task(
+    transaction: &Transaction<'_>,
+    title: &str,
+    tag_id: i64,
+    now: i64,
+) -> Result<Task> {
     let tag = available_tag(transaction, tag_id)?;
     transaction.execute(
         "INSERT INTO tasks (title, tag_id, tag_name, tag_kind, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -483,7 +488,7 @@ fn pause_for_break(
     Ok(())
 }
 
-fn available_tag(connection: &Connection, id: i64) -> Result<Tag> {
+pub(super) fn available_tag(connection: &Connection, id: i64) -> Result<Tag> {
     let (name, kind, archived): (String, String, bool) = connection
         .query_row(
             "SELECT name, kind, archived FROM tags WHERE id = ?1",

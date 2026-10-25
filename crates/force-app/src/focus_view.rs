@@ -19,7 +19,7 @@ impl ForceView {
             (self.today.focus_seconds as f32 / (self.goal.max(1) as f32 * 60.)).clamp(0., 1.);
         let total = short_time(self.today.focus_seconds);
         let goal = short_time(i64::from(self.goal) * 60);
-        let summary = format!("今日专注 {total}，每日目标 {goal}");
+        let summary = format!("今日计时 {total}，每日目标 {goal}");
         div()
             .debug_selector(|| "focus-summary".into())
             .flex_shrink_0()
@@ -40,7 +40,7 @@ impl ForceView {
                             .flex()
                             .items_baseline()
                             .gap(px(12.))
-                            .child(section_heading("今日专注"))
+                            .child(section_heading("今日计时"))
                             .child(
                                 div()
                                     .text_size(px(13.))
@@ -268,7 +268,7 @@ impl ForceView {
                                 .small()
                                 .h(px(40.))
                                 .icon(control_icon(IconName::Plus, INK))
-                                .child(control_label("添加专注标签", INK))
+                                .child(control_label("添加计时标签", INK))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.open_tag_settings(window, cx)
                                 })),
@@ -437,14 +437,14 @@ impl ForceView {
                             if self.browsing_other_timer() {
                                 "切换并开始".to_owned()
                             } else {
-                                "开始专注".to_owned()
+                                "开始计时".to_owned()
                             },
                             action_icon("play").size(px(14.)),
                             disabled,
                         )
                         .debug_selector(|| "start-focus".into())
                         .tooltip(if self.browsing_other_timer() {
-                            "暂停当前专注或结束当前休息，再开始所选任务；已计时间保留"
+                            "暂停当前计时或结束当前休息，再开始所选任务；已计时间保留"
                         } else {
                             "开始所选任务的本次计时"
                         })
@@ -765,7 +765,7 @@ impl ForceView {
                     } else if rest {
                         "休息中"
                     } else {
-                        "专注中"
+                        "计时中"
                     }))
                     .child(task_heading(&session.title))
                     .when(session.tag_name != session.title, |body| {
@@ -845,7 +845,7 @@ impl ForceView {
                                 .h(px(44.))
                                 .child(control_label(
                                     if self.return_focus_task().is_some() {
-                                        "继续专注"
+                                        "继续计时"
                                     } else {
                                         "结束休息"
                                     },
@@ -1027,7 +1027,7 @@ impl ForceView {
                     .child(field_label(if rest {
                         "休息时长"
                     } else {
-                        "专注时长"
+                        "计时时长"
                     })),
             )
             .when_some(
@@ -1047,7 +1047,7 @@ impl ForceView {
                             .child(control_label(
                                 if rest {
                                     if return_task.is_some() {
-                                        "继续专注"
+                                        "继续计时"
                                     } else {
                                         "新建任务"
                                     }
@@ -1058,7 +1058,7 @@ impl ForceView {
                             ))
                             .tooltip(if rest {
                                 return_task.map_or_else(
-                                    || "新建一个专注任务".to_owned(),
+                                    || "新建一个计时任务".to_owned(),
                                     |task| format!("继续：{}", task.title),
                                 )
                             } else {
@@ -1080,7 +1080,7 @@ impl ForceView {
                                 .h(px(44.))
                                 .rounded(px(6.))
                                 .child(control_label("休息 5 分钟", INK))
-                                .tooltip("暂停专注并开始休息倒计时；已有专注时间保留")
+                                .tooltip("暂停当前计时并开始休息倒计时；已计时间保留")
                                 .on_click(
                                     cx.listener(|this, _, window, cx| this.start_break(window, cx)),
                                 ),

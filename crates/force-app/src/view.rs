@@ -116,7 +116,7 @@ impl ForceView {
                             .gap(px(8.))
                             .children(
                                 [
-                                    ("focus-tab", "专注", Page::Focus),
+                                    ("agenda-tab", "日历", Page::Agenda),
                                     ("records-tab", "记录", Page::Records),
                                 ]
                                 .into_iter()
@@ -197,12 +197,20 @@ impl ForceView {
             )
     }
 
-    fn management_page(&self, compact: bool, cx: &mut Context<Self>) -> AnyElement {
+    fn management_page(
+        &self,
+        compact: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
+        if self.page == Page::Agenda {
+            return self.agenda_panel(window, cx).into_any_element();
+        }
         if self.page == Page::Focus {
             return self.focus_panel(compact, cx).into_any_element();
         }
         let scroll = &self.panel_scroll[match self.page {
-            Page::Focus => 0,
+            Page::Agenda | Page::Focus => 0,
             Page::Records => 1,
             Page::Settings => 2,
         }];
@@ -230,7 +238,8 @@ impl ForceView {
                             .items_center()
                             .justify_between()
                             .child(page_heading(match self.page {
-                                Page::Focus => "专注",
+                                Page::Agenda => "日历",
+                                Page::Focus => "计时",
                                 Page::Records => "记录",
                                 Page::Settings => "设置",
                             }))
@@ -262,6 +271,7 @@ impl ForceView {
                     })
                     .when(!self.storage_failed, |body| {
                         body.child(match self.page {
+                            Page::Agenda => self.agenda_panel(window, cx).into_any_element(),
                             Page::Focus => self.focus_panel(compact, cx).into_any_element(),
                             Page::Records => self.records_panel(cx).into_any_element(),
                             Page::Settings => self.settings_panel(cx).into_any_element(),
@@ -276,6 +286,7 @@ impl ForceView {
 impl Render for ForceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tag_picker(window, cx);
+        self.sync_agenda_tag_picker(window, cx);
         let viewport = window.viewport_size();
         let compact = viewport.width < px(920.) || viewport.height < px(700.);
         div()
@@ -290,7 +301,7 @@ impl Render for ForceView {
             .flex()
             .flex_col()
             .child(self.panel_navigation(cx))
-            .child(self.management_page(compact, cx))
+            .child(self.management_page(compact, window, cx))
             .when_some(self.toast.as_ref(), |body, (message, _)| {
                 body.child(self.feedback_toast(message, cx))
             })
@@ -342,7 +353,7 @@ impl FloatingStrip {
         } else {
             let input = model.task_input.read(cx).value();
             if input.trim().is_empty() {
-                "准备专注".to_owned()
+                "安排一件事".to_owned()
             } else {
                 input.to_string()
             }
@@ -355,7 +366,7 @@ impl FloatingStrip {
             } else if session.tag_kind == TagKind::Rest {
                 "休息中"
             } else {
-                "专注中"
+                "计时中"
             }
         } else if completed.is_some_and(|s| s.tag_kind == TagKind::Rest) {
             "休息结束"
@@ -374,7 +385,7 @@ impl FloatingStrip {
         } else if current.is_some() {
             ("play", "继续计时")
         } else {
-            ("play", "开始专注")
+            ("play", "开始计时")
         };
         let state = model
             .toast

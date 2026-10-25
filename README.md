@@ -4,12 +4,13 @@
 
 # Force
 
-**Focus on one thing.**
+**Plan your day. Keep a record.**
 
-A minimal, local-first desktop focus timer built with Rust and GPUI.
+A local-first desktop calendar for scheduling tasks and recording time spent on them, built with Rust and GPUI.
 
-- **Stay focused** — a floating timer with countdown and stopwatch modes.
-- **See your progress** — tasks, daily goals, and a year of focus history.
+- **Plan your day** — schedule tasks at specific times; actual sessions and task completions appear in the calendar automatically.
+- **Track your time** — a floating timer with countdown and stopwatch modes.
+- **See your progress** — tasks, daily time goals, and a year of activity history.
 - **Keep it yours** — offline storage, no account, and CSV export.
 
 ## Run from source

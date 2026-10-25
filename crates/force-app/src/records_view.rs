@@ -123,7 +123,7 @@ impl ForceView {
                                     .text_align(TextAlign::Right)
                                     .child(short_time(self.record_stats.focus_seconds).replace(' ', "")),
                             )
-                            .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child("专注"))
+                            .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child("计时"))
                             .child(
                                 choice_button("record-help", self.record_help_open, SURFACE, cx)
                                     .size(px(24.))
@@ -141,7 +141,7 @@ impl ForceView {
             .when(self.record_help_open, |body| body.child(
                 div().pl(px(12.)).border_l_2().border_color(rgb(LINE))
                     .text_size(px(13.)).text_color(rgb(MUTED)).whitespace_normal()
-                    .child("专注按本地日期统计，扣除暂停和休息，重叠时段只计一次。跨日记录分别计入每天；搜索只筛选列表。"),
+                    .child("时长按本地日期统计，扣除暂停和休息，重叠时段只计一次。跨日记录分别计入每天；搜索只筛选列表。"),
             ))
             .child(
                 div().flex().flex_col()

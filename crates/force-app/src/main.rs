@@ -4,6 +4,8 @@
 )]
 
 mod activity_view;
+mod agenda_model;
+mod agenda_view;
 mod control_style;
 mod focus_view;
 mod label;
@@ -14,6 +16,8 @@ mod settings_view;
 mod tag_picker;
 mod view;
 
+#[cfg(all(test, feature = "ui-test-support"))]
+mod agenda_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod headless_ui_tests;
 
@@ -176,7 +180,7 @@ fn main() -> anyhow::Result<()> {
             Menu {
                 name: "计时".into(),
                 items: vec![
-                    MenuItem::action("新任务", NewTask),
+                    MenuItem::action("新建…", NewTask),
                     MenuItem::separator(),
                     MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
                     MenuItem::action("结束本次计时", FinishSegment),
@@ -280,7 +284,13 @@ fn main() -> anyhow::Result<()> {
             Ok(strip) => {
                 model.update(cx, |model, _| model.strip_window = Some(strip));
                 cx.on_action(move |_: &NewTask, cx| {
-                    with_force(handle, cx, |this, window, cx| this.new_task(window, cx))
+                    with_force(handle, cx, |this, window, cx| {
+                        if this.page == model::Page::Agenda {
+                            this.begin_plan(None, window, cx);
+                        } else {
+                            this.new_task(window, cx);
+                        }
+                    })
                 });
                 cx.on_action(move |_: &ToggleCompact, cx| {
                     with_force(handle, cx, |this, window, cx| this.compact(window, cx))
@@ -319,7 +329,10 @@ fn main() -> anyhow::Result<()> {
                 });
                 cx.on_action(move |_: &ClosePanel, cx| {
                     with_force(handle, cx, |this, window, cx| {
-                        if !this.compact && this.editing_duration.is_some() {
+                        if !this.compact && this.page == model::Page::Agenda && this.agenda.editing
+                        {
+                            this.cancel_plan_edit(window, cx);
+                        } else if !this.compact && this.editing_duration.is_some() {
                             this.cancel_duration_edit(window, cx);
                         } else if !this.compact
                             && this.page == model::Page::Settings
@@ -343,6 +356,7 @@ fn main() -> anyhow::Result<()> {
                         }
                     })
                 });
+                with_force(handle, cx, |this, window, cx| this.show_manager(window, cx));
             }
             Err(_) => {
                 eprintln!("Force could not open a graphics window.");

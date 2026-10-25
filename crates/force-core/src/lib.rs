@@ -13,9 +13,11 @@ pub const HISTORY_LIMIT: usize = 500;
 pub const MAX_GOAL_MINUTES: u32 = 24 * 60;
 pub const MIN_TARGET_SECONDS: i64 = 60;
 pub const MAX_TARGET_SECONDS: i64 = 24 * 60 * 60;
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
+mod agenda;
 mod task;
+pub use agenda::{PlanDraft, PlanEntry};
 pub use task::Task;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -168,12 +170,18 @@ impl Store {
                 migrate_v1(&mut connection)?;
                 task::migrate_v2(&mut connection)?;
                 migrate_v3(&mut connection)?;
+                agenda::migrate_v4(&mut connection)?;
             }
             2 => {
                 task::migrate_v2(&mut connection)?;
                 migrate_v3(&mut connection)?;
+                agenda::migrate_v4(&mut connection)?;
             }
-            3 => migrate_v3(&mut connection)?,
+            3 => {
+                migrate_v3(&mut connection)?;
+                agenda::migrate_v4(&mut connection)?;
+            }
+            4 => agenda::migrate_v4(&mut connection)?,
             SCHEMA_VERSION => (),
             _ => return Err(Error::UnsupportedSchema),
         }
@@ -754,6 +762,8 @@ fn initialize(connection: &mut Connection) -> Result<()> {
         PRAGMA user_version = 4;",
     )?;
     transaction.execute_batch(task::SCHEMA)?;
+    transaction.execute_batch(agenda::SCHEMA)?;
+    transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
 }
@@ -768,7 +778,7 @@ fn migrate_v1(connection: &mut Connection) -> Result<()> {
              CREATE INDEX interval_time_window ON intervals(ended_at, started_at);
              PRAGMA user_version = 2;",
         )?,
-        2 | 3 | SCHEMA_VERSION => (), // Another process completed the same migration.
+        2 | 3 | 4 | SCHEMA_VERSION => (), // Another process completed the same migration.
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -781,9 +791,9 @@ fn migrate_v3(connection: &mut Connection) -> Result<()> {
     match version {
         3 => {
             transaction.execute_batch("ALTER TABLE preferences ADD COLUMN completion_sound INTEGER NOT NULL DEFAULT 1 CHECK (completion_sound IN (0, 1));")?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 4)?;
         }
-        SCHEMA_VERSION => (),
+        4 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
