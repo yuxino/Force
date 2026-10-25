@@ -30,17 +30,19 @@ transactional task switching and keeps a paused round's recorded target.
 No external calendar sync, inferred completion in other applications, reminders,
 background automatic starts, accounts or network services are introduced.
 
-## Execution and acceptance
+## Validation
 
-1. Add schema-5 migration and focused persistence/rollback tests in force-core.
-2. Add calendar state/actions and native month/day/editor rendering; retain the
-   existing focus and records workflows and their regressions.
-3. Verify date/time errors, overlap, save/restart, occurrence versus global task
-   completion, automatic actual events, rescheduling and draft protection.
-4. Show a signed native preview with temporary data, then run canonical and UI
-   checks, inspect default/minimum layouts and ordinary keyboard/dialog behavior.
-5. Build and install with the same formal signing requirement and data location.
-   Keep native evidence limits explicit; public releases need separate instruction.
+Canonical checks and strict UI-enabled Clippy pass. The calendar change has
+76 core unit tests, 2 interrupted-process integration tests, and 83 app tests.
+UI regressions cover minimum/default bounds, hour-slot creation, draft prompts,
+related actual timestamps, completion, rescheduling and local overlap widths.
+
+Signed native macOS acceptance used disposable data: ordinary keyboard input,
+create/save/restart, start/end timing, complete a task and return to the calendar,
+move an arrangement to tomorrow, and inspect default/minimum window layouts.
+The formal app retains the same bundle and signing requirement. GPUI tests do
+not establish native IME composition or Windows/Linux interaction; those remain
+unverified. No public release is included.
 
 The month sidebar pairs date navigation with the current timer, next arrangement
 and completion progress. Empty clock slots create an arrangement directly.

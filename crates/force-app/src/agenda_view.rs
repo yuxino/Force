@@ -835,17 +835,6 @@ impl ForceView {
                                 .child("点击时间，安排要做的事"),
                         )
                     })
-                    .child(
-                        div()
-                            .absolute()
-                            .left(px(TIME_GUTTER))
-                            .right_0()
-                            .top(px(10.))
-                            .h(px(24. * HOUR_HEIGHT + MIN_EVENT_HEIGHT))
-                            .children(blocks.iter().enumerate().map(|(index, block)| {
-                                self.agenda_calendar_block(block, index, canvas_width, cx)
-                            })),
-                    )
                     .when_some(current_minute, |grid, minute| {
                         grid.child(
                             div()
@@ -870,7 +859,18 @@ impl ForceView {
                                         .child(minute_label(minute as u16)),
                                 ),
                         )
-                    }),
+                    })
+                    .child(
+                        div()
+                            .absolute()
+                            .left(px(TIME_GUTTER))
+                            .right_0()
+                            .top(px(10.))
+                            .h(px(24. * HOUR_HEIGHT + MIN_EVENT_HEIGHT))
+                            .children(blocks.iter().enumerate().map(|(index, block)| {
+                                self.agenda_calendar_block(block, index, canvas_width, cx)
+                            })),
+                    ),
             )
     }
 
