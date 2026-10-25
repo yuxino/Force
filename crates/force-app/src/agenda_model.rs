@@ -407,6 +407,18 @@ impl ForceView {
             .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
         self.toast = None;
         self.refresh_agenda(cx);
+        if day != Local::now().date_naive()
+            && let Some(first) = self
+                .agenda
+                .plans
+                .iter()
+                .filter(|plan| plan.moved_to.is_none())
+                .min_by_key(|plan| plan.start_minute)
+        {
+            self.agenda
+                .calendar_scroll_target
+                .set(Some(first.start_minute.saturating_sub(60)));
+        }
     }
 
     pub(crate) fn change_agenda_month(

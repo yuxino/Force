@@ -38,6 +38,7 @@ struct CalendarBlock {
     actual: bool,
     selected: bool,
     lane: usize,
+    lane_count: usize,
 }
 
 impl ForceView {
@@ -310,7 +311,11 @@ impl ForceView {
             .iter()
             .filter(|plan| plan.moved_to.is_none() && !self.agenda_plan_is_done(plan))
             .filter(|plan| !today || plan.end_minute > minute)
-            .filter(|plan| running.is_none_or(|session| session.task_id != Some(plan.task_id)))
+            .filter(|plan| {
+                running.is_none_or(|session| {
+                    !today || !session.is_running() || session.task_id != Some(plan.task_id)
+                })
+            })
             .min_by_key(|plan| plan.start_minute);
         let planned = self
             .agenda
@@ -722,24 +727,41 @@ impl ForceView {
                 .total_cmp(&b.start)
                 .then_with(|| a.end.total_cmp(&b.end))
         });
-        let mut lane_ends: Vec<f32> = Vec::new();
-        for block in &mut blocks {
-            let minimum_end = block.start + MIN_EVENT_HEIGHT / HOUR_HEIGHT * 60.;
-            let visible_end = block.end.max(minimum_end);
-            let lane = lane_ends
-                .iter()
-                .position(|end| *end <= block.start)
-                .unwrap_or(lane_ends.len());
-            if lane == lane_ends.len() {
-                lane_ends.push(visible_end);
-            } else {
-                lane_ends[lane] = visible_end;
+        // Width belongs to a connected overlap group. An isolated later
+        // event must regain the full day width after an earlier overlap ends.
+        let mut group_start = 0;
+        let mut maximum_lanes = 1;
+        while group_start < blocks.len() {
+            let mut group_end = group_start;
+            let mut furthest_end = f32::NEG_INFINITY;
+            let mut lane_ends: Vec<f32> = Vec::new();
+            while let Some(block) = blocks.get_mut(group_end) {
+                if group_end > group_start && block.start >= furthest_end {
+                    break;
+                }
+                let minimum_end = block.start + MIN_EVENT_HEIGHT / HOUR_HEIGHT * 60.;
+                let visible_end = block.end.max(minimum_end);
+                let lane = lane_ends
+                    .iter()
+                    .position(|end| *end <= block.start)
+                    .unwrap_or(lane_ends.len());
+                if lane == lane_ends.len() {
+                    lane_ends.push(visible_end);
+                } else {
+                    lane_ends[lane] = visible_end;
+                }
+                block.lane = lane;
+                furthest_end = furthest_end.max(visible_end);
+                group_end += 1;
             }
-            block.lane = lane;
+            let lane_count = lane_ends.len();
+            for block in &mut blocks[group_start..group_end] {
+                block.lane_count = lane_count;
+            }
+            maximum_lanes = maximum_lanes.max(lane_count);
+            group_start = group_end;
         }
-        let lane_count = lane_ends.len().max(1);
-        let canvas_width = day_width.max(TIME_GUTTER + lane_count as f32 * 140.);
-        let text_width = ((canvas_width - TIME_GUTTER) / lane_count as f32 - 20.).max(100.);
+        let canvas_width = day_width.max(TIME_GUTTER + maximum_lanes as f32 * 140.);
         let mut hours = Vec::new();
         for hour in 0..24 {
             hours.push(
@@ -821,7 +843,7 @@ impl ForceView {
                             .top(px(10.))
                             .h(px(24. * HOUR_HEIGHT + MIN_EVENT_HEIGHT))
                             .children(blocks.iter().enumerate().map(|(index, block)| {
-                                self.agenda_calendar_block(block, index, lane_count, text_width, cx)
+                                self.agenda_calendar_block(block, index, canvas_width, cx)
                             })),
                     )
                     .when_some(current_minute, |grid, minute| {
@@ -856,10 +878,11 @@ impl ForceView {
         &self,
         block: &CalendarBlock,
         index: usize,
-        lane_count: usize,
-        text_width: f32,
+        canvas_width: f32,
         cx: &mut Context<Self>,
     ) -> Div {
+        let lane_count = block.lane_count;
+        let text_width = ((canvas_width - TIME_GUTTER) / lane_count as f32 - 20.).max(100.);
         let top = block.start / 60. * HOUR_HEIGHT;
         let height = ((block.end - block.start) / 60. * HOUR_HEIGHT).max(MIN_EVENT_HEIGHT);
         let target = block.target;
@@ -1002,6 +1025,7 @@ impl ForceView {
                 actual: false,
                 selected: self.agenda.selected_plan == Some(plan.id),
                 lane: 0,
+                lane_count: 1,
             });
         }
         let (day_start, day_end) = day_bounds(self.agenda.date);
@@ -1053,6 +1077,7 @@ impl ForceView {
                     actual: true,
                     selected: self.agenda.selected_record == Some(session.id),
                     lane: 0,
+                    lane_count: 1,
                 });
             }
             if session.elapsed_between(day_start, day_end, self.now) == 0 {
@@ -1070,6 +1095,7 @@ impl ForceView {
                     actual: true,
                     selected: self.agenda.selected_record == Some(session.id),
                     lane: 0,
+                    lane_count: 1,
                 });
             }
         }
@@ -1088,6 +1114,7 @@ impl ForceView {
                 actual: true,
                 selected: self.agenda.selected_completion == Some(task.id),
                 lane: 0,
+                lane_count: 1,
             });
         }
         blocks

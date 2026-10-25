@@ -193,6 +193,47 @@ fn agenda_ui_calendar_and_editor_fit_default_and_minimum_windows(cx: &mut TestAp
 }
 
 #[gpui::test]
+fn agenda_ui_only_overlapping_events_share_the_day_column(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    manager.view.update_in(&mut manager.cx, |view, _, cx| {
+        let store = view.store.as_mut().unwrap();
+        for (title, start, end) in [
+            ("First overlapping arrangement", 540, 600),
+            ("Second overlapping arrangement", 555, 615),
+            ("Isolated afternoon arrangement", 840, 900),
+        ] {
+            store
+                .create_plan(
+                    &PlanDraft {
+                        task_id: None,
+                        title: title.into(),
+                        tag_id: 1,
+                        day: view.agenda.date,
+                        start_minute: start,
+                        end_minute: end,
+                        note: String::new(),
+                    },
+                    view.now,
+                )
+                .unwrap();
+        }
+        view.refresh(cx);
+    });
+    settle(&mut manager);
+    let first = manager.bounds("agenda-plan-1");
+    let second = manager.bounds("agenda-plan-2");
+    let isolated = manager.bounds("agenda-plan-3");
+    assert!(first.bottom() > second.top());
+    assert!(first.right() < second.left());
+    assert!((first.size.width - second.size.width).abs() <= px(1.));
+    // The later non-overlapping event spans both earlier lanes, instead of
+    // retaining the day's maximum overlap width.
+    assert!((isolated.left() - first.left()).abs() <= px(1.));
+    assert!((isolated.right() - second.right()).abs() <= px(1.));
+    assert!(isolated.size.width > first.size.width * 1.9);
+}
+
+#[gpui::test]
 fn agenda_ui_clicking_an_empty_hour_prefills_the_slot_and_saves_without_starting(
     cx: &mut TestAppContext,
 ) {
