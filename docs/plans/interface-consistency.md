@@ -251,6 +251,13 @@ Unit/headless timer completion stays silent; the normal application retains its
 configured sound. When uninterrupted desktop use is required, do not start or
 activate native preview windows. GPUI 0.2.2 TestPlatform has no native pixel
 renderer, so this path supplies no screenshots or native visual acceptance.
+
+Launch macOS native previews normally in the foreground. Do not use `open -g`
+to avoid desktop activation: two signed GPUI 0.2.2 launches stalled in reentrant
+key-window notifications, while a subsequent foreground launch of the same
+isolated preview responded normally. If activation would interrupt the user,
+defer native acceptance and use headless checks instead.
+
 The debug bounds map retains removed selectors between frames: a retained
 selector does not establish that a control remains rendered. Assert current model
 state and actual dispatched actions instead. Its platform frame callback is also
