@@ -87,6 +87,35 @@ impl Store {
             .collect()
     }
 
+    /// Full occurrences for a bounded visible calendar range, including moved
+    /// markers. Load once for the month rather than issuing a query per cell.
+    pub fn plans_between(
+        &self,
+        start: NaiveDate,
+        end_exclusive: NaiveDate,
+    ) -> Result<Vec<PlanEntry>> {
+        validate_day(start)?;
+        let end_key = if end_exclusive == NaiveDate::from_ymd_opt(10000, 1, 1).unwrap() {
+            "9999-12-32".to_owned()
+        } else {
+            validate_day(end_exclusive)?;
+            end_exclusive.format("%Y-%m-%d").to_string()
+        };
+        if start >= end_exclusive {
+            return Ok(Vec::new());
+        }
+        let mut statement = self.connection.prepare(&format!(
+            "{SELECT_PLAN} WHERE day >= ?1 AND day < ?2 AND deleted = 0 ORDER BY day, start_minute, end_minute, id"
+        ))?;
+        statement
+            .query_map(
+                params![start.format("%Y-%m-%d").to_string(), end_key],
+                read_raw_plan,
+            )?
+            .map(|row| row.map_err(Error::from).and_then(RawPlan::validated))
+            .collect()
+    }
+
     /// Planned dates for a visible month, loaded in one bounded query.
     pub fn plan_days_between(
         &self,

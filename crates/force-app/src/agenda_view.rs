@@ -52,6 +52,9 @@ impl ForceView {
                 window.refresh();
             });
         }
+        if self.agenda.month_overview && !self.agenda.editing {
+            return self.agenda_month_overview(window, cx);
+        }
         let content_width = f32::from(window.bounds().size.width).min(976.) - 80.;
         let day_width = (content_width - MONTH_WIDTH - COLUMN_GAP).max(300.);
         div()
@@ -92,6 +95,339 @@ impl ForceView {
                         }
                     }),
             )
+    }
+
+    fn agenda_month_overview(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let month = self.agenda.month;
+        let first = month
+            .checked_sub_days(Days::new(u64::from(month.weekday().num_days_from_monday())))
+            .unwrap_or(month);
+        let last = month
+            .checked_add_days(Days::new(31))
+            .and_then(|day| day.with_day(1))
+            .and_then(|day| day.pred_opt())
+            .unwrap_or(month);
+        let week_count = (month.weekday().num_days_from_monday() + last.day()).div_ceil(7);
+        let width = f32::from(window.bounds().size.width).min(976.) - 80.;
+        let cell_width = width / 7.;
+        let cell_height = (f32::from(window.bounds().size.height) - 200.) / week_count as f32;
+        let available_rows = ((cell_height - 28.) / 20.5).floor().max(1.) as usize;
+        let today = Local::now().date_naive();
+        let mut weeks = Vec::new();
+        for week in 0..week_count {
+            let mut cells = Vec::new();
+            for weekday in 0..7 {
+                let Some(date) = first
+                    .checked_add_days(Days::new(u64::from(week * 7 + weekday)))
+                    .filter(|day| (1..=9999).contains(&day.year()))
+                else {
+                    cells.push(div().flex_1().min_w_0().h_full());
+                    continue;
+                };
+                let items = self
+                    .agenda
+                    .month_days
+                    .get(&date)
+                    .map(Vec::as_slice)
+                    .unwrap_or(&[]);
+                let item_limit = if items.len() > available_rows {
+                    available_rows.saturating_sub(1).max(1)
+                } else {
+                    available_rows
+                };
+                let invested = items
+                    .iter()
+                    .filter(|item| !item.planned && !item.moved && !item.rest)
+                    .fold(0_i64, |total, item| total.saturating_add(item.seconds));
+                let in_month = date.month() == month.month();
+                let foreground = if in_month { INK } else { MUTED };
+                let mut content = div()
+                    .debug_selector(move || format!("agenda-month-cell-content-{date}"))
+                    .w(px((cell_width - 18.).max(0.)))
+                    // Button's centered content wrapper cannot resolve a 100%
+                    // height. Size this inner column explicitly so dates align
+                    // at the top regardless of how many entries a day has.
+                    .h(px((cell_height - 2.).max(0.)))
+                    .py(px(3.))
+                    .flex()
+                    .flex_col()
+                    .items_start()
+                    .gap(px(1.))
+                    .child(
+                        div()
+                            .debug_selector(move || format!("agenda-month-date-header-{date}"))
+                            .w_full()
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .child(
+                                div()
+                                    .size(px(20.))
+                                    .rounded_full()
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .text_size(px(13.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(if date == today {
+                                        0xffffff
+                                    } else {
+                                        foreground
+                                    }))
+                                    .when(date == today, |label| label.bg(rgb(INK)))
+                                    .child(date.day().to_string()),
+                            )
+                            .when(invested > 0, |header| {
+                                header.child(
+                                    div()
+                                        .flex_1()
+                                        .min_w_0()
+                                        .text_right()
+                                        .text_size(px(11.))
+                                        .text_color(rgb(MUTED))
+                                        .child(if invested >= 3600 {
+                                            format!("{}时{}分", invested / 3600, invested / 60 % 60)
+                                        } else if invested >= 60 {
+                                            format!("{}分", invested / 60)
+                                        } else {
+                                            format!("{invested}秒")
+                                        }),
+                                )
+                            }),
+                    );
+                let mut help = date.format("%Y年%-m月%-d日").to_string();
+                if invested > 0 {
+                    help.push_str(&format!("\n任务投入 {}", short_time(invested)));
+                }
+                for (index, item) in items.iter().enumerate() {
+                    let detail = if item.moved {
+                        "已改期".to_owned()
+                    } else if item.planned {
+                        if item.completed {
+                            "安排已完成".to_owned()
+                        } else {
+                            "待做安排".to_owned()
+                        }
+                    } else if item.seconds > 0 {
+                        format!(
+                            "{}{}{}",
+                            if item.rest { "休息 · " } else { "" },
+                            short_time(item.seconds),
+                            if item.completed { " · 完成" } else { "" }
+                        )
+                    } else if item.completed {
+                        "已完成".to_owned()
+                    } else {
+                        "已开始".to_owned()
+                    };
+                    help.push_str(&format!("\n{} · {detail}", item.title));
+                    if index < item_limit {
+                        content = content.child(
+                            div()
+                                .debug_selector(move || format!("agenda-month-item-{date}-{index}"))
+                                .w_full()
+                                .flex_shrink_0()
+                                .flex()
+                                .flex_col()
+                                .text_color(rgb(if item.planned || item.moved {
+                                    MUTED
+                                } else {
+                                    foreground
+                                }))
+                                .child(
+                                    single_line(
+                                        format!(
+                                            "{}{}",
+                                            if item.moved {
+                                                "↗ "
+                                            } else if item.planned {
+                                                if item.completed { "✓ " } else { "待 · " }
+                                            } else if item.rest {
+                                                "休息 · "
+                                            } else if item.completed {
+                                                "✓ "
+                                            } else {
+                                                ""
+                                            },
+                                            item.title
+                                        ),
+                                        13.,
+                                    )
+                                    .debug_selector(move || {
+                                        format!("agenda-month-title-{date}-{index}")
+                                    })
+                                    .w(px((cell_width - 18.).max(0.)))
+                                    .font_weight(
+                                        if item.planned || item.moved {
+                                            FontWeight::NORMAL
+                                        } else {
+                                            FontWeight::MEDIUM
+                                        },
+                                    ),
+                                ),
+                        );
+                    }
+                }
+                if items.len() > item_limit {
+                    content = content.child(
+                        div()
+                            .debug_selector(move || format!("agenda-month-more-{date}"))
+                            .text_size(px(12.))
+                            .text_color(rgb(MUTED))
+                            .child(format!("另 {} 项", items.len() - item_limit)),
+                    );
+                }
+                cells.push(
+                    div()
+                        .flex_1()
+                        .min_w_0()
+                        .h_full()
+                        .border_r_1()
+                        .border_b_1()
+                        .border_color(rgb(LINE))
+                        .child(
+                            button(SharedString::from(format!("agenda-month-day-{date}")))
+                                .debug_selector(move || format!("agenda-month-day-{date}"))
+                                .ghost()
+                                .size_full()
+                                .p_0()
+                                .rounded(px(0.))
+                                .overflow_hidden()
+                                .tooltip(help)
+                                .child(content)
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.agenda.month_overview = false;
+                                    this.select_agenda_date(date, window, cx);
+                                    cx.notify();
+                                })),
+                        ),
+                );
+            }
+            weeks.push(div().flex_1().min_h_0().w_full().flex().children(cells));
+        }
+        div()
+            .debug_selector(|| "manager-content".into())
+            .flex_1()
+            .min_h_0()
+            .w_full()
+            .max_w(px(976.))
+            .mx_auto()
+            .px(px(40.))
+            .py(px(24.))
+            .flex()
+            .flex_col()
+            .gap(px(16.))
+            .child(
+                div()
+                    .debug_selector(|| "agenda-overview-header".into())
+                    .h(px(40.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_size(px(28.))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .child(month.format("%Y 年 %-m 月").to_string()),
+                    )
+                    .child(
+                        button("agenda-overview-previous")
+                            .debug_selector(|| "agenda-overview-previous".into())
+                            .ghost()
+                            .size(px(32.))
+                            .icon(control_icon(IconName::ChevronLeft, INK))
+                            .tooltip("上个月")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.change_agenda_month(-1, window, cx)
+                            })),
+                    )
+                    .child(
+                        button("agenda-overview-next")
+                            .debug_selector(|| "agenda-overview-next".into())
+                            .ghost()
+                            .size(px(32.))
+                            .icon(control_icon(IconName::ChevronRight, INK))
+                            .tooltip("下个月")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.change_agenda_month(1, window, cx)
+                            })),
+                    )
+                    .child(
+                        button("agenda-overview-today")
+                            .debug_selector(|| "agenda-overview-today".into())
+                            .ghost()
+                            .h(px(32.))
+                            .child(control_label("今天", INK))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.select_agenda_date(Local::now().date_naive(), window, cx);
+                                // The selected day may already be today while browsing another month.
+                                this.agenda.month = Local::now().date_naive().with_day(1).unwrap();
+                                this.refresh_agenda(cx);
+                            })),
+                    )
+                    .child(
+                        primary_button("agenda-overview-add")
+                            .debug_selector(|| "agenda-overview-add".into())
+                            .h(px(36.))
+                            .px(px(12.))
+                            .unavailable(self.storage_failed)
+                            .icon(control_icon(
+                                IconName::Plus,
+                                if self.storage_failed { MUTED } else { 0xffffff },
+                            ))
+                            .child(control_label(
+                                "添加安排",
+                                if self.storage_failed { MUTED } else { 0xffffff },
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                if this.agenda.date.month() != this.agenda.month.month()
+                                    || this.agenda.date.year() != this.agenda.month.year()
+                                {
+                                    this.select_agenda_date(this.agenda.month, window, cx);
+                                }
+                                this.agenda.month_overview = false;
+                                this.begin_plan(None, window, cx);
+                            })),
+                    ),
+            )
+            .when(self.storage_failed, |body| {
+                body.child(self.storage_notice(cx))
+            })
+            .when(!self.storage_failed, |body| {
+                body.child(
+                    div()
+                        .debug_selector(|| "agenda-overview-grid".into())
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().h(px(28.)).flex_shrink_0().flex().children(
+                            ["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map(|day| {
+                                div()
+                                    .flex_1()
+                                    .pl(px(9.))
+                                    .text_size(px(12.))
+                                    .text_color(rgb(MUTED))
+                                    .child(day)
+                            }),
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .border_t_1()
+                                .border_l_1()
+                                .border_color(rgb(LINE))
+                                .children(weeks),
+                        ),
+                )
+            })
     }
 
     fn agenda_month_sidebar(&self, cx: &mut Context<Self>) -> Div {
@@ -497,6 +833,21 @@ impl ForceView {
                     .flex()
                     .items_center()
                     .gap(px(8.))
+                    .child(
+                        button("agenda-back-to-month")
+                            .debug_selector(|| "agenda-back-to-month".into())
+                            .ghost()
+                            .h(px(32.))
+                            .icon(control_icon(IconName::ChevronLeft, INK))
+                            .child(control_label("月历", INK))
+                            .when(!self.agenda.editing, |button| {
+                                button.on_click(cx.listener(|this, _, _, cx| {
+                                    this.agenda.month_overview = true;
+                                    cx.notify();
+                                }))
+                            })
+                            .unavailable(self.agenda.editing),
+                    )
                     .child(
                         div()
                             .flex_1()

@@ -20,7 +20,18 @@ actual work to a planned occurrence; do not copy the same daily total into every
 occurrence. Untimed task completion remains a completion event, not invented
 focus minutes. The UI does not divide entries into active/passive categories.
 
-Month selection supports future dates, with real planned-day and activity marks.
+The default calendar is a full-width month overview. Each day directly shows real
+task names, completed tasks, and pending arrangements, with extra items counted
+when space runs out. Hover reveals all titles and each task's actual investment.
+A day header shows accumulated task investment, excluding rest; simultaneous
+tasks sum independently here, unlike the merged focus statistic. Same-task rounds
+and related plans share one entry; moved markers remain explicit. Query the
+visible month in batches and update live durations from cached intervals.
+
+Clicking a day opens its existing timeline, with a 月历 action to return. Month
+navigation and returning to today preserve the overview. Adding an arrangement
+from another month starts on that month's first day. Date selection supports
+future dates, with real planned-day and activity marks.
 The selected day's clock grid has proportional time placement and readable
 overlap lanes. A compact editor handles title, date, times, label and note;
 existing linked-task titles are preserved. Date/selection changes protect drafts,
@@ -33,7 +44,7 @@ background automatic starts, accounts or network services are introduced.
 ## Validation
 
 Canonical checks and strict UI-enabled Clippy pass. The calendar change has
-76 core unit tests, 2 interrupted-process integration tests, and 83 app tests.
+78 core unit tests, 2 interrupted-process integration tests, and 91 app tests.
 UI regressions cover minimum/default bounds, hour-slot creation, draft prompts,
 related actual timestamps, completion, rescheduling and local overlap widths.
 
@@ -49,3 +60,10 @@ and completion progress. Empty clock slots create an arrangement directly.
 Scheduled blocks retain their planned times; related actual intervals also remain
 visible at their real times. Starting an arrangement keeps the calendar visible.
 Use ordinary arrangement, timer and record wording; do not introduce a focus mode.
+
+Month overview regressions cover full day-title bounds, top alignment, overflow,
+six-row months, minimum/default sizes, same-day detail navigation, month/today
+navigation, add defaults and failed-storage retry. Signed macOS preview with
+synthetic data confirms the month overview's native text and date alignment at
+the default size. Minimum-size bounds and events are GPUI coverage; native window
+resizing and Windows/Linux interaction remain outside this verification.
