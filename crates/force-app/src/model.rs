@@ -20,6 +20,7 @@ use gpui_component::{
 
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(crate) enum Page {
+    Agenda,
     Focus,
     Records,
     Settings,
@@ -32,11 +33,12 @@ pub(crate) struct ActivityDay {
 }
 
 #[derive(Clone, Copy)]
-enum TaskDestination {
+pub(crate) enum TaskDestination {
     New,
     Task(i64),
     Session(i64),
     GlobalBreak,
+    AgendaPlan(i64),
 }
 
 #[derive(Clone, Copy)]
@@ -46,6 +48,7 @@ enum TagDestination {
 }
 
 pub(crate) struct ForceView {
+    pub(crate) agenda: crate::agenda_model::AgendaState,
     pub(crate) store: Option<Store>,
     pub(crate) data_dir: PathBuf,
     pub(crate) storage_failed: bool,
@@ -121,7 +124,7 @@ impl ForceView {
                     this.selected_tag = id;
                     cx.notify();
                 } else {
-                    this.notify("这个专注标签已变更，请重新选择。", cx);
+                    this.notify("这个计时标签已变更，请重新选择。", cx);
                 }
             });
         let subscription = cx.subscribe_in(
@@ -226,9 +229,11 @@ impl ForceView {
                 }
             })
         });
+        let agenda = crate::agenda_model::AgendaState::new(window, cx);
         let panel_scroll: [gpui::ScrollHandle; 3] = std::array::from_fn(|_| Default::default());
         let tag_form_anchor = gpui::ScrollAnchor::for_handle(panel_scroll[2].clone());
         let mut view = Self {
+            agenda,
             store: None,
             data_dir,
             storage_failed: false,
@@ -249,7 +254,7 @@ impl ForceView {
             selected_session: None,
             record_date: Local::now().date_naive(),
             goal: 300,
-            page: Page::Focus,
+            page: Page::Agenda,
             compact: true,
             manager_window: None,
             strip_window: None,
@@ -545,6 +550,7 @@ impl ForceView {
                         crate::platform::play_completion_sound();
                     }
                 }
+                self.refresh_agenda(cx);
                 cx.notify();
             }
             Err(_) => {
@@ -639,12 +645,12 @@ impl ForceView {
         {
             None
         } else if !self.tags.iter().any(|tag| tag.kind == TagKind::Focus) {
-            Some("请先添加专注标签。")
+            Some("请先添加计时标签。")
         } else if self.selected_tag != 0 && !self.tags.iter().any(|tag| tag.id == self.selected_tag)
         {
             Some("原标签已移除，请重新选择。")
         } else {
-            Some("请选择可用的专注标签。")
+            Some("请选择可用的计时标签。")
         }
     }
 
@@ -841,7 +847,7 @@ impl ForceView {
         }
     }
 
-    fn confirm_task_changes(
+    pub(crate) fn confirm_task_changes(
         &mut self,
         destination: TaskDestination,
         window: &mut Window,
@@ -891,6 +897,9 @@ impl ForceView {
                             TaskDestination::Task(id) => this.select_task(id, window, cx),
                             TaskDestination::Session(id) => this.select_session(id, window, cx),
                             TaskDestination::GlobalBreak => this.start_global_break(window, cx),
+                            TaskDestination::AgendaPlan(id) => {
+                                this.start_plan_timer(id, window, cx)
+                            }
                         }
                     });
                 });
@@ -1024,6 +1033,9 @@ impl ForceView {
     }
 
     pub(crate) fn hide_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agenda
+            .tag_picker
+            .update(cx, |picker, cx| picker.dismiss(window, false, cx));
         self.tag_picker
             .update(cx, |picker, cx| picker.dismiss(window, false, cx));
         window.focus(&self.focus_handle);
@@ -1849,6 +1861,19 @@ impl ForceView {
         }
         let previous_date = date_at(self.now);
         self.now = Local::now().timestamp();
+        if previous_date != date_at(self.now)
+            && self.agenda.date == previous_date
+            && !self.agenda.editing
+        {
+            self.agenda.date = date_at(self.now);
+            if self.agenda.month == previous_date.with_day(1).unwrap_or(previous_date) {
+                self.agenda.month = self.agenda.date.with_day(1).unwrap_or(self.agenda.date);
+            }
+            self.agenda.calendar_scroll_target.set(Some(
+                chrono::Timelike::hour(&Local::now()).saturating_sub(1) as u16 * 60,
+            ));
+            self.agenda.selected_plan = None;
+        }
         if previous_date != date_at(self.now) && self.record_date == previous_date {
             self.record_date = date_at(self.now);
             self.record_details = None;
@@ -1901,6 +1926,13 @@ impl ForceView {
                 }
                 None => {}
             }
+        }
+        if self.page == Page::Agenda
+            && !self.compact
+            && !self.storage_failed
+            && self.active.iter().any(Session::is_running)
+        {
+            self.refresh_agenda_actuals(cx);
         }
         cx.notify();
     }

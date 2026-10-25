@@ -116,7 +116,7 @@ impl ForceView {
                                                 )
                                             } else {
                                                 format!(
-                                                    "{} · 专注 {}",
+                                                    "{} · 计时 {}",
                                                     date.format("%Y年%-m月%-d日"),
                                                     activity_duration(day.seconds)
                                                 )

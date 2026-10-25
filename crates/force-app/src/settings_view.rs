@@ -99,7 +99,7 @@ impl ForceView {
                     )
                     .child(
                         settings_row()
-                            .child(setting_label("每日专注目标"))
+                            .child(setting_label("每日计时目标"))
                             .child(
                                 div()
                                     .debug_selector(|| "goal-input".into())

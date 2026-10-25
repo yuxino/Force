@@ -14,15 +14,24 @@ use gpui::{
 use gpui_component::{Root, Theme, ThemeMode};
 use std::path::PathBuf;
 
-struct ManagerHarness {
+pub(crate) struct ManagerHarness {
     _directory: tempfile::TempDir,
-    view: Entity<ForceView>,
-    handle: WindowHandle<Root>,
-    cx: VisualTestContext,
+    pub(crate) view: Entity<ForceView>,
+    pub(crate) handle: WindowHandle<Root>,
+    pub(crate) cx: VisualTestContext,
 }
 
 impl ManagerHarness {
-    fn new(cx: &mut TestAppContext, width: f32, height: f32) -> Self {
+    pub(crate) fn new(cx: &mut TestAppContext, width: f32, height: f32) -> Self {
+        Self::new_on_page(cx, width, height, Page::Focus)
+    }
+
+    pub(crate) fn new_on_page(
+        cx: &mut TestAppContext,
+        width: f32,
+        height: f32,
+        page: Page,
+    ) -> Self {
         let directory = tempfile::tempdir().unwrap();
         let data_dir: PathBuf = directory.path().to_path_buf();
         let (handle, view) = cx.update(|cx| {
@@ -53,6 +62,7 @@ impl ManagerHarness {
         let mut visual = VisualTestContext::from_window(*handle, cx);
         visual.simulate_resize(size(px(width), px(height)));
         view.update_in(&mut visual, |view, window, cx| {
+            view.page = page;
             view.show_manager(window, cx)
         });
         visual.update(|window, _| window.refresh());
@@ -65,13 +75,13 @@ impl ManagerHarness {
         }
     }
 
-    fn bounds(&mut self, selector: &'static str) -> Bounds<Pixels> {
+    pub(crate) fn bounds(&mut self, selector: &'static str) -> Bounds<Pixels> {
         self.cx
             .debug_bounds(selector)
             .unwrap_or_else(|| panic!("missing rendered selector: {selector}"))
     }
 
-    fn click(&mut self, selector: &'static str) {
+    pub(crate) fn click(&mut self, selector: &'static str) {
         let bounds = self.bounds(selector);
         assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
         self.cx
@@ -80,7 +90,7 @@ impl ManagerHarness {
         self.cx.run_until_parked();
     }
 
-    fn scroll(&mut self, selector: &'static str, amount: f32) {
+    pub(crate) fn scroll(&mut self, selector: &'static str, amount: f32) {
         let position = self.bounds(selector).center();
         self.cx
             .simulate_mouse_move(position, None, Modifiers::default());
@@ -94,7 +104,7 @@ impl ManagerHarness {
         self.cx.run_until_parked();
     }
 
-    fn page(&self) -> Page {
+    pub(crate) fn page(&self) -> Page {
         self.view.read_with(&self.cx, |view, _| view.page)
     }
 }
@@ -254,8 +264,8 @@ fn headless_ui_navigation_and_goal_save_use_real_gpui_events(cx: &mut TestAppCon
     });
     manager.click("records-tab");
     assert!(manager.page() == Page::Records);
-    manager.click("focus-tab");
-    assert!(manager.page() == Page::Focus);
+    manager.click("agenda-tab");
+    assert!(manager.page() == Page::Agenda);
 }
 
 #[gpui::test]
@@ -2244,7 +2254,10 @@ fn headless_ui_removed_task_tag_stays_explicit_and_paused_round_can_resume(
         assert!(manager.cx.has_pending_prompt());
         manager.cx.simulate_prompt_answer("删除");
         manager.cx.run_until_parked();
-        manager.click("focus-tab");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.navigate(Page::Focus, window, cx)
+        });
+        manager.cx.run_until_parked();
         if paused {
             manager.click("running-pause");
             manager.view.read_with(&manager.cx, |view, _| {
