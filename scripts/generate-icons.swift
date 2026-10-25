@@ -2,8 +2,12 @@
 import AppKit
 import Foundation
 
-// Match assets/icon.svg. Use the same 64-unit mark in GPUI and every export.
+// Render the vector master directly so every platform uses the same artwork.
 let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "assets", isDirectory: true)
+let vectorURL = URL(fileURLWithPath: "assets/icon.svg")
+guard let vector = NSImage(contentsOf: vectorURL), vector.size.width > 0, vector.size.height > 0 else {
+    throw NSError(domain: "ForceIcons", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot load assets/icon.svg. Run from the repository root."])
+}
 let manager = FileManager.default
 try manager.createDirectory(at: output, withIntermediateDirectories: true)
 let iconset = output.appendingPathComponent("Force.iconset", isDirectory: true)
@@ -21,24 +25,10 @@ func iconPNG(size: Int) throws -> Data {
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = graphics
     defer { NSGraphicsContext.restoreGraphicsState() }
-    let context = graphics.cgContext
-    context.scaleBy(x: CGFloat(size) / 1024, y: CGFloat(size) / 1024)
-    context.translateBy(x: 0, y: 1024)
-    context.scaleBy(x: 1, y: -1)
-    context.setFillColor(CGColor(srgbRed: 20 / 255, green: 20 / 255, blue: 20 / 255, alpha: 1))
-    context.addPath(CGPath(roundedRect: CGRect(x: 64, y: 64, width: 896, height: 896), cornerWidth: 192, cornerHeight: 192, transform: nil))
-    context.fillPath()
-    context.translateBy(x: 112, y: 112)
-    context.scaleBy(x: 12.5, y: 12.5)
-    context.setFillColor(CGColor(srgbRed: 250 / 255, green: 250 / 255, blue: 248 / 255, alpha: 1))
-    let vertices: [(CGFloat, CGFloat)] = [
-        (11, 12), (53, 12), (41, 24), (23, 24), (23, 30),
-        (43, 30), (31, 42), (23, 42), (23, 52), (11, 52),
-    ]
-    context.move(to: CGPoint(x: vertices[0].0, y: vertices[0].1))
-    for vertex in vertices.dropFirst() { context.addLine(to: CGPoint(x: vertex.0, y: vertex.1)) }
-    context.closePath()
-    context.fillPath()
+    let bounds = NSRect(x: 0, y: 0, width: size, height: size)
+    graphics.cgContext.clear(bounds)
+    vector.draw(in: bounds, from: .zero, operation: .copy, fraction: 1,
+                respectFlipped: false, hints: [.interpolation: NSImageInterpolation.high])
     guard let data = bitmap.representation(using: .png, properties: [:]) else {
         throw NSError(domain: "ForceIcons", code: 2)
     }
