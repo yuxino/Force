@@ -76,7 +76,6 @@ pub(crate) struct ForceView {
     pub(crate) tag_input: Entity<InputState>,
     pub(crate) goal_input: Entity<InputState>,
     pub(crate) timer_input: Entity<InputState>,
-    pub(crate) custom_duration: bool,
     pub(crate) duration_input: Entity<InputState>,
     pub(crate) editing_duration: Option<i64>,
     pub(crate) record_search: Entity<InputState>,
@@ -176,13 +175,17 @@ impl ForceView {
             window,
             |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
+                    if let Some(minutes) =
+                        parse_goal_draft(this.timer_input.read(cx).value().as_ref())
+                    {
+                        this.timer_minutes = minutes;
+                    }
                     cx.notify();
                 } else if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Focus
                     && this.preparing
                     && this.countdown
-                    && this.custom_duration
                 {
                     this.start(window, cx);
                 }
@@ -256,7 +259,6 @@ impl ForceView {
             tag_input,
             goal_input,
             timer_input,
-            custom_duration: false,
             duration_input,
             editing_duration: None,
             record_search,
@@ -672,22 +674,30 @@ impl ForceView {
     }
 
     pub(crate) fn timer_duration_error(&self, cx: &gpui::App) -> Option<&'static str> {
-        (self.countdown
-            && self.custom_duration
-            && parse_goal_draft(self.timer_input.read(cx).value().as_ref()).is_none())
-        .then_some("请输入 1–1440 之间的整数分钟数。")
+        (self.countdown && parse_goal_draft(self.timer_input.read(cx).value().as_ref()).is_none())
+            .then_some("请输入 1–1440 之间的整数分钟数。")
     }
 
     pub(crate) fn choose_custom_duration(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.custom_duration {
-            let value = self.timer_minutes.to_string();
-            self.timer_input
-                .update(cx, |input, cx| input.set_value(value, window, cx));
-        }
         self.countdown = true;
-        self.custom_duration = true;
         self.timer_input
             .update(cx, |input, cx| input.focus(window, cx));
+        cx.notify();
+    }
+
+    pub(crate) fn choose_timer_preset(
+        &mut self,
+        minutes: u32,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.countdown = minutes != 0;
+        if minutes != 0 {
+            self.timer_minutes = minutes;
+            self.timer_input.update(cx, |input, cx| {
+                input.set_value(minutes.to_string(), window, cx)
+            });
+        }
         cx.notify();
     }
 
@@ -907,7 +917,7 @@ impl ForceView {
             self.notify(message, cx);
             return;
         }
-        if self.countdown && self.custom_duration {
+        if self.countdown {
             self.timer_minutes =
                 parse_goal_draft(self.timer_input.read(cx).value().as_ref()).unwrap_or(25);
         }
@@ -943,7 +953,6 @@ impl ForceView {
         if self.editing_duration != Some(session.id) {
             self.editing_duration = None;
         }
-        self.custom_duration = false;
         self.selected_session = Some(session.id);
         self.selected_task = session.task_id;
         self.selected_tag = session.tag_id;
@@ -1090,7 +1099,6 @@ impl ForceView {
         } else {
             self.selected_session = None;
             self.preparing = true;
-            self.custom_duration = self.countdown && ![25, 45, 60].contains(&self.timer_minutes);
             let value = self.timer_minutes.to_string();
             self.timer_input
                 .update(cx, |input, cx| input.set_value(value, window, cx));
@@ -1124,7 +1132,8 @@ impl ForceView {
         self.page = Page::Focus;
         self.countdown = true;
         self.timer_minutes = 25;
-        self.custom_duration = false;
+        self.timer_input
+            .update(cx, |input, cx| input.set_value("25", window, cx));
         self.editing_duration = None;
         if !self
             .tags
