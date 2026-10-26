@@ -3,7 +3,7 @@
 ## Direction
 
 Rebuild the visual composition around the task, the time and the next action.
-The existing geometric F remains the brand mark. Neutral surfaces, strong type
+Use the existing black cat brand mark. Neutral surfaces, strong type
 contrast, aligned numbers, restrained rules and open lists give the small local
 application a coherent identity. Do not add dashboards, account features,
 illustrations, textures, gradients, marketing slogans or decorative cards.
@@ -16,18 +16,22 @@ keep errors and meaningful distinctions visible.
 ## Shared language
 
 - Keep the 1040 × 780 default / 780 × 620 minimum management window and separate
-  328 × 68 floating strip. Keep the 896-point content grid, 40-point insets,
+  floating cat clock: 88 × 128 points when compact, 264 × 158 when expanded and
+  28 × 80 when edge-docked. Keep the 896-point content grid, 40-point insets,
   32-point column gap and 240-point task column.
 - Use the existing system font with tabular time digits. Page titles are 32,
   task titles 28, main timers up to 104 (80 when compact), section labels 16,
   body/actions 14 and secondary information 13 points. Long timers and titles
   must remain within the real available width.
 - Use neutral ink, soft white, readable gray and fine gray dividers. Keep the
-  existing destructive semantic color. Primary controls remain 44 points high,
-  fields 40–44 and most corner radii 4–6. Hover, keyboard focus and disabled
+  existing destructive semantic color. Main management actions remain 44 points
+  high, fields 40–44 and most corner radii 4–6. Hover, keyboard focus and disabled
   contrast remain visible.
-- Put brand, primary navigation and secondary settings into one 68-point header.
-  Keep page headings and settings content on the same reading axes.
+- Put brand, primary navigation, the single 新任务 action and secondary settings
+  into one 68-point header. 新任务 and Cmd/Ctrl+N open the task form without
+  requiring a calendar plan. Repeated requests focus the same draft; changed
+  calendar drafts remain suspended and recoverable. Keep page headings and
+  settings content on the same reading axes.
 
 ## Surfaces
 
@@ -48,12 +52,20 @@ beside its field; Save/Discard/Cancel behavior is preserved.
 
 The task list uses continuous 64-point rows, subtle rules and a left selection
 mark. Running status remains independent of selection. Preserve actual title and
-status widths, tooltips, safe truncation, one New action and independent scrolling.
+status widths, tooltips, safe truncation and independent scrolling. Keep task
+creation in the header rather than duplicating it in the sidebar; 保存任务 is a
+secondary action that saves without starting a timer. Calendar 添加安排 remains
+secondary and separate from task creation.
 
-The strip gives its title a full-width first line, then time, state and fixed
-positions for pause/resume, finish and open on the second line. Preserve original
-model routing, native drag behavior, long feedback and the two-point countdown
-progress line. Reserve the finish slot while unavailable to avoid action movement.
+The clock shows time inside the black cat. Clicking the cat expands a single
+black panel with its task title, status and primary action. Show 结束 only for an
+active or paused session; do not reserve an empty action slot. Clicking the task
+title opens the corresponding task detail or completion receipt, preserving
+unsaved edits. The minus control collapses the panel without changing timing or
+management visibility. Keep the clock free of hover tooltips and a separate open
+button. Native dragging near the left or right screen edge docks it on
+macOS/Windows; Linux retains free movement and resizing. Preserve model routing,
+running-session priority and visible error feedback across all clock shapes.
 
 Records read from yearly activity to the selected day to individual sessions.
 Keep the real 53-week calendar and existing date/interval arithmetic. Move export
@@ -75,12 +87,12 @@ window-style change.
 
 Create a self-contained interactive HTML design prototype using synthetic data,
 rendered only in an isolated headless browser. Save default/minimum-size views,
-all three destinations and strip previews. These are design previews, not native
-screenshots. Refine the composition after inspecting the rendered images.
+calendar, records, contextual task details and clock previews. These are design
+previews, not native screenshots. Refine the composition after inspecting the rendered images.
 
 Update affected GPUI TestPlatform layout/event regressions against the accepted
 new geometry while retaining behavior coverage, text bounds, independent scroll,
-draft protection, title/validation edge cases and strip routing. Run canonical
+draft protection, title/validation edge cases and clock routing. Run canonical
 checks, feature-enabled UI lint/tests and signed development packaging with the
 existing deployment target and canonical caches. Do not launch or activate a
 native window while the user's no-interruption instruction remains in force.

@@ -8,6 +8,7 @@ mod agenda_model;
 mod agenda_popover_view;
 mod agenda_view;
 mod control_style;
+mod floating_view;
 mod focus_view;
 mod label;
 mod model;
@@ -56,6 +57,7 @@ impl AssetSource for Assets {
             ))));
         }
         let custom: Option<&'static [u8]> = match path {
+            "force-cat-clock.svg" => Some(include_bytes!("../../../assets/cat-clock.svg")),
             "force-wordmark.svg" => Some(include_bytes!("../../../assets/wordmark.svg")),
             "force-icons/trash.svg" => Some(include_bytes!("../../../assets/icons/trash.svg")),
             "force-icons/pencil.svg" => Some(include_bytes!("../../../assets/icons/pencil.svg")),
@@ -181,7 +183,7 @@ fn main() -> anyhow::Result<()> {
             Menu {
                 name: "计时".into(),
                 items: vec![
-                    MenuItem::action("新建…", NewTask),
+                    MenuItem::action("新任务…", NewTask),
                     MenuItem::separator(),
                     MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
                     MenuItem::action("结束本次计时", FinishSegment),
@@ -266,10 +268,15 @@ fn main() -> anyhow::Result<()> {
                 titlebar: None,
                 kind: WindowKind::PopUp,
                 focus: false,
+                // macOS shows the clock after the manager has real key status.
+                show: !cfg!(target_os = "macos"),
                 is_resizable: false,
                 window_background: WindowBackgroundAppearance::Transparent,
                 window_decorations: Some(WindowDecorations::Client),
-                window_min_size: Some(size(px(platform::STRIP_WIDTH), px(platform::STRIP_HEIGHT))),
+                window_min_size: Some(size(
+                    px(platform::STRIP_DOCKED_WIDTH),
+                    px(platform::STRIP_DOCKED_HEIGHT),
+                )),
                 app_id: Some("app.yuxino.force".into()),
                 ..Default::default()
             },
@@ -285,13 +292,7 @@ fn main() -> anyhow::Result<()> {
             Ok(strip) => {
                 model.update(cx, |model, _| model.strip_window = Some(strip));
                 cx.on_action(move |_: &NewTask, cx| {
-                    with_force(handle, cx, |this, window, cx| {
-                        if this.page == model::Page::Agenda {
-                            this.begin_plan(None, window, cx);
-                        } else {
-                            this.new_task(window, cx);
-                        }
-                    })
+                    with_force(handle, cx, |this, window, cx| this.new_task(window, cx))
                 });
                 cx.on_action(move |_: &ToggleCompact, cx| {
                     with_force(handle, cx, |this, window, cx| this.compact(window, cx))

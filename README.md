@@ -18,7 +18,7 @@
 
 <p align="center"><strong>日程 · 专注 · 记录</strong></p>
 
-<p align="center">日历安排任务，浮动计时器记录投入，记录页回顾每天的进展。</p>
+<p align="center">随时开始一件事，也可提前安排日历。猫钟记录投入，记录页回顾每天的进展。</p>
 
 <p align="center">
   <a href="https://github.com/yuxino/Force/issues">反馈</a> ·

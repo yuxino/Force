@@ -1,5 +1,5 @@
 use chrono::{Datelike, Local, TimeZone};
-use force_core::{Session, TagKind};
+use force_core::Session;
 use gpui::{prelude::*, *};
 use gpui_component::{
     ActiveTheme, Disableable, Icon, IconName,
@@ -11,8 +11,7 @@ use gpui_component::{
 
 use crate::{
     label::single_line,
-    model::{FloatingStrip, ForceView, Page},
-    platform,
+    model::{ForceView, Page},
 };
 
 pub(crate) const INK: u32 = 0x141414;
@@ -141,6 +140,23 @@ impl ForceView {
                             ),
                     )
                     .child(div().flex_1())
+                    .child(
+                        primary_button("global-new-task")
+                            .debug_selector(|| "global-new-task".into())
+                            .h(px(32.))
+                            .px(px(12.))
+                            .mr(px(12.))
+                            .flex_shrink_0()
+                            .icon(control_icon(
+                                Icon::new(IconName::Plus).size(px(14.)),
+                                0xffffff,
+                            ))
+                            .child(control_label("新任务", 0xffffff))
+                            .tooltip(shortcut("新任务", "N", "N"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.new_task(window, cx);
+                            })),
+                    )
                     .child(
                         choice_button("settings-tab", self.page == Page::Settings, SURFACE, cx)
                             .debug_selector(|| "settings-tab".into())
@@ -306,305 +322,6 @@ impl Render for ForceView {
                 body.child(self.feedback_toast(message, cx))
             })
     }
-}
-
-impl FloatingStrip {
-    fn floating_bar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let model = self.model.read(cx);
-        let current = if model.completed.is_some() && !model.active.iter().any(Session::is_running)
-        {
-            None
-        } else {
-            model.strip_session()
-        };
-        let completed = model.completed.as_ref();
-        let seconds = current.map_or_else(
-            || {
-                completed.map_or(
-                    if model.countdown {
-                        i64::from(model.timer_minutes) * 60
-                    } else {
-                        0
-                    },
-                    |s| {
-                        if s.target_seconds
-                            .is_some_and(|target| s.elapsed_at(model.now) >= target)
-                        {
-                            0
-                        } else {
-                            s.elapsed_at(model.now)
-                        }
-                    },
-                )
-            },
-            |s| {
-                s.target_seconds.map_or_else(
-                    || s.elapsed_at(model.now),
-                    |target| (target - s.elapsed_at(model.now)).max(0),
-                )
-            },
-        );
-        let title = if model.storage_failed {
-            "本地数据不可用".to_owned()
-        } else if let Some(session) = current {
-            session.title.clone()
-        } else if let Some(session) = completed {
-            session.title.clone()
-        } else {
-            let input = model.task_input.read(cx).value();
-            if input.trim().is_empty() {
-                "安排一件事".to_owned()
-            } else {
-                input.to_string()
-            }
-        };
-        let state = if model.storage_failed {
-            "展开重试"
-        } else if let Some(session) = current {
-            if session.is_paused() {
-                "已暂停"
-            } else if session.tag_kind == TagKind::Rest {
-                "休息中"
-            } else {
-                "计时中"
-            }
-        } else if completed.is_some_and(|s| s.tag_kind == TagKind::Rest) {
-            "休息结束"
-        } else if completed.is_some() {
-            "已保存"
-        } else {
-            "未开始"
-        };
-        let running = current.is_some_and(Session::is_running);
-        let (symbol, help) = if model.storage_failed {
-            ("play", "展开并重试")
-        } else if completed.is_some() && current.is_none() {
-            ("play", "查看计时")
-        } else if running {
-            ("pause", "暂停计时")
-        } else if current.is_some() {
-            ("play", "继续计时")
-        } else {
-            ("play", "开始计时")
-        };
-        let state = model
-            .toast
-            .as_ref()
-            .filter(|_| model.compact)
-            .map_or(state.to_owned(), |(message, _)| message.clone());
-        let title_help = title.clone();
-        let state_help = state.clone();
-        div()
-            .h(px(platform::STRIP_HEIGHT - 8.))
-            .w_full()
-            .px(px(12.))
-            .py(px(3.))
-            .flex()
-            .flex_col()
-            .gap(px(2.))
-            .child(
-                div()
-                    .id("floating-title-drag")
-                    .debug_selector(|| "strip-title".into())
-                    .w_full()
-                    .h(px(18.))
-                    .cursor_move()
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(format!("{title_help} · 拖动以移动浮窗")).build(window, cx)
-                    })
-                    .on_mouse_down(MouseButton::Left, |_, window, _| {
-                        let _ = platform::start_window_drag(window);
-                    })
-                    .child(
-                        single_line(title, 12.)
-                            .debug_selector(|| "strip-title-text".into())
-                            .font_weight(FontWeight::MEDIUM),
-                    ),
-            )
-            .child(
-                div()
-                    .h(px(28.))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(
-                        div()
-                            .id("floating-time-drag")
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .cursor_move()
-                            .on_mouse_down(MouseButton::Left, |_, window, _| {
-                                let _ = platform::start_window_drag(window);
-                            })
-                            .child(
-                                div()
-                                    .debug_selector(|| "strip-time".into())
-                                    .flex_shrink_0()
-                                    .font(timer_font(cx))
-                                    .text_size(px(if seconds >= 3600 { 20. } else { 24. }))
-                                    .line_height(relative(1.))
-                                    .font_weight(FontWeight::MEDIUM)
-                                    .text_color(rgb(if current.is_some_and(Session::is_paused) {
-                                        MUTED
-                                    } else {
-                                        INK
-                                    }))
-                                    .child(strip_time(seconds)),
-                            )
-                            .child(
-                                single_line(state, 11.)
-                                    .id("bar-status")
-                                    .flex_1()
-                                    .min_w_0()
-                                    .text_color(rgb(if model.storage_failed {
-                                        DESTRUCTIVE
-                                    } else {
-                                        MUTED
-                                    }))
-                                    .tooltip(move |window, cx| {
-                                        Tooltip::new(state_help.clone()).build(window, cx)
-                                    }),
-                            ),
-                    )
-                    .child(
-                        primary_button("bar-primary")
-                            .debug_selector(|| "strip-primary".into())
-                            .size(px(28.))
-                            .rounded(px(4.))
-                            .icon(control_icon(
-                                if current.is_none() && completed.is_some() {
-                                    Icon::new(IconName::ArrowRight).size(px(14.))
-                                } else {
-                                    action_icon(symbol).size(px(14.))
-                                },
-                                0xffffff,
-                            ))
-                            .tooltip(shortcut(help, "P", "P"))
-                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                                if event.click_count() == 1 {
-                                    this.dispatch(cx, |model, window, cx| {
-                                        model.strip_primary_action(window, cx)
-                                    });
-                                }
-                            })),
-                    )
-                    .child(
-                        div()
-                            .debug_selector(|| "strip-finish-slot".into())
-                            .w(px(28.))
-                            .h(px(28.))
-                            .flex_shrink_0()
-                            .children(current.map(|session| {
-                                let id = session.id;
-                                button("bar-finish")
-                                    .debug_selector(|| "strip-finish".into())
-                                    .ghost()
-                                    .size(px(28.))
-                                    .icon(control_icon(action_icon("stop").size(px(13.)), INK))
-                                    .tooltip(shortcut("结束本次计时", "⇧P", "Shift P"))
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.dispatch(cx, move |model, _, cx| model.finish(id, cx));
-                                    }))
-                            })),
-                    )
-                    .child(
-                        button("bar-expand")
-                            .debug_selector(|| "strip-open".into())
-                            .ghost()
-                            .size(px(28.))
-                            .icon(control_icon(
-                                Icon::new(IconName::ExternalLink).size(px(14.)),
-                                MUTED,
-                            ))
-                            .tooltip("打开 Force")
-                            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                if event.click_count() == 1 {
-                                    this.dispatch(cx, |model, window, cx| {
-                                        model.show_manager(window, cx)
-                                    });
-                                }
-                            })),
-                    ),
-            )
-    }
-}
-
-impl Render for FloatingStrip {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let model = self.model.read(cx);
-        let progress = model
-            .strip_session()
-            .filter(|session| model.completed.is_none() || session.is_running())
-            .and_then(|session| {
-                session.target_seconds.map(|target| {
-                    (session.elapsed_at(model.now) as f32 / target as f32).clamp(0., 1.)
-                })
-            });
-        div()
-            .debug_selector(|| "strip-root".into())
-            .track_focus(&self.focus_handle)
-            .key_context("Force")
-            .size_full()
-            .p(px(4.))
-            .text_color(rgb(INK))
-            .child(
-                div()
-                    .size_full()
-                    .relative()
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(rgb(0xd9d9d9))
-                    .bg(rgb(PAPER))
-                    .shadow(vec![BoxShadow {
-                        color: rgba(0x0000000d).into(),
-                        offset: point(px(0.), px(1.)),
-                        blur_radius: px(4.),
-                        spread_radius: px(0.),
-                    }])
-                    .overflow_hidden()
-                    .child(self.floating_bar(cx))
-                    .children(progress.map(|fraction| {
-                        div()
-                            .absolute()
-                            .bottom_0()
-                            .left_3()
-                            .right_3()
-                            .h(px(2.))
-                            .bg(rgb(LINE))
-                            .child(div().h_full().w(relative(fraction)).bg(rgb(MUTED)))
-                    })),
-            )
-    }
-}
-
-fn strip_time(seconds: i64) -> AnyElement {
-    let value: SharedString = clock(seconds).into();
-    if value.len() <= 10 {
-        return value.into_any_element();
-    }
-    // Preserve every hour digit even for extreme stored values without painting
-    // over the neighboring status and actions. Ordinary times keep natural width.
-    canvas(
-        move |bounds, window, _| {
-            let style = window.text_style();
-            crate::focus_view::shape_timer(
-                value,
-                bounds.size.width,
-                &style,
-                px(20.),
-                window.text_system(),
-            )
-        },
-        |bounds, line, window, cx| {
-            let _ = line.paint(bounds.origin, px(20.), window, cx);
-        },
-    )
-    .w(px(150.))
-    .h(px(20.))
-    .into_any_element()
 }
 
 pub(crate) fn button(id: impl Into<ElementId>) -> Button {

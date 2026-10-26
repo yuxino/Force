@@ -394,18 +394,19 @@ impl ForceView {
                     })
                     .when(!self.agenda.editor_visible, |header| {
                         header.child(
-                            primary_button("agenda-overview-add")
+                            button("agenda-overview-add")
                                 .debug_selector(|| "agenda-overview-add".into())
+                                .ghost()
                                 .h(px(36.))
                                 .px(px(12.))
                                 .unavailable(self.storage_failed)
                                 .icon(control_icon(
                                     IconName::Plus,
-                                    if self.storage_failed { MUTED } else { 0xffffff },
+                                    if self.storage_failed { MUTED } else { INK },
                                 ))
                                 .child(control_label(
                                     "添加安排",
-                                    if self.storage_failed { MUTED } else { 0xffffff },
+                                    if self.storage_failed { MUTED } else { INK },
                                 ))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     if this.agenda.date.month() != this.agenda.month.month()
@@ -910,18 +911,19 @@ impl ForceView {
                             })),
                     )
                     .child(
-                        primary_button("agenda-add")
+                        button("agenda-add")
                             .debug_selector(|| "agenda-add".into())
+                            .ghost()
                             .h(px(36.))
                             .px(px(12.))
                             .unavailable(self.storage_failed)
                             .icon(control_icon(
                                 IconName::Plus,
-                                if self.storage_failed { MUTED } else { 0xffffff },
+                                if self.storage_failed { MUTED } else { INK },
                             ))
                             .child(control_label(
                                 "添加安排",
-                                if self.storage_failed { MUTED } else { 0xffffff },
+                                if self.storage_failed { MUTED } else { INK },
                             ))
                             .on_click(
                                 cx.listener(|this, _, window, cx| {

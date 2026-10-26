@@ -2,25 +2,32 @@
 
 ## Windows and navigation
 
-Keep the 328 × 68-point floating timer independent of the normal management
-window. Management starts at 1040 × 780 points, with a 780 × 620 minimum. Opening,
-resizing or navigating management must not move the strip. Starting or resuming
-a timer preserves the windows the user has open; closing management is explicit.
+Keep the floating cat clock independent of the normal management window. It is
+88 × 128 points when compact, 264 × 158 when expanded and 28 × 80 when docked.
+Clicking the cat toggles its controls; dragging near either screen edge docks it
+on macOS/Windows. Linux retains free movement and resizing. These local states
+must not pause, resume or retarget the active timer. Management starts at
+1040 × 780 points, with a 780 × 620 minimum. Opening, resizing or navigating
+management must not move the clock. Starting or resuming a timer preserves the
+windows the user has open; closing management is explicit.
 macOS and Windows hide management on close; Linux currently minimizes it.
 
 The primary navigation has 日历 and 记录. 日历 is the stable scheduling and
 review surface; 记录 supports date-based detail. Task/timer details are contextual,
 without a third primary navigation destination. Settings is a secondary gear
-control. Strip pinning belongs in settings; CSV export appears only in records. Both windows share one model
-and store. Inputs belong to management, and strip actions dispatch to that window
-after the current window borrow ends.
+control. Clock pinning belongs in settings; CSV export appears only in records.
+Both windows share one model and store. Inputs belong to management, and clock
+actions dispatch to that window after the current window borrow ends.
 
-The strip prioritizes the running session. Browsing a paused task in management
-must not replace the running timer shown on the strip or retarget its controls.
-Without a running session, the strip may show the selected paused session or
-completion state. Give the title the full first line; time and status share the
-second line with fixed pause/resume, finish and open slots. Keep the finish slot
-reserved when unavailable so neighboring controls stay in place.
+The clock prioritizes the running session. Browsing a paused task in management
+must not replace that timer or retarget its controls. Without a running session,
+the clock may show the selected paused session or completion state. Keep the
+compact readout inside the black cat. Its expanded black panel contains the
+task title, status and one primary action: 新任务 / 开始, 暂停, 继续, 查看记录 or
+重试 as appropriate. Show 结束 only for an active or paused session, without a
+reserved empty slot. Clicking the task title opens its management detail with
+the existing draft protection; the small minus control only collapses the clock.
+Do not add a separate open button or hover tooltips to the clock.
 
 ## Stable focus workspace
 
@@ -64,10 +71,11 @@ Use spacing between columns without a full-height dividing line.
   single-line labels against final bounds with fresh text runs; GPUI 0.2.2
   built-in ellipsis can keep shortened runs from an earlier width measurement.
   Complete titles remain available in tooltips; two-line operation headings wrap.
-- The sidebar contains the single visible 新建 entry when a saved task, timer or
-  completion is selected. Hide it while already preparing a new task; repeated
-  menu/shortcut requests focus that same draft without clearing its fields. Selected inactive tasks
-  can be removed from the list while retaining their records. Ending a round
+- The header always offers 新任务 (Cmd/Ctrl+N), without requiring a calendar plan.
+  Opening it preserves task drafts and suspends any changed calendar draft.
+- The task sidebar contains selection only; do not duplicate the header entry.
+  Repeated menu/shortcut requests focus the same draft without clearing its fields.
+  Selected inactive tasks can be removed from the list while retaining their records. Ending a round
   remains distinct from completing its task.
 - Selection synchronizes task, tag and timing mode and resets the left operation
   scroll. Resuming focus or rest follows the same atomic switching policy.
@@ -85,7 +93,7 @@ below one minute and omit zero minutes after whole hours. Keep necessary labels 
 optional explanations use contextual help. Routine removal icons stay neutral.
 
 Settings have a 160-point section-title column, a 32-point gap and an elastic
-content column, with 36 points between groups. Timing preferences contain strip
+content column, with 36 points between groups. Timing preferences contain clock
 pinning, completion sound and daily goal. Pinning and sound each use a
 keyboard-accessible button around a passive switch indicator. Tags use 44-point
 rows and a list capped at 240 points. The tag input and 添加 / 保存
@@ -228,7 +236,7 @@ passing automated suite.
 
 Check default/minimum sizes, long task and tag names, fixed summary/sidebar
 bounds across setup/running/completion, independent scrolling, selection without
-starting, explicit start without window hiding, running-strip stability, empty
+starting, explicit start without window hiding, running-clock stability, empty
 records, validation, keyboard actions, dialogs and close/reopen. Keep the full
 start/switch action inside the minimum-height viewport when
 the running-timer context is present. Measure the
@@ -237,7 +245,7 @@ future-cell behavior. Use temporary data only.
 
 GPUI TestPlatform establishes layout bounds and dispatched events, not native
 pixels, real hover appearance, window-manager behavior or IME composition.
-Before native click checks, place the development strip clear of management
+Before native click checks, place the development clock clear of management
 controls: an app-window screenshot can omit a separate floating window that
 still intercepts clicks.
 

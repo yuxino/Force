@@ -1,8 +1,8 @@
 use force_core::TagKind;
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Icon, IconName, Sizable, button::ButtonVariants, scroll::ScrollableElement, switch::Switch,
-    tooltip::Tooltip,
+    Disableable, Icon, IconName, Sizable, button::ButtonVariants, scroll::ScrollableElement,
+    switch::Switch, tooltip::Tooltip,
 };
 
 use crate::{
@@ -47,13 +47,25 @@ impl ForceView {
                                         if !cfg!(any(target_os = "macos", target_os = "windows")) {
                                             "置顶由窗口管理器控制"
                                         } else if self.pinned {
-                                            "计时条置顶已开启"
+                                            "猫钟置顶已开启"
                                         } else {
-                                            "计时条置顶已关闭"
+                                            "猫钟置顶已关闭"
                                         },
                                     )
                                     .child(
-                                        Switch::new("pin-indicator").small().checked(self.pinned),
+                                        Switch::new("pin-indicator")
+                                            .small()
+                                            .checked(self.pinned)
+                                            .disabled(!cfg!(any(
+                                                target_os = "macos",
+                                                target_os = "windows"
+                                            )))
+                                            // Switch stops mouse-down propagation, so its
+                                            // native surface and the outer keyboard button
+                                            // each activate once through their own path.
+                                            .on_click(cx.listener(|this, _: &bool, _, cx| {
+                                                this.toggle_strip_pin(cx);
+                                            })),
                                     )
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                                         if event.click_count() == 1 {
@@ -69,6 +81,7 @@ impl ForceView {
                             .child(setting_label("到时提示音"))
                             .child(
                                 button("completion-sound")
+                                    .debug_selector(|| "settings-sound".into())
                                     .ghost()
                                     .h(px(40.))
                                     .px(px(8.))
@@ -88,7 +101,16 @@ impl ForceView {
                                     .child(
                                         Switch::new("sound-indicator")
                                             .small()
-                                            .checked(self.sound_enabled),
+                                            .checked(self.sound_enabled)
+                                            .disabled(!cfg!(any(
+                                                target_os = "macos",
+                                                target_os = "windows"
+                                            )))
+                                            .on_click(cx.listener(
+                                                |this, enabled: &bool, _, cx| {
+                                                    this.set_sound_enabled(*enabled, cx);
+                                                },
+                                            )),
                                     )
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                                         if event.click_count() == 1 {
