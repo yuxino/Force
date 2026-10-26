@@ -172,13 +172,14 @@ impl ForceView {
                                         this.open_agenda_day(this.agenda.date, window, cx)
                                     }))
                             } else {
-                                primary_button("agenda-add")
+                                button("agenda-add")
                                     .debug_selector(|| "agenda-add".into())
+                                    .ghost()
                                     .h(px(34.))
                                     .unavailable(self.storage_failed)
                                     .child(control_label(
                                         "添加安排",
-                                        if self.storage_failed { MUTED } else { 0xffffff },
+                                        if self.storage_failed { MUTED } else { INK },
                                     ))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.begin_plan(None, window, cx)

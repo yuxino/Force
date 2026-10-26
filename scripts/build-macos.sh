@@ -11,12 +11,14 @@ fi
 
 profile=debug
 production=false
+ad_hoc=false
 for argument in "$@"; do
   case "$argument" in
     --release) profile=release ;;
     --production) production=true ;;
+    --ad-hoc) ad_hoc=true ;;
     -h|--help)
-      echo 'Usage: scripts/build-macos.sh [--release] [--production]'
+      echo 'Usage: scripts/build-macos.sh [--release] [--production] [--ad-hoc]'
       echo 'Default: signed build/Force Dev.app, isolated development identity.'
       echo 'FORCE_SIGN_IDENTITY selects an existing code-signing identity by hash or name.'
       exit 0
@@ -25,21 +27,25 @@ for argument in "$@"; do
   esac
 done
 
-identities="$(security find-identity -v -p codesigning)"
-requested_identity="${FORCE_SIGN_IDENTITY:-}"
-if [[ -n "$requested_identity" ]]; then
-  identity="$(printf '%s\n' "$identities" | awk -v wanted="$requested_identity" '
-    /[0-9A-Fa-f]{40}/ {
-      name = $0; sub(/^[^"]*"/, "", name); sub(/".*$/, "", name)
-      if ($2 == wanted || name == wanted) print $2
-    }')"
+if [[ "$ad_hoc" == true ]]; then
+  identity=-
 else
-  identity="$(printf '%s\n' "$identities" | awk '/"Apple Development:/ { print $2 }')"
-fi
-if [[ -z "$identity" ]] || [[ "$identity" == *$'\n'* ]]; then
-  echo 'Select one valid private-key-backed identity with FORCE_SIGN_IDENTITY.' >&2
-  echo 'The default requires exactly one Apple Development identity.' >&2
-  exit 1
+  identities="$(security find-identity -v -p codesigning)"
+  requested_identity="${FORCE_SIGN_IDENTITY:-}"
+  if [[ -n "$requested_identity" ]]; then
+    identity="$(printf '%s\n' "$identities" | awk -v wanted="$requested_identity" '
+      /[0-9A-Fa-f]{40}/ {
+        name = $0; sub(/^[^"]*"/, "", name); sub(/".*$/, "", name)
+        if ($2 == wanted || name == wanted) print $2
+      }')"
+  else
+    identity="$(printf '%s\n' "$identities" | awk '/"Apple Development:/ { print $2 }')"
+  fi
+  if [[ -z "$identity" ]] || [[ "$identity" == *$'\n'* ]]; then
+    echo 'Select one valid private-key-backed identity with FORCE_SIGN_IDENTITY.' >&2
+    echo 'The default requires exactly one Apple Development identity.' >&2
+    exit 1
+  fi
 fi
 
 bundle_name='Force Dev'

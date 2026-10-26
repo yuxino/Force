@@ -456,10 +456,11 @@ impl ForceView {
                         row.child(
                             button("save-new-task")
                                 .debug_selector(|| "save-new-task".into())
+                                .ghost()
                                 .h(px(44.))
-                                .px(px(20.))
+                                .px(px(8.))
                                 .unavailable(!self.can_save_task(cx))
-                                .child(control_label("保存任务", INK))
+                                .child(control_label("保存任务", MUTED))
                                 .tooltip("加入任务列表，稍后再开始计时")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.save_task_changes(cx);
@@ -532,21 +533,7 @@ impl ForceView {
                                     .text_color(rgb(MUTED))
                                     .child((tasks.len() + standalone.len()).to_string()),
                             ),
-                    )
-                    .when(!self.is_new_task_form(), |heading| {
-                        heading.child(
-                            button("new-task")
-                                .debug_selector(|| "new-task".into())
-                                .ghost()
-                                .h(px(32.))
-                                .px(px(8.))
-                                .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), INK))
-                                .child(control_label("新建", INK))
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.new_task(window, cx)),
-                                ),
-                        )
-                    }),
+                    ),
             )
             .child(
                 div()

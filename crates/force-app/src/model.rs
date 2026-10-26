@@ -89,6 +89,7 @@ pub(crate) struct ForceView {
     tag_edit_original: Option<String>,
     pub(crate) toast: Option<(String, Instant)>,
     pub(crate) export_busy: bool,
+    pub(crate) update_state: crate::updates::UpdateState,
     pub(crate) now: i64,
     pub(crate) timer_minutes: u32,
     pub(crate) countdown: bool,
@@ -274,6 +275,7 @@ impl ForceView {
             tag_edit_original: None,
             toast: None,
             export_busy: false,
+            update_state: crate::updates::UpdateState::Idle,
             now: Local::now().timestamp(),
             timer_minutes: 25,
             countdown: true,
@@ -876,10 +878,17 @@ impl ForceView {
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(choice @ (1 | 2)) = answer.await {
+            if let Ok(choice @ 0..=2) = answer.await {
                 let _ = cx.update(|window, cx| {
                     let _ = this.update(cx, |this, cx| {
                         if this.selected_task != selected || !this.preparing {
+                            return;
+                        }
+                        if choice == 0 {
+                            if this.page == Page::Focus {
+                                this.task_input
+                                    .update(cx, |input, cx| input.focus(window, cx));
+                            }
                             return;
                         }
                         if choice == 2 {
@@ -1026,8 +1035,25 @@ impl ForceView {
     pub(crate) fn show_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.compact = false;
         // A model created in TestAppContext has no attached native windows.
-        if self.manager_window.is_some() && crate::platform::show_manager(window, cx).is_err() {
-            self.notify("无法打开主窗口，请重试。", cx);
+        if self.manager_window.is_some() {
+            if crate::platform::show_manager(window, cx).is_err() {
+                self.notify("无法打开主窗口，请重试。", cx);
+                return;
+            }
+            // Retry on every management entry, including Dock/app reopen after
+            // a previous activation timeout. Popup visibility still waits for
+            // the normal window's genuine key status.
+            #[cfg(target_os = "macos")]
+            if let Some(strip) = self.strip_window {
+                cx.defer(move |cx| {
+                    let _ = strip.update(cx, |_, window, cx| {
+                        if let Err(error) = crate::platform::show_floating_after_manager(window, cx)
+                        {
+                            eprintln!("Force could not show its floating clock: {error}");
+                        }
+                    });
+                });
+            }
         }
         cx.notify();
     }
@@ -1061,7 +1087,7 @@ impl ForceView {
                     this.pinned = pinned;
                     cx.notify();
                 } else {
-                    this.notify("无法更改计时条置顶状态，请重试。", cx);
+                    this.notify("无法更改猫钟置顶状态，请重试。", cx);
                 }
             });
         });
@@ -1075,6 +1101,9 @@ impl ForceView {
             self.notify("这项计时已结束，请刷新后重试。", cx);
             return;
         };
+        if self.page == Page::Agenda {
+            self.suspend_agenda_popup(window, cx);
+        }
         self.preparing = false;
         self.completed = None;
         self.page = Page::Focus;
@@ -1126,6 +1155,9 @@ impl ForceView {
 
     pub(crate) fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.is_new_task_form() {
+            if self.page == Page::Agenda {
+                self.suspend_agenda_popup(window, cx);
+            }
             self.page = Page::Focus;
             self.show_manager(window, cx);
             self.task_input
@@ -1134,6 +1166,9 @@ impl ForceView {
         }
         if self.confirm_task_changes(TaskDestination::New, window, cx) {
             return;
+        }
+        if self.page == Page::Agenda {
+            self.suspend_agenda_popup(window, cx);
         }
         self.refresh(cx);
         self.panel_scroll[0].set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
@@ -1974,6 +2009,20 @@ impl ForceView {
 }
 
 pub(crate) struct FloatingStrip {
+    pub(crate) expanded: bool,
+    pub(crate) drawer_visible: bool,
+    pub(crate) disclosure_serial: u64,
+    pub(crate) disclosure_from: f32,
+    pub(crate) disclosure_started: Instant,
+    pub(crate) disclosure_task: Option<gpui::Task<()>>,
+    pub(crate) face_hovered: bool,
+    pub(crate) docked: Option<crate::platform::DockEdge>,
+    pub(crate) drag_start: Option<gpui::Point<gpui::Pixels>>,
+    #[cfg(target_os = "macos")]
+    pub(crate) drag_event: Option<crate::platform::WindowDragEvent>,
+    pub(crate) drag_task: Option<gpui::Task<()>>,
+    pub(crate) drag_serial: u64,
+    pub(crate) suppress_click: bool,
     pub(crate) model: Entity<ForceView>,
     pub(crate) manager: WindowHandle<Root>,
     pub(crate) focus_handle: FocusHandle,
@@ -1992,8 +2041,13 @@ impl FloatingStrip {
             this.window_position = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
             this.strip_position_initialized = true;
         });
-        let observe = cx.observe(&model, |_, _, cx| cx.notify());
+        let observe = cx.observe_in(&model, window, |this, _, window, cx| {
+            this.model_changed(window, cx);
+        });
         let position = cx.observe_window_bounds(window, |this, window, cx| {
+            if this.expanded {
+                return;
+            }
             let origin = window.bounds().origin;
             this.model.update(cx, |model, _| {
                 model.window_position = (f32::from(origin.x), f32::from(origin.y));
@@ -2001,6 +2055,20 @@ impl FloatingStrip {
             });
         });
         Self {
+            expanded: false,
+            drawer_visible: false,
+            disclosure_serial: 0,
+            disclosure_from: 0.,
+            disclosure_started: Instant::now(),
+            disclosure_task: None,
+            face_hovered: false,
+            docked: None,
+            drag_start: None,
+            #[cfg(target_os = "macos")]
+            drag_event: None,
+            drag_task: None,
+            drag_serial: 0,
+            suppress_click: false,
             model,
             manager,
             focus_handle: cx.focus_handle(),

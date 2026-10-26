@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "force-app"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1900,14 +1900,18 @@ dependencies = [
  "objc2",
  "objc2-app-kit",
  "raw-window-handle",
+ "semver",
+ "serde",
+ "serde_json",
  "tempfile",
  "windows-sys 0.61.2",
  "winresource",
+ "zed-reqwest",
 ]
 
 [[package]]
 name = "force-core"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "chrono",
  "rusqlite",
@@ -7773,6 +7777,7 @@ dependencies = [
  "base64",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",

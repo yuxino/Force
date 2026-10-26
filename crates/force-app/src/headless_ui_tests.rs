@@ -225,6 +225,24 @@ fn headless_ui_manager_layout_is_bounded_at_default_and_minimum_size(cx: &mut Te
     }
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+#[gpui::test]
+fn headless_ui_settings_sound_switch_center_activates_the_setting_once(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 780., 620.);
+    manager.click("settings-tab");
+    let original = manager
+        .view
+        .read_with(&manager.cx, |view, _| view.sound_enabled);
+    manager.click("settings-sound");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.sound_enabled, !original);
+        assert_eq!(
+            view.store.as_ref().unwrap().completion_sound().unwrap(),
+            !original
+        );
+    });
+}
+
 #[gpui::test]
 fn headless_ui_navigation_and_goal_save_use_real_gpui_events(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
@@ -624,7 +642,7 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
     );
     assert_same_bounds(manager.bounds("focus-summary"), summary);
     assert_same_bounds(manager.bounds("focus-tasks"), tasks);
-    manager.click("new-task");
+    manager.click("global-new-task");
     assert_eq!(
         manager
             .view
@@ -784,40 +802,114 @@ fn headless_ui_activity_days_fit_and_select_records_without_resetting_scroll(
     }
 }
 
-fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 3] {
-    let root = strip.debug_bounds("strip-root").unwrap();
-    let title = strip.debug_bounds("strip-title").unwrap();
-    let text = strip.debug_bounds("strip-title-text").unwrap();
-    let time = strip.debug_bounds("strip-time").unwrap();
-    let primary = strip.debug_bounds("strip-primary").unwrap();
-    let finish_slot = strip.debug_bounds("strip-finish-slot").unwrap();
-    let open = strip.debug_bounds("strip-open").unwrap();
-    for child in [title, text, time, primary, finish_slot, open] {
-        assert_horizontally_inside(child, root);
-        assert!(child.top() >= root.top() - px(1.));
-        assert!(child.bottom() <= root.bottom() + px(1.));
+#[gpui::test]
+fn headless_ui_global_new_task_is_available_without_scheduling_and_preserves_its_draft(
+    cx: &mut TestAppContext,
+) {
+    for page in [Page::Agenda, Page::Records] {
+        let mut manager = ManagerHarness::new_on_page(cx, 780., 620., page);
+        let entry = manager.bounds("global-new-task");
+        assert_horizontally_inside(entry, manager.bounds("manager-header"));
+        manager.click("global-new-task");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(matches!(view.page, Page::Focus));
+            assert!(view.preparing);
+            assert!(view.selected_task.is_none());
+            assert!(!view.agenda.editing);
+            assert!(view.tasks.is_empty());
+            assert!(view.active.is_empty());
+            assert!(view.agenda.plans.is_empty());
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.task_input.update(cx, |input, cx| {
+                input.set_value("A task without a date", window, cx)
+            });
+            view.timer_minutes = 17;
+            view.timer_input
+                .update(cx, |input, cx| input.set_value("17", window, cx));
+        });
+        manager.click(if page == Page::Agenda {
+            "agenda-tab"
+        } else {
+            "records-tab"
+        });
+        manager.click("global-new-task");
+        assert!(!manager.cx.has_pending_prompt());
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(matches!(view.page, Page::Focus));
+            assert_eq!(view.task_input.read(cx).value(), "A task without a date");
+            assert_eq!(view.timer_minutes, 17);
+            assert_eq!(view.timer_input.read(cx).value(), "17");
+            assert!(view.active.is_empty());
+            assert!(view.agenda.plans.is_empty());
+        });
+        manager.click("save-new-task");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.tasks.len(), 1);
+            assert_eq!(view.tasks[0].title, "A task without a date");
+            assert!(view.active.is_empty());
+            assert!(view.agenda.plans.is_empty());
+        });
     }
-    assert_horizontally_inside(text, title);
-    assert!(text.size.width >= root.size.width - px(36.));
-    assert!((text.left() - title.left()).abs() <= px(1.));
-    assert!((text.right() - title.right()).abs() <= px(1.));
-    assert!((title.left() - time.left()).abs() <= px(1.));
-    assert!((title.right() - open.right()).abs() <= px(1.));
-    assert!(title.bottom() <= time.top() + px(1.));
-    assert!(title.bottom() <= primary.top() + px(1.));
-    assert!(time.right() <= primary.left());
-    assert!(primary.right() < finish_slot.left());
-    assert!(finish_slot.right() < open.left());
-    assert_eq!(primary.top(), finish_slot.top());
-    assert_eq!(finish_slot.top(), open.top());
-    [primary, finish_slot, open]
 }
 
 #[gpui::test]
-fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborrows(
-    cx: &mut TestAppContext,
-) {
-    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+fn headless_ui_global_new_task_keeps_an_unsaved_calendar_plan(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.begin_plan(None, window, cx);
+        view.agenda.title_input.update(cx, |input, cx| {
+            input.set_value("Calendar draft worth keeping", window, cx)
+        });
+        view.agenda
+            .end_input
+            .update(cx, |input, cx| input.set_value("invalid", window, cx));
+        view.agenda.note_input.update(cx, |input, cx| {
+            input.set_value("Unfinished calendar note", window, cx)
+        });
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("global-new-task");
+    assert!(!manager.cx.has_pending_prompt());
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(matches!(view.page, Page::Focus));
+        assert!(view.preparing);
+        assert!(view.selected_task.is_none());
+        assert!(view.agenda_has_suspended_draft(cx));
+        assert!(!view.agenda.popup_open);
+        assert_eq!(
+            view.agenda.title_input.read(cx).value(),
+            "Calendar draft worth keeping"
+        );
+        assert_eq!(view.agenda.end_input.read(cx).value(), "invalid");
+        assert_eq!(
+            view.agenda.note_input.read(cx).value(),
+            "Unfinished calendar note"
+        );
+        assert!(view.tasks.is_empty());
+        assert!(view.active.is_empty());
+        assert!(view.agenda.plans.is_empty());
+    });
+    manager.click("agenda-tab");
+    manager.click("agenda-resume-draft");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(matches!(view.page, Page::Agenda));
+        assert!(view.agenda.popup_open && view.agenda.editor_visible);
+        assert_eq!(
+            view.agenda.title_input.read(cx).value(),
+            "Calendar draft worth keeping"
+        );
+        assert_eq!(view.agenda.end_input.read(cx).value(), "invalid");
+        assert_eq!(
+            view.agenda.note_input.read(cx).value(),
+            "Unfinished calendar note"
+        );
+        assert!(view.agenda.plans.is_empty());
+    });
+}
+
+fn open_test_strip(manager: &mut ManagerHarness) -> (Entity<FloatingStrip>, VisualTestContext) {
     let model = manager.view.clone();
     let manager_window = manager.handle;
     let (strip_window, strip_view) = manager.cx.cx.update(|cx| {
@@ -827,7 +919,10 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
                 WindowOptions {
                     window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                         Point::default(),
-                        size(px(328.), px(68.)),
+                        size(
+                            px(crate::platform::STRIP_WIDTH),
+                            px(crate::platform::STRIP_HEIGHT),
+                        ),
                     ))),
                     ..Default::default()
                 },
@@ -841,16 +936,212 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         (handle, strip_view.unwrap())
     });
     let mut strip = VisualTestContext::from_window(*strip_window, &manager.cx.cx);
-    strip.simulate_resize(size(px(328.), px(68.)));
+    refresh_test_strip(&strip_view, &mut strip);
+    (strip_view, strip)
+}
+
+fn refresh_test_strip(view: &Entity<FloatingStrip>, strip: &mut VisualTestContext) {
+    let dimensions = view.read_with(&*strip, |view, _| {
+        if view.expanded {
+            size(
+                px(crate::floating_view::EXPANDED_WIDTH),
+                px(crate::floating_view::EXPANDED_HEIGHT),
+            )
+        } else if view.docked.is_some() {
+            size(
+                px(crate::floating_view::DOCK_WIDTH),
+                px(crate::floating_view::DOCK_HEIGHT),
+            )
+        } else {
+            size(
+                px(crate::platform::STRIP_WIDTH),
+                px(crate::platform::STRIP_HEIGHT),
+            )
+        }
+    });
+    // Native reshaping is checked separately. TestPlatform does not deliver the
+    // native resize notification, so supply its viewport explicitly.
+    strip.simulate_resize(dimensions);
     strip.update(|window, _| window.refresh());
     strip.run_until_parked();
-    strip_view.read_with(&strip, |view, _| {
-        assert_eq!(view.model.entity_id(), manager.view.entity_id());
-    });
+}
 
-    let idle_controls = strip_control_bounds(&mut strip);
-    assert!(strip.debug_bounds("strip-finish").is_none());
-    strip.simulate_click(idle_controls[0].center(), Modifiers::default());
+fn click_test_strip(
+    view: &Entity<FloatingStrip>,
+    strip: &mut VisualTestContext,
+    selector: &'static str,
+) {
+    let bounds = strip.debug_bounds(selector).unwrap();
+    strip.simulate_click(bounds.center(), Modifiers::default());
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(200));
+    strip.run_until_parked();
+    refresh_test_strip(view, strip);
+}
+
+fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
+    let root = strip.debug_bounds("strip-root").unwrap();
+    let face = strip.debug_bounds("strip-face").unwrap();
+    let text = strip.debug_bounds("strip-title-text").unwrap();
+    let time = strip.debug_bounds("strip-time").unwrap();
+    let status = strip.debug_bounds("strip-status").unwrap();
+    let controls = strip.debug_bounds("strip-controls").unwrap();
+    let primary = strip.debug_bounds("strip-primary").unwrap();
+    let open = strip.debug_bounds("strip-open").unwrap();
+    for child in [face, text, time, status, controls, primary, open] {
+        assert_horizontally_inside(child, root);
+        assert!(child.top() >= root.top() - px(1.));
+        assert!(child.bottom() <= root.bottom() + px(1.));
+    }
+    // Measure the real information boxes, not only the enclosing panel. Text
+    // and controls stay usable as the optional finish action appears/disappears.
+    assert!(text.size.width >= px(120.));
+    assert!(status.size.width >= px(120.));
+    assert!((text.left() - status.left()).abs() <= px(1.));
+    assert!(text.bottom() < status.top());
+    assert!(status.bottom() < controls.top());
+    assert_horizontally_inside(time, face);
+    assert!(primary.size.width >= px(28.) && primary.size.height >= px(24.));
+    assert_horizontally_inside(text, open);
+    assert!(open.bottom() < status.top());
+    assert_horizontally_inside(primary, controls);
+    assert!(primary.top() >= controls.top() - px(1.));
+    assert!(primary.bottom() <= controls.bottom() + px(1.));
+    [primary, open]
+}
+
+#[gpui::test]
+fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibility(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let (running, browsed) = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let store = view.store.as_mut().unwrap();
+        let running = store
+            .start("Timer that keeps running", 1, view.now - 60)
+            .unwrap();
+        let browsed = store
+            .start("Paused task being inspected", 1, view.now - 30)
+            .unwrap();
+        store.pause(browsed.id, view.now - 10).unwrap();
+        view.refresh(cx);
+        view.select_session(browsed.id, window, cx);
+        view.hide_manager(window, cx);
+        (running.id, browsed.id)
+    });
+    let (strip_view, mut strip) = open_test_strip(&mut manager);
+    assert!(strip.debug_bounds("strip-controls").is_none());
+    let collapsed = strip.debug_bounds("strip-root").unwrap();
+    assert_eq!(collapsed.size, size(px(88.), px(128.)));
+    click_test_strip(&strip_view, &mut strip, "strip-face");
+    strip_view.read_with(&strip, |view, _| assert!(view.expanded));
+    let controls = strip_control_bounds(&mut strip);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(
+            view.compact,
+            "opening the cat drawer must not open management"
+        );
+        assert_eq!(view.selected_session, Some(browsed));
+        assert_eq!(view.strip_session().unwrap().id, running);
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == running)
+                .unwrap()
+                .is_running()
+        );
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == browsed)
+                .unwrap()
+                .is_paused()
+        );
+    });
+    click_test_strip(&strip_view, &mut strip, "strip-face");
+    strip_view.read_with(&strip, |view, _| assert!(!view.expanded));
+    assert_same_bounds(strip.debug_bounds("strip-root").unwrap(), collapsed);
+    // Debug selectors retain old bounds. Clicking the former action location
+    // proves hidden drawer controls are absent from the active event tree.
+    strip.simulate_click(controls[0].center(), Modifiers::default());
+    refresh_test_strip(&strip_view, &mut strip);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.compact);
+        assert_eq!(view.selected_session, Some(browsed));
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == running)
+                .unwrap()
+                .is_running()
+        );
+    });
+    click_test_strip(&strip_view, &mut strip, "strip-face");
+    click_test_strip(&strip_view, &mut strip, "strip-open");
+    strip_view.read_with(&strip, |view, _| assert!(view.expanded));
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.compact);
+        assert_eq!(view.selected_session, Some(running));
+        assert_eq!(view.strip_session().unwrap().id, running);
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == running)
+                .unwrap()
+                .is_running()
+        );
+    });
+    for edge in [
+        crate::platform::DockEdge::Left,
+        crate::platform::DockEdge::Right,
+    ] {
+        strip_view.update(&mut strip, |view, cx| {
+            view.docked = Some(edge);
+            cx.notify();
+        });
+        click_test_strip(&strip_view, &mut strip, "strip-face");
+        assert_eq!(
+            strip.debug_bounds("strip-root").unwrap().size,
+            size(px(28.), px(80.))
+        );
+        click_test_strip(&strip_view, &mut strip, "strip-dock");
+        strip_view.read_with(&strip, |view, _| {
+            assert!(view.expanded);
+            assert_eq!(view.docked, Some(edge));
+        });
+        strip_control_bounds(&mut strip);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(!view.compact);
+            assert_eq!(view.selected_session, Some(running));
+            assert_eq!(view.strip_session().unwrap().id, running);
+            assert!(
+                view.active
+                    .iter()
+                    .find(|s| s.id == running)
+                    .unwrap()
+                    .is_running()
+            );
+        });
+    }
+    strip.update(|window, _| window.remove_window());
+    strip.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborrows(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let (strip_view, mut strip) = open_test_strip(&mut manager);
+    strip_view.read_with(&strip, |view, _| {
+        assert_eq!(view.model.entity_id(), manager.view.entity_id())
+    });
+    click_test_strip(&strip_view, &mut strip, "strip-face");
+    strip_view.read_with(&strip, |view, _| {
+        assert!(!view.expanded && !view.drawer_visible)
+    });
+    assert!(strip.debug_bounds("strip-controls").is_none());
     manager.view.read_with(&manager.cx, |view, _| {
         assert!(view.preparing);
         assert!(!view.compact);
@@ -859,7 +1150,7 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         view.task_input
             .update(cx, |input, cx| input.focus(window, cx));
     });
-    let title = "浮窗应当完整保留这段很长的任务名称，显示时仅在全宽标题行内省略";
+    let title = "浮窗应当完整保留这段很长的任务名称，显示时仅在信息区标题行内省略";
     manager.cx.simulate_input(title);
     manager.click("start-focus");
     let started = manager.view.read_with(&manager.cx, |view, _| {
@@ -868,81 +1159,97 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         assert_eq!(view.active[0].title, title);
         view.active[0].id
     });
-
-    strip.update(|window, _| window.refresh());
-    strip.run_until_parked();
-    let running_controls = strip_control_bounds(&mut strip);
-    for (actual, expected) in running_controls.into_iter().zip(idle_controls) {
-        assert_same_bounds(actual, expected);
-    }
-    assert_same_bounds(
-        strip.debug_bounds("strip-finish").unwrap(),
-        idle_controls[1],
-    );
-    strip.simulate_click(running_controls[0].center(), Modifiers::default());
+    refresh_test_strip(&strip_view, &mut strip);
+    click_test_strip(&strip_view, &mut strip, "strip-face");
+    strip_control_bounds(&mut strip);
+    click_test_strip(&strip_view, &mut strip, "strip-primary");
     manager.view.read_with(&manager.cx, |view, _| {
-        assert_eq!(view.active.len(), 1);
         assert_eq!(view.active[0].id, started);
         assert!(view.active[0].is_paused());
     });
-    strip.update(|window, _| window.refresh());
-    strip.run_until_parked();
-    let paused_controls = strip_control_bounds(&mut strip);
-    for (actual, expected) in paused_controls.into_iter().zip(idle_controls) {
-        assert_same_bounds(actual, expected);
-    }
-    strip.simulate_click(paused_controls[2].center(), Modifiers::default());
+    click_test_strip(&strip_view, &mut strip, "strip-primary");
     manager.view.read_with(&manager.cx, |view, _| {
-        assert!(!view.compact);
         assert_eq!(view.active[0].id, started);
+        assert!(view.active[0].is_running());
     });
-    strip.simulate_click(paused_controls[1].center(), Modifiers::default());
-    strip.update(|window, _| window.refresh());
-    strip.run_until_parked();
+    let browsed = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let store = view.store.as_mut().unwrap();
+        let paused = store.start("Other paused timer", 1, view.now - 30).unwrap();
+        store.pause(paused.id, view.now - 10).unwrap();
+        view.refresh(cx);
+        view.select_session(paused.id, window, cx);
+        assert_eq!(view.strip_session().unwrap().id, started);
+        paused.id
+    });
+    refresh_test_strip(&strip_view, &mut strip);
+    click_test_strip(&strip_view, &mut strip, "strip-primary");
     manager.view.read_with(&manager.cx, |view, _| {
-        assert!(view.active.is_empty());
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == started)
+                .unwrap()
+                .is_paused()
+        );
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == browsed)
+                .unwrap()
+                .is_paused()
+        );
+        assert_eq!(view.strip_session().unwrap().id, started);
+    });
+    strip_control_bounds(&mut strip);
+    click_test_strip(&strip_view, &mut strip, "strip-open");
+    click_test_strip(&strip_view, &mut strip, "strip-finish");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.active.len(), 1);
+        assert_eq!(view.active[0].id, browsed);
+        assert!(view.active[0].is_paused());
         assert_eq!(view.completed.as_ref().unwrap().id, started);
     });
-    let completed_controls = strip_control_bounds(&mut strip);
-    for (actual, expected) in completed_controls.into_iter().zip(idle_controls) {
-        assert_same_bounds(actual, expected);
-    }
-    // Debug bounds retain earlier selectors. Dispatch at the now-empty finish
-    // slot instead of mistaking the old finish bounds for a live button.
-    let feedback = manager.view.read_with(&manager.cx, |view, _| {
-        view.toast.as_ref().map(|(text, _)| text.clone())
-    });
-    strip.simulate_click(completed_controls[1].center(), Modifiers::default());
+    strip_control_bounds(&mut strip);
+    // Viewing the receipt must not resume the other paused timer concealed by
+    // that receipt, even after the finish control has disappeared.
+    click_test_strip(&strip_view, &mut strip, "strip-primary");
     manager.view.read_with(&manager.cx, |view, _| {
-        assert!(view.active.is_empty());
+        assert_eq!(view.active.len(), 1);
+        assert!(view.active[0].is_paused());
         assert_eq!(view.completed.as_ref().unwrap().id, started);
-        assert_eq!(view.toast.as_ref().map(|(text, _)| text.clone()), feedback);
     });
-
+    let long_elapsed = 1_000_000_i64 * 3_600 + 7;
     let long_session = manager.view.update_in(&mut manager.cx, |view, window, cx| {
         let session = view
             .store
             .as_mut()
             .unwrap()
-            .create_and_start_task(title, view.selected_tag, view.now - 100 * 3_600 - 7, None)
+            .create_and_start_task(title, view.selected_tag, view.now - long_elapsed, None)
             .unwrap();
         view.refresh(cx);
         view.select_session(session.id, window, cx);
         session.id
     });
-    strip.update(|window, _| window.refresh());
-    strip.run_until_parked();
-    let long_controls = strip_control_bounds(&mut strip);
-    for (actual, expected) in long_controls.into_iter().zip(idle_controls) {
-        assert_same_bounds(actual, expected);
-    }
-    strip.simulate_click(long_controls[0].center(), Modifiers::default());
+    refresh_test_strip(&strip_view, &mut strip);
+    strip_control_bounds(&mut strip);
+    click_test_strip(&strip_view, &mut strip, "strip-primary");
     manager.view.read_with(&manager.cx, |view, _| {
         let session = view.strip_session().unwrap();
         assert_eq!(session.id, long_session);
         assert!(session.is_paused());
-        assert!(session.elapsed_at(view.now) >= 100 * 3_600 + 7);
+        assert!(session.elapsed_at(view.now) >= long_elapsed);
     });
+    manager.view.update(&mut manager.cx, |view, cx| {
+        view.compact = true;
+        view.storage_failed = true;
+        view.toast = Some((
+            "无法写入本地计时记录，请展开窗口检查磁盘空间，已有记录仍然保留。".to_owned(),
+            std::time::Instant::now(),
+        ));
+        cx.notify();
+    });
+    refresh_test_strip(&strip_view, &mut strip);
+    strip_control_bounds(&mut strip);
     strip.update(|window, _| window.remove_window());
     strip.run_until_parked();
 }
@@ -1092,7 +1399,7 @@ fn headless_ui_browsing_exposes_current_timer_and_switching_preserves_both_tasks
                 );
             });
         }
-        manager.click("new-task");
+        manager.click("global-new-task");
         manager.view.read_with(&manager.cx, |view, _| {
             assert!(view.preparing);
             assert!(
@@ -1108,7 +1415,7 @@ fn headless_ui_browsing_exposes_current_timer_and_switching_preserves_both_tasks
             manager.bounds("focus-operation"),
         );
         manager.click("return-current-timer");
-        manager.click("new-task");
+        manager.click("global-new-task");
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.task_input
                 .update(cx, |input, cx| input.set_value("Next task", window, cx));
@@ -1462,7 +1769,7 @@ fn headless_ui_repeated_new_preserves_draft_before_selection_and_global_rest(
     });
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
-    assert!(manager.cx.debug_bounds("new-task").is_none());
+    manager.bounds("global-new-task");
     manager.click("duration-custom");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.timer_input
@@ -1501,7 +1808,7 @@ fn headless_ui_custom_timer_starts_with_typed_minutes_at_default_and_minimum_siz
 ) {
     for (width, height, minutes) in [(1040., 780., 37), (780., 620., 1), (780., 620., 1_440)] {
         let mut manager = ManagerHarness::new(cx, width, height);
-        assert!(manager.cx.debug_bounds("new-task").is_none());
+        manager.bounds("global-new-task");
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.task_input.update(cx, |input, cx| {
                 input.set_value("Custom duration", window, cx)
@@ -1559,7 +1866,7 @@ fn headless_ui_custom_timer_starts_with_typed_minutes_at_default_and_minimum_siz
                 view.active
             );
         });
-        manager.click("new-task");
+        manager.click("global-new-task");
         manager.view.read_with(&manager.cx, |view, cx| {
             assert!(view.is_new_task_form());
             assert!(view.countdown);
@@ -1722,7 +2029,7 @@ fn headless_ui_saving_a_new_task_preserves_timer_draft_without_starting(cx: &mut
         manager
             .view
             .read_with(&manager.cx, |view, _| assert_eq!(view.tasks.len(), 1));
-        manager.bounds("new-task");
+        manager.bounds("global-new-task");
         if countdown && minutes == "0" {
             manager.bounds("timer-duration-error");
             manager.click("start-focus");
@@ -1899,7 +2206,12 @@ fn headless_ui_cancelling_or_leaving_duration_edit_preserves_the_saved_target(
     manager.cx.run_until_parked();
     manager.bounds("session-duration-input");
     manager.click("cancel-duration");
-    for destination in ["cancel-duration", "task-row-2", "records-tab", "new-task"] {
+    for destination in [
+        "cancel-duration",
+        "task-row-2",
+        "records-tab",
+        "global-new-task",
+    ] {
         manager.click("edit-duration");
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.duration_input
@@ -2272,7 +2584,7 @@ fn headless_ui_removed_task_tag_stays_explicit_and_paused_round_can_resume(
                 assert!(!view.task_has_unsaved_changes(cx));
                 assert!(!view.can_start_task(cx));
             });
-            manager.click("new-task");
+            manager.click("global-new-task");
             assert!(!manager.cx.has_pending_prompt());
         }
     }
@@ -2355,4 +2667,75 @@ fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut Te
         );
     });
     assert_eq!(manager.bounds("tag-row-1").size.height, height);
+}
+
+#[gpui::test]
+fn headless_ui_reversing_cat_disclosure_cancels_old_close_and_ignores_fading_controls(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.task_input.update(cx, |input, cx| {
+            input.set_value("Prepared draft", window, cx)
+        });
+        view.hide_manager(window, cx)
+    });
+    let (view, mut strip) = open_test_strip(&mut manager);
+    click_test_strip(&view, &mut strip, "strip-face");
+    let primary = strip.debug_bounds("strip-primary").unwrap().center();
+    let collapse = strip.debug_bounds("strip-face").unwrap().center();
+    let face = strip.debug_bounds("strip-face").unwrap().center();
+    strip.simulate_click(collapse, Modifiers::default());
+    view.read_with(&strip, |view, _| {
+        assert!(!view.expanded && view.drawer_visible)
+    });
+    strip.simulate_click(primary, Modifiers::default());
+    manager
+        .view
+        .read_with(&manager.cx, |view, _| assert!(view.compact));
+    strip.simulate_click(face, Modifiers::default());
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(200));
+    strip.run_until_parked();
+    refresh_test_strip(&view, &mut strip);
+    view.read_with(&strip, |view, _| {
+        assert!(view.expanded && view.drawer_visible)
+    });
+    click_test_strip(&view, &mut strip, "strip-face");
+    view.read_with(&strip, |view, _| {
+        assert!(!view.expanded && !view.drawer_visible)
+    });
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.active.is_empty() && view.compact)
+    });
+}
+
+#[gpui::test]
+fn headless_ui_update_status_and_download_action_fit_small_settings(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 780., 620.);
+    manager.click("settings-tab");
+    for state in [
+        crate::updates::UpdateState::Current,
+        crate::updates::UpdateState::Failed,
+        crate::updates::UpdateState::Available {
+            version: "100.100.100".into(),
+            download: Some("https://github.com/yuxino/Force/releases/latest".into()),
+        },
+    ] {
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            view.update_state = state;
+            cx.notify();
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        assert_horizontally_inside(
+            manager.bounds("settings-update"),
+            manager.bounds("manager-content"),
+        );
+        assert_horizontally_inside(
+            manager.bounds("settings-update-status"),
+            manager.bounds("manager-content"),
+        );
+    }
 }

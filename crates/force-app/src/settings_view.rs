@@ -1,7 +1,7 @@
 use force_core::TagKind;
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Icon, IconName, Sizable, button::ButtonVariants, scroll::ScrollableElement, switch::Switch,
+    Disableable, Icon, Sizable, button::ButtonVariants, scroll::ScrollableElement, switch::Switch,
     tooltip::Tooltip,
 };
 
@@ -20,8 +20,10 @@ impl ForceView {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(36.))
-            .when_some(self.timer_context(cx), |body, context| body.child(context))
+            .gap(px(24.))
+            .when_some(self.timer_context(cx), |body, context| {
+                body.child(context.pb_0().border_b_0())
+            })
             .child(settings_section(
                 "计时",
                 div()
@@ -47,13 +49,25 @@ impl ForceView {
                                         if !cfg!(any(target_os = "macos", target_os = "windows")) {
                                             "置顶由窗口管理器控制"
                                         } else if self.pinned {
-                                            "计时条置顶已开启"
+                                            "猫钟置顶已开启"
                                         } else {
-                                            "计时条置顶已关闭"
+                                            "猫钟置顶已关闭"
                                         },
                                     )
                                     .child(
-                                        Switch::new("pin-indicator").small().checked(self.pinned),
+                                        Switch::new("pin-indicator")
+                                            .small()
+                                            .checked(self.pinned)
+                                            .disabled(!cfg!(any(
+                                                target_os = "macos",
+                                                target_os = "windows"
+                                            )))
+                                            // Switch stops mouse-down propagation, so its
+                                            // native surface and the outer keyboard button
+                                            // each activate once through their own path.
+                                            .on_click(cx.listener(|this, _: &bool, _, cx| {
+                                                this.toggle_strip_pin(cx);
+                                            })),
                                     )
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                                         if event.click_count() == 1 {
@@ -69,6 +83,7 @@ impl ForceView {
                             .child(setting_label("到时提示音"))
                             .child(
                                 button("completion-sound")
+                                    .debug_selector(|| "settings-sound".into())
                                     .ghost()
                                     .h(px(40.))
                                     .px(px(8.))
@@ -88,7 +103,16 @@ impl ForceView {
                                     .child(
                                         Switch::new("sound-indicator")
                                             .small()
-                                            .checked(self.sound_enabled),
+                                            .checked(self.sound_enabled)
+                                            .disabled(!cfg!(any(
+                                                target_os = "macos",
+                                                target_os = "windows"
+                                            )))
+                                            .on_click(cx.listener(
+                                                |this, enabled: &bool, _, cx| {
+                                                    this.set_sound_enabled(*enabled, cx);
+                                                },
+                                            )),
                                     )
                                     .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
                                         if event.click_count() == 1 {
@@ -329,55 +353,86 @@ impl ForceView {
                             }),
                     ),
             ))
-            .child(settings_section(
-                "本地数据",
-                div()
-                    .min_h(px(56.))
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(
-                        button("data-folder")
-                            .h(px(40.))
-                            .px(px(14.))
-                            .icon(control_icon(IconName::FolderOpen, INK))
-                            .child(control_label("数据文件夹", INK))
-                            .on_click(cx.listener(|this, _, _, cx| cx.reveal_path(&this.data_dir))),
-                    ),
-            ))
             .child(
                 div()
                     .pt(px(20.))
                     .border_t_1()
                     .border_color(rgb(LINE))
                     .flex()
-                    .items_center()
-                    .justify_between()
+                    .flex_col()
+                    .gap(px(8.))
                     .child(
                         div()
+                            .w_full()
                             .flex()
                             .items_center()
-                            .gap(px(10.))
+                            .justify_between()
                             .child(
-                                Icon::default()
-                                    .path("force-logo.svg")
-                                    .size(px(20.))
-                                    .text_color(rgb(INK)),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .child(
+                                        Icon::default()
+                                            .path("force-logo.svg")
+                                            .size(px(20.))
+                                            .text_color(rgb(INK)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(rgb(MUTED))
+                                            .child(format!("Force {}", env!("CARGO_PKG_VERSION"))),
+                                    )
+                                    .child(
+                                        button("check-updates")
+                                            .debug_selector(|| "settings-update".into())
+                                            .ghost()
+                                            .h(px(36.))
+                                            .unavailable(
+                                                self.update_state
+                                                    == crate::updates::UpdateState::Checking,
+                                            )
+                                            .child(control_label(self.update_state.label(), MUTED))
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.update_action(cx)
+                                                }),
+                                            ),
+                                    ),
                             )
                             .child(
                                 div()
-                                    .text_size(px(14.))
-                                    .text_color(rgb(MUTED))
-                                    .child(format!("Force {}", env!("CARGO_PKG_VERSION"))),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        button("data-folder")
+                                            .ghost()
+                                            .h(px(36.))
+                                            .child(control_label("打开数据文件夹", MUTED))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                cx.reveal_path(&this.data_dir)
+                                            })),
+                                    )
+                                    .child(
+                                        button("quit-force")
+                                            .ghost()
+                                            .h(px(36.))
+                                            .child(control_label("退出 Force", MUTED))
+                                            .on_click(cx.listener(|_, _, _, cx| cx.quit())),
+                                    ),
                             ),
                     )
-                    .child(
-                        button("quit-force")
-                            .ghost()
-                            .h(px(36.))
-                            .child(control_label("退出 Force", MUTED))
-                            .on_click(cx.listener(|_, _, _, cx| cx.quit())),
-                    ),
+                    .when_some(self.update_state.message(), |footer, message| {
+                        footer.child(
+                            div()
+                                .debug_selector(|| "settings-update-status".into())
+                                .text_size(px(12.))
+                                .text_color(rgb(MUTED))
+                                .child(message),
+                        )
+                    }),
             )
     }
 }
