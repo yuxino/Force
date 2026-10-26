@@ -93,9 +93,10 @@ below one minute and omit zero minutes after whole hours. Keep necessary labels 
 optional explanations use contextual help. Routine removal icons stay neutral.
 
 Settings have a 160-point section-title column, a 32-point gap and an elastic
-content column, with 36 points between groups. Timing preferences contain clock
+content column, with 24 points between groups. Timing preferences contain clock
 pinning, completion sound and daily goal. Pinning and sound each use a
-keyboard-accessible button around a passive switch indicator. Tags use 44-point
+keyboard-accessible buttons with directly clickable switches. Knob and outer
+button actions must each toggle once. Tags use 44-point
 rows and a list capped at 240 points. The tag input and 添加 / 保存
 stay on one row at the minimum width. New labels are focus tags; existing rest
 labels remain editable. Highlight the row currently being renamed with the
