@@ -751,7 +751,13 @@ fn agenda_ui_popup_editor_stays_bounded_over_a_six_week_month(cx: &mut TestAppCo
         assert_inside(manager.bounds("agenda-editor"), popup);
         assert_inside(manager.bounds("agenda-title-input"), popup);
         assert!(manager.bounds("agenda-title-input").size.width >= px(280.));
-        assert!(manager.bounds("agenda-date-input").size.width <= px(210.));
+        assert_same_bounds(
+            Bounds::new(
+                manager.bounds("agenda-date-input").origin,
+                manager.bounds("agenda-title-input").size,
+            ),
+            manager.bounds("agenda-date-input"),
+        );
         assert_inside(manager.bounds("agenda-save"), popup);
         assert_inside(manager.bounds("agenda-cancel"), popup);
         let collapsed_actions = manager.bounds("agenda-editor-actions");
@@ -857,9 +863,7 @@ fn agenda_ui_outside_click_suspends_and_same_day_summary_keeps_the_draft(cx: &mu
 }
 
 #[gpui::test]
-fn agenda_ui_tag_menu_above_the_popup_selects_outside_without_dismissing_the_editor(
-    cx: &mut TestAppContext,
-) {
+fn agenda_ui_tag_menu_selects_without_dismissing_the_editor(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
     let handle = manager.handle;
     manager.cx.update(|_, cx| {
@@ -884,7 +888,6 @@ fn agenda_ui_tag_menu_above_the_popup_selects_outside_without_dismissing_the_edi
         "09:45",
         "Keep the note too",
     );
-    let popup = manager.bounds("agenda-popover");
     manager.click("focus-tag-picker");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert!(view.agenda.tag_picker.read(cx).is_open());
@@ -892,11 +895,14 @@ fn agenda_ui_tag_menu_above_the_popup_selects_outside_without_dismissing_the_edi
         assert!(view.agenda.popup_open);
     });
     let option = manager.bounds("focus-tag-option-2");
-    let outside_editor = Point::new(option.right() - px(4.), option.center().y);
-    assert!(outside_editor.x > popup.right());
+    let option_point = Point::new(option.right() - px(4.), option.center().y);
+    assert_inside(
+        option,
+        Bounds::new(Point::default(), size(px(780.), px(620.))),
+    );
     manager
         .cx
-        .simulate_click(outside_editor, Modifiers::default());
+        .simulate_click(option_point, Modifiers::default());
     settle(&mut manager);
     assert!(!manager.cx.has_pending_prompt());
     manager.view.read_with(&manager.cx, |view, cx| {
@@ -1174,7 +1180,13 @@ fn agenda_ui_calendar_and_editor_fit_default_and_minimum_windows(cx: &mut TestAp
         assert_inside(popup, viewport);
         assert_inside(editor, popup);
         assert!(popup.size.width >= px(320.) && popup.size.width <= px(380.));
-        assert!(manager.bounds("agenda-date-input").size.width <= px(210.));
+        assert_same_bounds(
+            Bounds::new(
+                manager.bounds("agenda-date-input").origin,
+                manager.bounds("agenda-title-input").size,
+            ),
+            manager.bounds("agenda-date-input"),
+        );
         manager.click("agenda-note-toggle");
         for selector in [
             "agenda-title-input",

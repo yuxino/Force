@@ -103,8 +103,8 @@ impl ForceView {
                     .child(
                         Icon::default()
                             .path("force-wordmark.svg")
-                            .w(px(114.))
-                            .h(px(24.))
+                            .w(px(96.))
+                            .h(px(20.))
                             .text_color(rgb(INK)),
                     )
                     .child(
@@ -141,17 +141,15 @@ impl ForceView {
                     )
                     .child(div().flex_1())
                     .child(
-                        primary_button("global-new-task")
+                        button("global-new-task")
+                            .ghost()
                             .debug_selector(|| "global-new-task".into())
                             .h(px(32.))
                             .px(px(12.))
                             .mr(px(12.))
                             .flex_shrink_0()
-                            .icon(control_icon(
-                                Icon::new(IconName::Plus).size(px(14.)),
-                                0xffffff,
-                            ))
-                            .child(control_label("新任务", 0xffffff))
+                            .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), INK))
+                            .child(control_label("新任务", INK))
                             .tooltip(shortcut("新任务", "N", "N"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.new_task(window, cx);
@@ -304,6 +302,12 @@ impl Render for ForceView {
         self.sync_tag_picker(window, cx);
         self.sync_agenda_tag_picker(window, cx);
         let viewport = window.viewport_size();
+        // Match the two equal task-metadata columns, including the operation's
+        // scrollbar inset. The picker text is shaped to its real trigger width.
+        let task_width = f32::from(viewport.width).min(976.) - 80. - TASK_SIDEBAR_WIDTH - 32. - 4.;
+        self.tag_picker.update(cx, |picker, cx| {
+            picker.set_trigger_width((task_width - 16.) / 2., cx);
+        });
         let compact = viewport.width < px(920.) || viewport.height < px(700.);
         div()
             .id("force-manager")
@@ -432,21 +436,17 @@ pub(crate) trait ControlState {
 
 impl ControlState for Button {
     fn unavailable(self, disabled: bool) -> Self {
-        self.disabled(disabled).when(disabled, |button| {
-            button
-                .bg(rgb(0xe9e9e9))
-                .border_color(rgb(0xd2d2d2))
-                .cursor_default()
-        })
+        self.disabled(disabled)
+            .when(disabled, |button| button.cursor_default())
     }
 }
 
 pub(crate) fn action_icon(name: &str) -> Icon {
     Icon::default().path(format!("force-icons/{name}.svg"))
 }
-fn page_heading(title: &str) -> Div {
+pub(crate) fn page_heading(title: &str) -> Div {
     div()
-        .text_size(px(32.))
+        .text_size(px(28.))
         .line_height(relative(1.2))
         .font_weight(FontWeight::SEMIBOLD)
         .child(title.to_owned())

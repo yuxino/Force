@@ -17,7 +17,9 @@ use crate::{
 impl ForceView {
     pub(crate) fn settings_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
         div()
+            .debug_selector(|| "settings-column".into())
             .w_full()
+            .max_w(px(640.))
             .flex()
             .flex_col()
             .gap(px(24.))
@@ -34,7 +36,7 @@ impl ForceView {
                         settings_row()
                             .border_b_1()
                             .border_color(rgb(LINE))
-                            .child(setting_label("浮窗置顶"))
+                            .child(setting_label("猫钟始终置顶"))
                             .child(
                                 button("pin-strip")
                                     .debug_selector(|| "settings-pin".into())
@@ -80,7 +82,7 @@ impl ForceView {
                         settings_row()
                             .border_b_1()
                             .border_color(rgb(LINE))
-                            .child(setting_label("到时提示音"))
+                            .child(setting_label("倒计时结束时响铃"))
                             .child(
                                 button("completion-sound")
                                     .debug_selector(|| "settings-sound".into())
@@ -123,7 +125,7 @@ impl ForceView {
                     )
                     .child(
                         settings_row()
-                            .child(setting_label("每日计时目标"))
+                            .child(setting_label("每日专注目标"))
                             .child(
                                 div()
                                     .debug_selector(|| "goal-input".into())
@@ -136,9 +138,18 @@ impl ForceView {
                                     .text_size(px(14.))
                                     .text_color(rgb(MUTED))
                                     .child("分钟"),
-                            )
-                            .when(self.goal_has_unsaved_changes(cx), |row| {
-                                row.child(
+                            ),
+                    )
+                    .when(self.goal_has_unsaved_changes(cx), |body| {
+                        body.child(
+                            div()
+                                .debug_selector(|| "goal-actions".into())
+                                .w_full()
+                                .flex()
+                                .justify_end()
+                                .gap(px(8.))
+                                .pb(px(8.))
+                                .child(
                                     button("save-goal")
                                         .debug_selector(|| "save-goal".into())
                                         .h(px(40.))
@@ -167,9 +178,9 @@ impl ForceView {
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.reset_goal_draft(window, cx)
                                         })),
-                                )
-                            }),
-                    )
+                                ),
+                        )
+                    })
                     .when(self.goal_draft(cx).is_none(), |body| {
                         body.child(
                             div()
@@ -234,7 +245,7 @@ impl ForceView {
                                                 Tooltip::new(help_name.clone()).build(window, cx)
                                             }),
                                     )
-                                    .when(tag.kind == TagKind::Rest, |row| {
+                                    .when(tag.kind == TagKind::Rest && tag.name != "休息", |row| {
                                         row.child(
                                             div()
                                                 .w(px(32.))
@@ -410,7 +421,7 @@ impl ForceView {
                                         button("data-folder")
                                             .ghost()
                                             .h(px(36.))
-                                            .child(control_label("打开数据文件夹", MUTED))
+                                            .child(control_label("数据文件夹", MUTED))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 cx.reveal_path(&this.data_dir)
                                             })),
@@ -419,7 +430,7 @@ impl ForceView {
                                         button("quit-force")
                                             .ghost()
                                             .h(px(36.))
-                                            .child(control_label("退出 Force", MUTED))
+                                            .child(control_label("退出应用", MUTED))
                                             .on_click(cx.listener(|_, _, _, cx| cx.quit())),
                                     ),
                             ),
@@ -440,20 +451,14 @@ impl ForceView {
 fn settings_section(title: &'static str, content: impl IntoElement) -> Div {
     div()
         .w_full()
-        .pt(px(16.))
+        .pt(px(20.))
         .border_t_1()
         .border_color(rgb(LINE))
         .flex()
-        .items_start()
-        .gap(px(32.))
-        .child(
-            div()
-                .w(px(160.))
-                .flex_shrink_0()
-                .pt(px(16.))
-                .child(section_heading(title)),
-        )
-        .child(div().flex_1().min_w_0().child(content))
+        .flex_col()
+        .gap(px(8.))
+        .child(section_heading(title))
+        .child(div().w_full().min_w_0().child(content))
 }
 
 fn settings_row() -> Div {

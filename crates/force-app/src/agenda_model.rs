@@ -86,7 +86,7 @@ pub(crate) struct AgendaState {
 
 impl AgendaState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<ForceView>) -> Self {
-        let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("这段时间做什么？"));
+        let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("输入安排名称"));
         let date_input = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
         let start_input = cx.new(|cx| InputState::new(window, cx).placeholder("09:00"));
         let end_input = cx.new(|cx| InputState::new(window, cx).placeholder("10:00"));
@@ -97,7 +97,7 @@ impl AgendaState {
         });
         let tag_picker = cx.new(|cx| {
             let mut picker = TagPicker::new(cx);
-            picker.set_trigger_width(128., cx);
+            picker.set_trigger_width(322., cx);
             picker
         });
         let mut subscriptions = Vec::new();

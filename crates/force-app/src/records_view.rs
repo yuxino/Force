@@ -42,7 +42,7 @@ impl ForceView {
                     .debug_selector(|| "record-date-label".into())
                     .text_size(px(16.))
                     .font_weight(FontWeight::MEDIUM)
-                    .child(self.record_date.format("%Y 年 %m 月 %d 日").to_string()),
+                    .child(self.record_date.format("%Y年%-m月%-d日").to_string()),
             )
             .child(
                 button("next-day")
@@ -118,12 +118,12 @@ impl ForceView {
                             .gap(px(8.))
                             .child(
                                 div().debug_selector(|| "record-total".into())
-                                    .font(timer_font(cx)).text_size(px(32.))
+                                    .font(timer_font(cx)).text_size(px(24.))
                                     .line_height(relative(1.2)).font_weight(FontWeight::MEDIUM)
                                     .text_align(TextAlign::Right)
                                     .child(short_time(self.record_stats.focus_seconds).replace(' ', "")),
                             )
-                            .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child("计时"))
+                            .child(div().text_size(px(13.)).text_color(rgb(MUTED)).child("专注时长"))
                             .child(
                                 choice_button("record-help", self.record_help_open, SURFACE, cx)
                                     .size(px(24.))
@@ -171,7 +171,7 @@ impl ForceView {
                         div().debug_selector(|| "record-empty-state".into()).py(px(32.))
                             .flex().items_center().gap(px(12.))
                             .text_size(px(14.)).text_color(rgb(MUTED))
-                            .child(if query.is_empty() { "暂无记录" } else { "没有匹配的记录" })
+                            .child(if query.is_empty() { "当天没有计时记录" } else { "没有匹配的记录" })
                             .when(!query.is_empty(), |row| row.child(
                                 button("clear-empty-record-search")
                                     .debug_selector(|| "clear-empty-record-search".into())

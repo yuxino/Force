@@ -8,13 +8,13 @@ use crate::{
     label::single_line,
     model::{ForceView, day_bounds},
     view::{
-        ControlState, DESTRUCTIVE, INK, LINE, MUTED, PAPER, button, control_icon, control_label,
-        field, field_label, primary_button, short_time,
+        ControlState, DESTRUCTIVE, INK, LINE, MUTED, button, control_icon, control_label, field,
+        field_label, primary_button, short_time,
     },
 };
 
 const POPUP_WIDTH: f32 = 360.;
-const TAG_WIDTH: f32 = 128.;
+const TAG_WIDTH: f32 = POPUP_WIDTH - 38.;
 
 impl ForceView {
     pub(crate) fn agenda_popover(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -58,10 +58,10 @@ impl ForceView {
             if self.agenda.edit_id.is_some() {
                 "修改安排".to_owned()
             } else {
-                "添加安排".to_owned()
+                "新安排".to_owned()
             }
         } else {
-            self.agenda.date.format("%-m 月 %-d 日").to_string()
+            self.agenda.date.format("%-m月%-d日").to_string()
         };
         let body_limit = (max_height - 142.).max(100.);
         let popup = div()
@@ -72,8 +72,8 @@ impl ForceView {
             .p(px(18.))
             .rounded(px(9.))
             .border_1()
-            .border_color(rgb(LINE))
-            .bg(rgb(PAPER))
+            .border_color(rgb(0xd4d4d4))
+            .bg(rgb(0xffffff))
             .occlude()
             .flex()
             .flex_col()
@@ -158,7 +158,7 @@ impl ForceView {
                                     .debug_selector(|| "agenda-popover-timeline".into())
                                     .ghost()
                                     .h(px(34.))
-                                    .child(control_label("查看当天时间轴", MUTED))
+                                    .child(control_label("展开时间轴", MUTED))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_agenda_timeline(window, cx)
                                     })),
@@ -167,7 +167,7 @@ impl ForceView {
                                 button("agenda-popover-day")
                                     .ghost()
                                     .h(px(34.))
-                                    .child(control_label("返回当天", INK))
+                                    .child(control_label("当天概览", INK))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_agenda_day(this.agenda.date, window, cx)
                                     }))
@@ -212,59 +212,54 @@ impl ForceView {
             .flex()
             .flex_col()
             .gap(px(12.))
-            .child(editor_field("做什么").child(
+            .child(editor_field("安排名称").child(
                 div().debug_selector(|| "agenda-title-input".into()).child(
                     field(&self.agenda.title_input).disabled(self.agenda.draft_task.is_some()),
                 ),
             ))
             .child(
-                div()
-                    .flex()
-                    .gap(px(12.))
-                    .child(
-                        editor_field("日期").flex_1().min_w_0().child(
-                            div()
-                                .debug_selector(|| "agenda-date-input".into())
-                                .child(field(&self.agenda.date_input)),
-                        ),
-                    )
-                    .child(editor_field("标签").w(px(TAG_WIDTH)).flex_shrink_0().child(
-                        if let Some(task) = linked_task {
-                            div()
-                                .h(px(40.))
-                                .w_full()
-                                .flex()
-                                .items_center()
-                                .child(single_line(task.tag_name.clone(), 14.).w(px(TAG_WIDTH)))
-                                .into_any_element()
-                        } else {
-                            div()
-                                .w(px(TAG_WIDTH))
-                                .h(px(40.))
-                                .child(self.agenda.tag_picker.clone())
-                                .into_any_element()
-                        },
-                    )),
+                editor_field("日期").child(
+                    div()
+                        .debug_selector(|| "agenda-date-input".into())
+                        .child(field(&self.agenda.date_input)),
+                ),
             )
             .child(
                 div()
                     .flex()
                     .gap(px(12.))
                     .child(
-                        editor_field("开始").flex_1().min_w_0().child(
+                        editor_field("开始时间").flex_1().min_w_0().child(
                             div()
                                 .debug_selector(|| "agenda-start-input".into())
                                 .child(field(&self.agenda.start_input)),
                         ),
                     )
                     .child(
-                        editor_field("结束").flex_1().min_w_0().child(
+                        editor_field("结束时间").flex_1().min_w_0().child(
                             div()
                                 .debug_selector(|| "agenda-end-input".into())
                                 .child(field(&self.agenda.end_input)),
                         ),
                     ),
             )
+            .child(editor_field("标签").w(px(TAG_WIDTH)).flex_shrink_0().child(
+                if let Some(task) = linked_task {
+                    div()
+                        .h(px(40.))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .child(single_line(task.tag_name.clone(), 14.).w(px(TAG_WIDTH)))
+                        .into_any_element()
+                } else {
+                    div()
+                        .w(px(TAG_WIDTH))
+                        .h(px(40.))
+                        .child(self.agenda.tag_picker.clone())
+                        .into_any_element()
+                },
+            ))
             .child(
                 button("agenda-note-toggle")
                     .debug_selector(|| "agenda-note-toggle".into())

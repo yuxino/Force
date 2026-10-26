@@ -44,17 +44,19 @@ Use spacing between columns without a full-height dividing line.
 - Setup, running and completion replace only the left operation area. Its
   content fills the left column and keeps the same left edge and width in all
   three states, aligned with the heading above. Setup keeps
-  task name and tag together, then a separate round setup. Use compact
+  task name first, then equal-width tag and timing-mode fields on one row.
+  The round duration sits below them, and a separated footer groups Start and Save. Use compact
   倒计时 / 正计时 choices; countdown always exposes one editable minute field
   with 25/45/60 shortcuts beside it. Mode switches retain that input. New task
-  drafts offer 保存任务 beside 开始专注; saving creates no timer. Keep compact
+  drafts offer 保存任务 beside 开始计时; saving creates no timer. Keep compact
   primary actions rather than stretching them across the column. Running uses a
   left-aligned tabular timer up to 104 points (80 in
   compact windows), fitted to the final column width without losing hours, visible 暂停 / 继续 and
-  结束计时 actions, and a secondary rest action. Countdown uses a restrained
+  结束计时 actions, and a secondary rest action in the same row. Completion also keeps all round
+  and task actions visible in one row at minimum width. Countdown uses a restrained
   scale based on elapsed/target time; an early finish keeps its actual fraction,
   and unlimited sessions show no invented target. Rest has only a primary
-  继续专注 / 结束休息 action and secondary pause/resume. Returning to focus ends
+  继续任务 / 结束休息 action and secondary pause/resume. Returning to focus ends
   paused rest as well, atomically; global rest follows the running task, while
   a task-local rest follows the viewed task. Completion shows a compact
   receipt and next actions without removing task navigation or daily progress.
@@ -85,15 +87,18 @@ Use spacing between columns without a full-height dividing line.
 
 Use the system font, soft white surfaces and neutral black/gray hierarchy. The
 68-point header aligns the geometric wordmark, two destinations and settings
-with the content grid. Today uses a 16-point heading, 13-point date, 22-point
+with the content grid. The global 新任务 action is quiet; primary emphasis belongs
+to the current task action. Date navigation sits beside its date. Tag menus match
+their triggers, and open menus have no redundant trigger tooltip. Today uses a 16-point heading, 13-point date, 22-point
 accumulated time and a full-width two-point goal line. Task headings are 28 points;
-records/settings use 32-point page headings. Section headings are 16 points, body
+setup, calendar, records and settings use 28-point page headings. Section headings are 16 points, body
 and control labels 14 points, and secondary metadata 13 points. Compact task/summary durations show seconds
 below one minute and omit zero minutes after whole hours. Keep necessary labels and errors visible;
 optional explanations use contextual help. Routine removal icons stay neutral.
 
-Settings have a 160-point section-title column, a 32-point gap and an elastic
-content column, with 24 points between groups. Timing preferences contain clock
+Settings use a readable column of at most 640 points, aligned to the main
+content left edge. Stack section titles above their rows, with 24 points between
+groups. Keep labels and their controls on the same row. Timing preferences contain clock
 pinning, completion sound and daily goal. Pinning and sound each use a
 keyboard-accessible buttons with directly clickable switches. Knob and outer
 button actions must each toggle once. Tags use 44-point
@@ -105,13 +110,15 @@ targets protects changed text with Save, Discard or Cancel. Adding a label must
 not change a saved task's label selection, including an archived label. Compare
 tag edits with their original input so external renames do not become apparent
 user changes or get overwritten by an untouched field. Daily-goal 保存 / 撤销
-appear only while changed. Local data exposes the folder; export is owned by
+appear below the goal row only while changed, so typing never moves the input.
+Local data exposes the folder; export is owned by
 records.
 
 Single-line inputs and settings controls are 40 points high; main start and
 running actions are 44 points. Set input styled height explicitly because
 `Input::h` affects multiline editors only. Reuse field, button and semantic-color
-helpers. Current choices retain neutral hover, pressed and focus feedback.
+helpers. Current choices retain neutral hover, pressed and focus feedback. Month cells use
+a subtle neutral hover and no duplicate day-content tooltip over the day popup.
 Do not clip focus rings when truncating labels. Toggle double-clicks must not
 undo the first click.
 
