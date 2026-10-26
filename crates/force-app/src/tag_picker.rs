@@ -126,13 +126,14 @@ impl TagPicker {
         let options = self.options.clone();
         let selected = self.selected;
         let picker = cx.entity().downgrade();
+        let menu_width = self.trigger_width;
         let max_height = (f32::from(window.bounds().size.height) - 16.).clamp(32., 240.);
         let menu = PopupMenu::build(window, cx, move |mut menu, _, _| {
             menu = menu
                 .action_context(menu_return_focus)
                 .scrollable(true)
-                .min_w(px(WIDTH - 2.))
-                .max_w(px(WIDTH - 2.))
+                .min_w(px(menu_width - 2.))
+                .max_w(px(menu_width - 2.))
                 .max_h(px(max_height));
             for option in options {
                 let id = option.id;
@@ -144,7 +145,7 @@ impl TagPicker {
                         single_line(name.clone(), 14.)
                             .id(("focus-tag-option", id as u64))
                             .debug_selector(move || format!("focus-tag-option-{id}"))
-                            .w(px(174.))
+                            .w(px(menu_width - 46.))
                             .text_color(rgb(INK))
                             .tooltip(move |window, cx| Tooltip::new(help.clone()).build(window, cx))
                     })
@@ -203,7 +204,6 @@ impl Render for TagPicker {
             .find(|option| Some(option.id) == self.selected)
             .map_or("选择标签", |option| option.name.as_str())
             .to_owned();
-        let help = title.clone();
         let view = cx.entity();
         div()
             .id("focus-tag-picker")
@@ -235,7 +235,6 @@ impl Render for TagPicker {
                     .when(!self.enabled, |button| {
                         button.bg(rgb(0xe9e9e9)).cursor_default()
                     })
-                    .tooltip(help)
                     .child(
                         single_line(title, 14.)
                             .w(px(self.trigger_width - 48.))

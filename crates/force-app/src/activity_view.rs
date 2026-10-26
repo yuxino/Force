@@ -55,7 +55,7 @@ impl ForceView {
                                 .map(|(week_index, week)| {
                                     let month = week
                                         .iter()
-                                        .find(|day| day.date.day() == 1)
+                                        .find(|day| day.date.day() == 1 && day.date <= today)
                                         .map(|day| day.date.month());
                                     div().flex_1().min_w_0().relative().when_some(
                                         month,

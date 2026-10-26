@@ -1,7 +1,10 @@
 use chrono::{Datelike, Days, Local, NaiveDate, TimeZone, Timelike};
 use force_core::{PlanEntry, TagKind};
 use gpui::{prelude::*, *};
-use gpui_component::{Icon, IconName, button::ButtonVariants};
+use gpui_component::{
+    Icon, IconName,
+    button::{ButtonCustomVariant, ButtonVariants},
+};
 
 use crate::{
     label::single_line,
@@ -194,32 +197,7 @@ impl ForceView {
                                 )
                             }),
                     );
-                let mut help = date.format("%Y年%-m月%-d日").to_string();
-                if invested > 0 {
-                    help.push_str(&format!("\n任务投入 {}", short_time(invested)));
-                }
                 for (index, item) in items.iter().enumerate() {
-                    let detail = if item.moved {
-                        "已改期".to_owned()
-                    } else if item.planned {
-                        if item.completed {
-                            "安排已完成".to_owned()
-                        } else {
-                            "待做安排".to_owned()
-                        }
-                    } else if item.seconds > 0 {
-                        format!(
-                            "{}{}{}",
-                            if item.rest { "休息 · " } else { "" },
-                            short_time(item.seconds),
-                            if item.completed { " · 完成" } else { "" }
-                        )
-                    } else if item.completed {
-                        "已完成".to_owned()
-                    } else {
-                        "已开始".to_owned()
-                    };
-                    help.push_str(&format!("\n{} · {detail}", item.title));
                     if index < item_limit {
                         content = content.child(
                             div()
@@ -241,7 +219,7 @@ impl ForceView {
                                                 "↗ "
                                             } else if item.planned {
                                                 if item.completed { "✓ " } else { "待 · " }
-                                            } else if item.rest {
+                                            } else if item.rest && item.title != "休息" {
                                                 "休息 · "
                                             } else if item.completed {
                                                 "✓ "
@@ -287,12 +265,18 @@ impl ForceView {
                         .child(
                             button(SharedString::from(format!("agenda-month-day-{date}")))
                                 .debug_selector(move || format!("agenda-month-day-{date}"))
-                                .ghost()
+                                .custom(
+                                    ButtonCustomVariant::new(cx)
+                                        .color(rgb(0xfafafa).into())
+                                        .foreground(rgb(INK).into())
+                                        .border(transparent_black())
+                                        .hover(rgb(0xf0f0f0).into())
+                                        .active(rgb(0xe9e9e9).into()),
+                                )
                                 .size_full()
                                 .p_0()
                                 .rounded(px(0.))
                                 .overflow_hidden()
-                                .tooltip(help)
                                 .child(content)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.open_agenda_day(date, window, cx);
@@ -326,23 +310,12 @@ impl ForceView {
                     .gap(px(8.))
                     .child(
                         div()
-                            .flex_1()
+                            .flex_shrink_0()
+                            .mr(px(12.))
                             .text_size(px(28.))
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(month.format("%Y 年 %-m 月").to_string()),
+                            .child(month.format("%Y年%-m月").to_string()),
                     )
-                    .when(self.agenda_has_suspended_draft(cx), |header| {
-                        header.child(
-                            button("agenda-resume-draft")
-                                .debug_selector(|| "agenda-resume-draft".into())
-                                .ghost()
-                                .h(px(32.))
-                                .child(control_label("继续草稿", MUTED))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.resume_agenda_draft(window, cx);
-                                })),
-                        )
-                    })
                     .child(
                         button("agenda-overview-previous")
                             .debug_selector(|| "agenda-overview-previous".into())
@@ -378,6 +351,19 @@ impl ForceView {
                                 this.refresh_agenda(cx);
                             })),
                     )
+                    .child(div().flex_1())
+                    .when(self.agenda_has_suspended_draft(cx), |header| {
+                        header.child(
+                            button("agenda-resume-draft")
+                                .debug_selector(|| "agenda-resume-draft".into())
+                                .ghost()
+                                .h(px(32.))
+                                .child(control_label("继续草稿", MUTED))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.resume_agenda_draft(window, cx);
+                                })),
+                        )
+                    })
                     .when_some(self.strip_session(), |header, session| {
                         let id = session.id;
                         header.child(
@@ -568,7 +554,7 @@ impl ForceView {
                                 this.change_agenda_month(-1, window, cx)
                             })),
                     )
-                    .child(section_heading(&month.format("%Y 年 %-m 月").to_string()))
+                    .child(section_heading(&month.format("%Y年%-m月").to_string()))
                     .child(
                         button("agenda-month-next")
                             .debug_selector(|| "agenda-month-next".into())
@@ -773,6 +759,7 @@ impl ForceView {
                     button("agenda-next-plan")
                         .debug_selector(|| "agenda-next-plan".into())
                         .ghost()
+                        .overflow_hidden()
                         .w_full()
                         .h(px(70.))
                         .px(px(2.))
@@ -795,7 +782,8 @@ impl ForceView {
                                     ),
                                 ))
                                 .child(
-                                    single_line(plan.title.clone(), 16.)
+                                    single_line(plan.title.clone(), 14.)
+                                        .debug_selector(|| "agenda-next-plan-title".into())
                                         .w(px(MONTH_WIDTH - 8.))
                                         .font_weight(FontWeight::MEDIUM),
                                 ),
@@ -827,7 +815,7 @@ impl ForceView {
                                 format!("已完成 {done} / {planned}")
                             })
                             .child(format!(
-                                "计时 {}",
+                                "专注 {}",
                                 short_time(self.agenda.stats.focus_seconds)
                             )),
                     )
@@ -867,21 +855,21 @@ impl ForceView {
                             .ghost()
                             .h(px(32.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
-                            .child(control_label("返回月历", INK))
+                            .child(control_label("月历", INK))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.navigate(Page::Agenda, window, cx);
                             })),
                     )
                     .child(
                         div()
-                            .flex_1()
-                            .min_w_0()
+                            .flex_shrink_0()
+                            .mr(px(8.))
                             .text_size(px(28.))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child(if today {
                                 "今天".to_owned()
                             } else {
-                                date.format("%-m 月 %-d 日").to_string()
+                                date.format("%-m月%-d日").to_string()
                             }),
                     )
                     .child(
@@ -910,6 +898,7 @@ impl ForceView {
                                 }
                             })),
                     )
+                    .child(div().flex_1())
                     .child(
                         button("agenda-add")
                             .debug_selector(|| "agenda-add".into())
@@ -942,7 +931,7 @@ impl ForceView {
                     .text_color(rgb(MUTED))
                     .child(format!(
                         "{}  {}",
-                        date.format("%Y 年 %-m 月 %-d 日"),
+                        date.format("%Y年%-m月%-d日"),
                         [
                             "星期一",
                             "星期二",
@@ -954,7 +943,7 @@ impl ForceView {
                         ][date.weekday().num_days_from_monday() as usize]
                     ))
                     .child(format!(
-                        "{} 项安排 · 计时 {}",
+                        "{} 项安排 · 专注 {}",
                         self.agenda
                             .plans
                             .iter()
@@ -1289,7 +1278,7 @@ impl ForceView {
                     .min(1440.);
                 blocks.push(CalendarBlock {
                     target: CalendarTarget::Record(session.id),
-                    title: if session.tag_kind == TagKind::Rest {
+                    title: if session.tag_kind == TagKind::Rest && session.title != "休息" {
                         format!("休息 · {}", session.title)
                     } else {
                         session.title.clone()

@@ -203,12 +203,14 @@ fn headless_ui_manager_layout_is_bounded_at_default_and_minimum_size(cx: &mut Te
         assert!(manager.page() == Page::Settings);
         assert!(manager.cx.debug_bounds("save-goal").is_none());
         assert!(manager.cx.debug_bounds("tag-kind-rest").is_none());
+        let goal_before_edit = manager.bounds("goal-input");
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.goal_input
                 .update(cx, |input, cx| input.set_value("90", window, cx));
         });
         manager.cx.update(|window, _| window.refresh());
         manager.cx.run_until_parked();
+        assert_same_bounds(manager.bounds("goal-input"), goal_before_edit);
         let content = manager.bounds("manager-content");
         assert_horizontally_inside(manager.bounds("save-goal"), content);
         assert_horizontally_inside(manager.bounds("reset-goal"), content);
@@ -1712,6 +1714,28 @@ fn headless_ui_new_draft_is_saved_without_starting_before_global_rest(cx: &mut T
                 .all(|s| s.tag_kind == force_core::TagKind::Rest)
         );
     });
+}
+
+#[gpui::test]
+fn headless_ui_completed_round_actions_are_visible_at_minimum_size(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 780., 620.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.task_input.update(cx, |input, cx| {
+            input.set_value("Completed round", window, cx)
+        });
+        view.start(window, cx);
+        let id = view.active[0].id;
+        view.finish(id, cx);
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    let operation = manager.bounds("focus-operation");
+    for selector in ["continue-task", "rest-five", "complete-task"] {
+        let action = manager.bounds(selector);
+        assert_horizontally_inside(action, operation);
+        assert!(action.top() >= operation.top());
+        assert!(action.bottom() <= operation.bottom());
+    }
 }
 
 #[gpui::test]

@@ -9,7 +9,7 @@ use crate::{
     view::{
         ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, TASK_SIDEBAR_WIDTH, TASK_TEXT_WIDTH,
         action_icon, button, choice_button, clock, control_icon, control_label, field, field_label,
-        primary_button, section_heading, short_time, task_heading, timer_font, underline_button,
+        page_heading, primary_button, section_heading, short_time, task_heading, timer_font,
     },
 };
 
@@ -19,7 +19,7 @@ impl ForceView {
             (self.today.focus_seconds as f32 / (self.goal.max(1) as f32 * 60.)).clamp(0., 1.);
         let total = short_time(self.today.focus_seconds);
         let goal = short_time(i64::from(self.goal) * 60);
-        let summary = format!("今日计时 {total}，每日目标 {goal}");
+        let summary = format!("今日专注 {total}，每日目标 {goal}");
         div()
             .debug_selector(|| "focus-summary".into())
             .flex_shrink_0()
@@ -40,12 +40,12 @@ impl ForceView {
                             .flex()
                             .items_baseline()
                             .gap(px(12.))
-                            .child(section_heading("今日计时"))
+                            .child(section_heading("今日专注"))
                             .child(
                                 div()
                                     .text_size(px(13.))
                                     .text_color(rgb(MUTED))
-                                    .child(Local::now().format("%m 月 %d 日").to_string()),
+                                    .child(Local::now().format("%-m月%-d日").to_string()),
                             ),
                     )
                     .child(
@@ -184,12 +184,6 @@ impl ForceView {
             .collect();
         let no_focus_tags = tags.is_empty();
         let disabled = !self.can_start_task(cx);
-        let selected = self.selected_tag;
-        let tag_name = tags
-            .iter()
-            .find(|tag| tag.id == selected)
-            .map_or("选择标签", |tag| tag.name.as_str())
-            .to_owned();
         div()
             .debug_selector(|| "focus-form".into())
             .w_full()
@@ -203,14 +197,14 @@ impl ForceView {
                     .gap_2()
                     .child(
                         div()
-                            .h(px(32.))
+                            .h(px(36.))
                             .flex()
                             .items_center()
                             .justify_between()
-                            .child(section_heading(if self.selected_task.is_some() {
-                                "任务名称"
+                            .child(page_heading(if self.selected_task.is_some() {
+                                "任务详情"
                             } else {
-                                "新建任务"
+                                "新任务"
                             }))
                             .when(self.task_has_unsaved_changes(cx), |row| {
                                 row.child(
@@ -240,11 +234,7 @@ impl ForceView {
                                 )
                             }),
                     )
-                    .child(
-                        gpui::Styled::h(field(&self.task_input), px(44.))
-                            .text_size(px(20.))
-                            .line_height(px(26.)),
-                    )
+                    .child(field(&self.task_input).text_size(px(16.)))
                     .when_some(self.task_title_error(cx), |form, message| {
                         form.child(
                             div()
@@ -257,61 +247,61 @@ impl ForceView {
             )
             .child(
                 div()
+                    .w_full()
                     .flex()
-                    .flex_col()
-                    .gap_2()
-                    .child(field_label("标签"))
-                    .when(no_focus_tags, |row| {
-                        row.child(
-                            button("add-focus-tag")
-                                .debug_selector(|| "add-focus-tag".into())
-                                .small()
-                                .h(px(40.))
-                                .icon(control_icon(IconName::Plus, INK))
-                                .child(control_label("添加计时标签", INK))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_tag_settings(window, cx)
-                                })),
-                        )
-                    })
-                    .when(!no_focus_tags, |row| {
-                        row.child(
-                            div()
-                                .id("task-tag-picker")
-                                .w(px(220.))
-                                .h(px(40.))
-                                .tooltip(move |window, cx| {
-                                    Tooltip::new(tag_name.clone()).build(window, cx)
-                                })
-                                .child(self.tag_picker.clone()),
-                        )
-                    })
-                    .when_some(self.task_tag_error(), |form, message| {
-                        form.child(
-                            div()
-                                .debug_selector(|| "task-tag-error".into())
-                                .text_size(px(14.))
-                                .text_color(rgb(DESTRUCTIVE))
-                                .child(message),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "timer-setup".into())
-                    .pt(px(16.))
-                    .border_t_1()
-                    .border_color(rgb(LINE))
-                    .flex()
-                    .flex_col()
+                    .items_start()
                     .gap(px(16.))
                     .child(
                         div()
+                            .debug_selector(|| "task-tag-field".into())
+                            .flex_1()
+                            .min_w_0()
                             .flex()
-                            .items_center()
-                            .gap(px(16.))
+                            .flex_col()
+                            .gap_2()
+                            .child(field_label("标签"))
+                            .when(no_focus_tags, |row| {
+                                row.child(
+                                    button("add-focus-tag")
+                                        .debug_selector(|| "add-focus-tag".into())
+                                        .small()
+                                        .h(px(40.))
+                                        .icon(control_icon(IconName::Plus, INK))
+                                        .child(control_label("添加计时标签", INK))
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.open_tag_settings(window, cx)
+                                        })),
+                                )
+                            })
+                            .when(!no_focus_tags, |row| {
+                                row.child(
+                                    div()
+                                        .id("task-tag-picker")
+                                        .w_full()
+                                        .h(px(40.))
+                                        .child(self.tag_picker.clone()),
+                                )
+                            })
+                            .when_some(self.task_tag_error(), |form, message| {
+                                form.child(
+                                    div()
+                                        .debug_selector(|| "task-tag-error".into())
+                                        .text_size(px(14.))
+                                        .text_color(rgb(DESTRUCTIVE))
+                                        .child(message),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "task-mode-field".into())
+                            .flex_1()
+                            .min_w_0()
+                            .flex()
+                            .flex_col()
+                            .gap(px(8.))
                             .child(field_label("计时方式"))
-                            .child(div().flex().gap(px(4.)).children(
+                            .child(div().w_full().flex().gap(px(4.)).children(
                                 [(true, "倒计时"), (false, "正计时")].into_iter().map(
                                     |(countdown, label)| {
                                         let selected = self.countdown == countdown;
@@ -332,8 +322,9 @@ impl ForceView {
                                                 "duration-0".into()
                                             }
                                         })
-                                        .h(px(36.))
-                                        .px(px(16.))
+                                        .h(px(40.))
+                                        .flex_1()
+                                        .px(px(8.))
                                         .tooltip(if countdown {
                                             "设定时长，到时自动结束"
                                         } else {
@@ -355,7 +346,15 @@ impl ForceView {
                                     },
                                 ),
                             )),
-                    )
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "timer-setup".into())
+                    .flex()
+                    .flex_col()
+                    .gap(px(8.))
+                    .child(field_label("本轮时长"))
                     .child(
                         div()
                             .h(px(44.))
@@ -368,10 +367,7 @@ impl ForceView {
                                         .debug_selector(|| "duration-input".into())
                                         .w(px(88.))
                                         .flex_shrink_0()
-                                        .child(
-                                            gpui::Styled::h(field(&self.timer_input), px(44.))
-                                                .text_size(px(20.)),
-                                        ),
+                                        .child(field(&self.timer_input).text_size(px(16.))),
                                 )
                                 .child(control_label("分钟", MUTED))
                                 .child(div().w(px(8.)).flex_shrink_0())
@@ -385,14 +381,14 @@ impl ForceView {
                                             .parse::<u32>()
                                             .ok()
                                             == Some(minutes);
-                                        underline_button(
+                                        choice_button(
                                             ("duration", minutes as u64),
                                             selected,
-                                            true,
+                                            SURFACE,
                                             cx,
                                         )
                                         .debug_selector(move || format!("duration-{minutes}"))
-                                        .h(px(36.))
+                                        .h(px(32.))
                                         .w(px(44.))
                                         .px(px(4.))
                                         .tooltip(format!("倒计时 {minutes} 分钟"))
@@ -428,6 +424,9 @@ impl ForceView {
             .child(
                 div()
                     .debug_selector(|| "prepare-actions".into())
+                    .pt(px(16.))
+                    .border_t_1()
+                    .border_color(rgb(LINE))
                     .flex()
                     .items_center()
                     .gap(px(12.))
@@ -779,7 +778,6 @@ impl ForceView {
                         div()
                             .flex()
                             .items_center()
-                            .justify_between()
                             .gap(px(8.))
                             .text_size(px(13.))
                             .text_color(rgb(MUTED))
@@ -832,7 +830,7 @@ impl ForceView {
                                 .h(px(44.))
                                 .child(control_label(
                                     if self.return_focus_task().is_some() {
-                                        "继续计时"
+                                        "继续任务"
                                     } else {
                                         "结束休息"
                                     },
@@ -890,20 +888,22 @@ impl ForceView {
                                     cx.listener(move |this, _, _, cx| this.finish(id, cx))
                                 }),
                         )
+                    })
+                    .when(!rest, |row| {
+                        row.child(
+                            button("running-rest")
+                                .debug_selector(|| "running-rest".into())
+                                .w(px(124.))
+                                .ghost()
+                                .h(px(44.))
+                                .px(px(12.))
+                                .child(control_label("休息 5 分钟", MUTED))
+                                .on_click(
+                                    cx.listener(|this, _, window, cx| this.start_break(window, cx)),
+                                ),
+                        )
                     }),
             )
-            .when(!rest, |body| {
-                body.child(
-                    button("running-rest")
-                        .debug_selector(|| "running-rest".into())
-                        .w(px(124.))
-                        .ghost()
-                        .h(px(36.))
-                        .px(px(12.))
-                        .child(control_label("休息 5 分钟", MUTED))
-                        .on_click(cx.listener(|this, _, window, cx| this.start_break(window, cx))),
-                )
-            })
     }
 
     fn session_duration_control(&self, session: &Session, cx: &mut Context<Self>) -> Div {
@@ -987,7 +987,11 @@ impl ForceView {
                             .gap(px(6.))
                             .text_color(rgb(MUTED))
                             .child(Icon::new(IconName::Check).size(px(14.)))
-                            .child(field_label(if rest { "休息结束" } else { "已保存" })),
+                            .child(field_label(if rest {
+                                "休息结束"
+                            } else {
+                                "本轮已结束"
+                            })),
                     )
                     .child(task_heading(&session.title))
                     .when(session.tag_name != session.title, |body| {
@@ -1014,7 +1018,7 @@ impl ForceView {
                     .child(field_label(if rest {
                         "休息时长"
                     } else {
-                        "计时时长"
+                        "本轮时长"
                     })),
             )
             .when_some(
@@ -1034,12 +1038,12 @@ impl ForceView {
                             .child(control_label(
                                 if rest {
                                     if return_task.is_some() {
-                                        "继续计时"
+                                        "继续任务"
                                     } else {
                                         "新建任务"
                                     }
                                 } else {
-                                    "再计一次"
+                                    "再开始一轮"
                                 },
                                 0xffffff,
                             ))
@@ -1072,22 +1076,22 @@ impl ForceView {
                                     cx.listener(|this, _, window, cx| this.start_break(window, cx)),
                                 ),
                         )
+                    })
+                    .when(!rest && session.task_id.is_some(), |row| {
+                        row.child(
+                            button("complete-task")
+                                .debug_selector(|| "complete-task".into())
+                                .w(px(112.))
+                                .ghost()
+                                .h(px(44.))
+                                .child(control_label("完成任务", MUTED))
+                                .tooltip("从任务列表移出，保留全部计时记录")
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.complete_current_task(window, cx)
+                                })),
+                        )
                     }),
             )
-            .when(!rest && session.task_id.is_some(), |body| {
-                body.child(
-                    button("complete-task")
-                        .debug_selector(|| "complete-task".into())
-                        .w(px(112.))
-                        .ghost()
-                        .h(px(36.))
-                        .child(control_label("完成任务", MUTED))
-                        .tooltip("从任务列表移出，保留全部计时记录")
-                        .on_click(cx.listener(|this, _, window, cx| {
-                            this.complete_current_task(window, cx)
-                        })),
-                )
-            })
     }
 }
 
