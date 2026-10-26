@@ -20,8 +20,10 @@ impl ForceView {
             .w_full()
             .flex()
             .flex_col()
-            .gap(px(36.))
-            .when_some(self.timer_context(cx), |body, context| body.child(context))
+            .gap(px(24.))
+            .when_some(self.timer_context(cx), |body, context| {
+                body.child(context.pb_0().border_b_0())
+            })
             .child(settings_section(
                 "计时",
                 div()
