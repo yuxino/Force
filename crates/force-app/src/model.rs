@@ -89,6 +89,7 @@ pub(crate) struct ForceView {
     tag_edit_original: Option<String>,
     pub(crate) toast: Option<(String, Instant)>,
     pub(crate) export_busy: bool,
+    pub(crate) update_state: crate::updates::UpdateState,
     pub(crate) now: i64,
     pub(crate) timer_minutes: u32,
     pub(crate) countdown: bool,
@@ -274,6 +275,7 @@ impl ForceView {
             tag_edit_original: None,
             toast: None,
             export_busy: false,
+            update_state: crate::updates::UpdateState::Idle,
             now: Local::now().timestamp(),
             timer_minutes: 25,
             countdown: true,
@@ -2008,6 +2010,12 @@ impl ForceView {
 
 pub(crate) struct FloatingStrip {
     pub(crate) expanded: bool,
+    pub(crate) drawer_visible: bool,
+    pub(crate) disclosure_serial: u64,
+    pub(crate) disclosure_from: f32,
+    pub(crate) disclosure_started: Instant,
+    pub(crate) disclosure_task: Option<gpui::Task<()>>,
+    pub(crate) face_hovered: bool,
     pub(crate) docked: Option<crate::platform::DockEdge>,
     pub(crate) drag_start: Option<gpui::Point<gpui::Pixels>>,
     #[cfg(target_os = "macos")]
@@ -2033,7 +2041,9 @@ impl FloatingStrip {
             this.window_position = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
             this.strip_position_initialized = true;
         });
-        let observe = cx.observe(&model, |_, _, cx| cx.notify());
+        let observe = cx.observe_in(&model, window, |this, _, window, cx| {
+            this.model_changed(window, cx);
+        });
         let position = cx.observe_window_bounds(window, |this, window, cx| {
             if this.expanded {
                 return;
@@ -2046,6 +2056,12 @@ impl FloatingStrip {
         });
         Self {
             expanded: false,
+            drawer_visible: false,
+            disclosure_serial: 0,
+            disclosure_from: 0.,
+            disclosure_started: Instant::now(),
+            disclosure_task: None,
+            face_hovered: false,
             docked: None,
             drag_start: None,
             #[cfg(target_os = "macos")]

@@ -973,6 +973,10 @@ fn click_test_strip(
 ) {
     let bounds = strip.debug_bounds(selector).unwrap();
     strip.simulate_click(bounds.center(), Modifiers::default());
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(200));
+    strip.run_until_parked();
     refresh_test_strip(view, strip);
 }
 
@@ -985,8 +989,7 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     let controls = strip.debug_bounds("strip-controls").unwrap();
     let primary = strip.debug_bounds("strip-primary").unwrap();
     let open = strip.debug_bounds("strip-open").unwrap();
-    let collapse = strip.debug_bounds("strip-collapse").unwrap();
-    for child in [face, text, time, status, controls, primary, open, collapse] {
+    for child in [face, text, time, status, controls, primary, open] {
         assert_horizontally_inside(child, root);
         assert!(child.top() >= root.top() - px(1.));
         assert!(child.bottom() <= root.bottom() + px(1.));
@@ -1056,7 +1059,7 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
                 .is_paused()
         );
     });
-    click_test_strip(&strip_view, &mut strip, "strip-collapse");
+    click_test_strip(&strip_view, &mut strip, "strip-face");
     strip_view.read_with(&strip, |view, _| assert!(!view.expanded));
     assert_same_bounds(strip.debug_bounds("strip-root").unwrap(), collapsed);
     // Debug selectors retain old bounds. Clicking the former action location
@@ -1097,7 +1100,7 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
             view.docked = Some(edge);
             cx.notify();
         });
-        click_test_strip(&strip_view, &mut strip, "strip-collapse");
+        click_test_strip(&strip_view, &mut strip, "strip-face");
         assert_eq!(
             strip.debug_bounds("strip-root").unwrap().size,
             size(px(28.), px(80.))
@@ -1135,9 +1138,10 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         assert_eq!(view.model.entity_id(), manager.view.entity_id())
     });
     click_test_strip(&strip_view, &mut strip, "strip-face");
-    strip_control_bounds(&mut strip);
-    assert!(strip.debug_bounds("strip-finish").is_none());
-    click_test_strip(&strip_view, &mut strip, "strip-primary");
+    strip_view.read_with(&strip, |view, _| {
+        assert!(!view.expanded && !view.drawer_visible)
+    });
+    assert!(strip.debug_bounds("strip-controls").is_none());
     manager.view.read_with(&manager.cx, |view, _| {
         assert!(view.preparing);
         assert!(!view.compact);
@@ -1156,6 +1160,7 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         view.active[0].id
     });
     refresh_test_strip(&strip_view, &mut strip);
+    click_test_strip(&strip_view, &mut strip, "strip-face");
     strip_control_bounds(&mut strip);
     click_test_strip(&strip_view, &mut strip, "strip-primary");
     manager.view.read_with(&manager.cx, |view, _| {
@@ -2662,4 +2667,75 @@ fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut Te
         );
     });
     assert_eq!(manager.bounds("tag-row-1").size.height, height);
+}
+
+#[gpui::test]
+fn headless_ui_reversing_cat_disclosure_cancels_old_close_and_ignores_fading_controls(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.task_input.update(cx, |input, cx| {
+            input.set_value("Prepared draft", window, cx)
+        });
+        view.hide_manager(window, cx)
+    });
+    let (view, mut strip) = open_test_strip(&mut manager);
+    click_test_strip(&view, &mut strip, "strip-face");
+    let primary = strip.debug_bounds("strip-primary").unwrap().center();
+    let collapse = strip.debug_bounds("strip-face").unwrap().center();
+    let face = strip.debug_bounds("strip-face").unwrap().center();
+    strip.simulate_click(collapse, Modifiers::default());
+    view.read_with(&strip, |view, _| {
+        assert!(!view.expanded && view.drawer_visible)
+    });
+    strip.simulate_click(primary, Modifiers::default());
+    manager
+        .view
+        .read_with(&manager.cx, |view, _| assert!(view.compact));
+    strip.simulate_click(face, Modifiers::default());
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(200));
+    strip.run_until_parked();
+    refresh_test_strip(&view, &mut strip);
+    view.read_with(&strip, |view, _| {
+        assert!(view.expanded && view.drawer_visible)
+    });
+    click_test_strip(&view, &mut strip, "strip-face");
+    view.read_with(&strip, |view, _| {
+        assert!(!view.expanded && !view.drawer_visible)
+    });
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.active.is_empty() && view.compact)
+    });
+}
+
+#[gpui::test]
+fn headless_ui_update_status_and_download_action_fit_small_settings(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 780., 620.);
+    manager.click("settings-tab");
+    for state in [
+        crate::updates::UpdateState::Current,
+        crate::updates::UpdateState::Failed,
+        crate::updates::UpdateState::Available {
+            version: "100.100.100".into(),
+            download: Some("https://github.com/yuxino/Force/releases/latest".into()),
+        },
+    ] {
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            view.update_state = state;
+            cx.notify();
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        assert_horizontally_inside(
+            manager.bounds("settings-update"),
+            manager.bounds("manager-content"),
+        );
+        assert_horizontally_inside(
+            manager.bounds("settings-update-status"),
+            manager.bounds("manager-content"),
+        );
+    }
 }

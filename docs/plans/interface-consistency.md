@@ -3,8 +3,8 @@
 ## Windows and navigation
 
 Keep the floating cat clock independent of the normal management window. It is
-88 × 128 points when compact, 264 × 158 when expanded and 28 × 80 when docked.
-Clicking the cat toggles its controls; dragging near either screen edge docks it
+88 × 128 points when compact, 244 × 152 when expanded and 28 × 80 when docked.
+An idle cat opens a new task directly. With a task, clicking the cat toggles its controls; dragging near either screen edge docks it
 on macOS/Windows. Linux retains free movement and resizing. These local states
 must not pause, resume or retarget the active timer. Management starts at
 1040 × 780 points, with a 780 × 620 minimum. Opening, resizing or navigating
@@ -23,10 +23,10 @@ The clock prioritizes the running session. Browsing a paused task in management
 must not replace that timer or retarget its controls. Without a running session,
 the clock may show the selected paused session or completion state. Keep the
 compact readout inside the black cat. Its expanded black panel contains the
-task title, status and one primary action: 新任务 / 开始, 暂停, 继续, 查看记录 or
+task title, status and one primary action: 开始, 暂停, 继续, 查看本轮 or
 重试 as appropriate. Show 结束 only for an active or paused session, without a
 reserved empty slot. Clicking the task title opens its management detail with
-the existing draft protection; the small minus control only collapses the clock.
+the existing draft protection. Click the cat again to collapse it; do not add a duplicate collapse button.
 Do not add a separate open button or hover tooltips to the clock.
 
 ## Stable focus workspace

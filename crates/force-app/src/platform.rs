@@ -8,8 +8,8 @@ static MANAGER_PRESENTATION_GENERATION: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) const STRIP_WIDTH: f32 = 88.;
 pub(crate) const STRIP_HEIGHT: f32 = 128.;
-pub(crate) const STRIP_EXPANDED_WIDTH: f32 = 264.;
-pub(crate) const STRIP_EXPANDED_HEIGHT: f32 = 158.;
+pub(crate) const STRIP_EXPANDED_WIDTH: f32 = 244.;
+pub(crate) const STRIP_EXPANDED_HEIGHT: f32 = 152.;
 pub(crate) const STRIP_DOCKED_WIDTH: f32 = 28.;
 pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 80.;
 

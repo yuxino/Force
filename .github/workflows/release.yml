@@ -1,0 +1,141 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to build
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Package ${{ matrix.target }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: aarch64-apple-darwin
+            platform: macos
+          - os: macos-15
+            target: x86_64-apple-darwin
+            platform: macos
+          - os: windows-2022
+            target: x86_64-pc-windows-msvc
+            platform: windows
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+            platform: linux
+    runs-on: ${{ matrix.os }}
+    env:
+      CARGO_TERM_COLOR: always
+      MACOSX_DEPLOYMENT_TARGET: '15.0'
+      CARGO_BUILD_TARGET: ${{ matrix.target }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - name: Verify tag and canonical version
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os, pathlib, subprocess, tomllib
+          version = tomllib.loads(pathlib.Path('Cargo.toml').read_text())['workspace']['package']['version']
+          tag = os.environ['RELEASE_TAG']
+          assert tag == f'v{version}', 'Tag and Cargo version differ'
+          assert subprocess.check_output(['git','rev-parse',f'{tag}^{{commit}}'], text=True).strip() == subprocess.check_output(['git','rev-parse','HEAD'], text=True).strip()
+          assert subprocess.run(['git','merge-base','--is-ancestor','HEAD','origin/main']).returncode == 0, 'Release must belong to main'
+          PY
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: ./scripts/linux-deps.sh
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release-${{ matrix.target }}
+      - name: Build macOS app and disk image
+        if: runner.os == 'macOS'
+        run: |
+          ./scripts/build-macos.sh --release --production --ad-hoc
+          ./scripts/package-macos.sh
+      - name: Build Windows application
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          cargo build --release --bin force --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = $env:RELEASE_TAG.Substring(1)
+          $bundle = 'build/windows/Force'
+          New-Item -ItemType Directory -Force $bundle | Out-Null
+          Copy-Item "target/$env:CARGO_BUILD_TARGET/release/force.exe" "$bundle/Force.exe"
+          if ((& "$bundle/Force.exe" --version) -ne "Force $version") { throw 'Executable version mismatch' }
+          Copy-Item LICENSE $bundle
+          New-Item -ItemType Directory -Force build/release | Out-Null
+          Compress-Archive -Path $bundle -DestinationPath "build/release/Force-v$version-windows-x86_64.zip" -Force
+      - name: Build Linux application
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          cargo build --release --bin force --locked
+          version="${RELEASE_TAG#v}"
+          mkdir -p build/linux/Force build/release
+          cp "target/$CARGO_BUILD_TARGET/release/force" build/linux/Force/force
+          test "$(build/linux/Force/force --version)" = "Force $version"
+          cp LICENSE build/linux/Force/
+          tar -czf "build/release/Force-v$version-linux-x86_64.tar.gz" -C build/linux Force
+      - uses: actions/upload-artifact@v4
+        with:
+          name: installer-${{ matrix.target }}
+          path: build/release/*
+          if-no-files-found: error
+          retention-days: 3
+
+  publish:
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+      - uses: actions/download-artifact@v4
+        with:
+          path: build/release
+          merge-multiple: true
+      - name: Validate installers and checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd build/release
+          for suffix in macos-aarch64.dmg macos-x86_64.dmg windows-x86_64.zip linux-x86_64.tar.gz; do
+            test -s "Force-$RELEASE_TAG-$suffix"
+          done
+          sha256sum Force-* > SHA256SUMS
+      - name: Publish complete release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" --verify-tag --draft --title "Force $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
+          fi
+          gh release upload "$RELEASE_TAG" build/release/* --clobber
+          gh release edit "$RELEASE_TAG" --draft=false --latest

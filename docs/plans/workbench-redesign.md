@@ -16,7 +16,7 @@ keep errors and meaningful distinctions visible.
 ## Shared language
 
 - Keep the 1040 × 780 default / 780 × 620 minimum management window and separate
-  floating cat clock: 88 × 128 points when compact, 264 × 158 when expanded and
+  floating cat clock: 88 × 128 points when compact, 244 × 152 when expanded and
   28 × 80 when edge-docked. Keep the 896-point content grid, 40-point insets,
   32-point column gap and 240-point task column.
 - Use the existing system font with tabular time digits. Page titles are 32,
@@ -61,7 +61,7 @@ The clock shows time inside the black cat. Clicking the cat expands a single
 black panel with its task title, status and primary action. Show 结束 only for an
 active or paused session; do not reserve an empty action slot. Clicking the task
 title opens the corresponding task detail or completion receipt, preserving
-unsaved edits. The minus control collapses the panel without changing timing or
+unsaved edits. Clicking the cat again collapses the panel without changing timing or
 management visibility. Keep the clock free of hover tooltips and a separate open
 button. Native dragging near the left or right screen edge docks it on
 macOS/Windows; Linux retains free movement and resizing. Preserve model routing,

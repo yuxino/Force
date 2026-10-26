@@ -1,5 +1,4 @@
-#[cfg(any(target_os = "macos", target_os = "windows"))]
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use force_core::{Session, TagKind};
 use gpui::{prelude::*, *};
@@ -31,6 +30,7 @@ struct TimerFace {
     session: Option<i64>,
     progress: Option<f32>,
     ready: bool,
+    idle: bool,
 }
 
 impl FloatingStrip {
@@ -98,13 +98,13 @@ impl FloatingStrip {
                 } else if let Some(session) = current {
                     if session.tag_kind == TagKind::Rest {
                         "休息中".to_owned()
-                    } else if let Some(target) = session.target_seconds {
-                        format!("{} 分钟 · 倒计时", target / 60)
+                    } else if session.target_seconds.is_some() {
+                        "剩余时间".to_owned()
                     } else {
                         "正计时".to_owned()
                     }
                 } else if model.countdown {
-                    format!("{} 分钟 · 倒计时", model.timer_minutes)
+                    "倒计时 · 未开始".to_owned()
                 } else {
                     "正计时 · 随时开始".to_owned()
                 }
@@ -112,6 +112,10 @@ impl FloatingStrip {
             |(message, _)| message.clone(),
         );
         TimerFace {
+            idle: current.is_none()
+                && !completed
+                && !model.storage_failed
+                && model.task_input.read(cx).value().trim().is_empty(),
             ready: model.can_start_task(cx),
             title,
             status,
@@ -130,8 +134,41 @@ impl FloatingStrip {
     }
 
     pub(crate) fn toggle_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let old_target = if self.expanded { 1. } else { 0. };
+        let current = if self.disclosure_task.is_some() {
+            let elapsed = (self.disclosure_started.elapsed().as_secs_f32() / 0.16).min(1.);
+            self.disclosure_from + (old_target - self.disclosure_from) * ease_in_out(elapsed)
+        } else {
+            old_target
+        };
+        self.disclosure_task = None;
+        self.disclosure_serial = self.disclosure_serial.wrapping_add(1);
+        let serial = self.disclosure_serial;
+        self.disclosure_from = current;
+        self.disclosure_started = Instant::now();
         self.expanded = !self.expanded;
-        self.reshape(window, cx);
+        self.drawer_visible = true;
+        // Grow the native window first; shrink only after the closing fade has
+        // finished, so neither direction is clipped by an immediate resize.
+        if self.expanded {
+            self.reshape(window, cx);
+        }
+        self.disclosure_task = Some(cx.spawn_in(window, async move |this, cx| {
+            cx.background_executor()
+                .timer(Duration::from_millis(160))
+                .await;
+            let _ = cx.update(|window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if this.disclosure_serial == serial {
+                        this.drawer_visible = this.expanded;
+                        this.disclosure_from = if this.expanded { 1. } else { 0. };
+                        this.disclosure_task = None;
+                        this.reshape(window, cx);
+                    }
+                });
+            });
+        }));
+        cx.notify();
     }
 
     fn reshape(&self, window: &mut Window, cx: &mut Context<Self>) {
@@ -160,7 +197,7 @@ impl FloatingStrip {
         &mut self,
         event: &MouseDownEvent,
         _window: &mut Window,
-        _: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         // Dropping an earlier task cancels its release polling. The serial also
         // prevents a queued completion from settling a newer drag.
@@ -175,10 +212,13 @@ impl FloatingStrip {
             // must still work there. Only a real drag requires this event.
             self.drag_event = platform::capture_window_drag(_window).ok();
         }
+        cx.notify();
     }
 
     fn settle_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_face_press();
+        self.disclosure_task = None;
+        self.drawer_visible = false;
         self.docked = platform::floating_dock_edge(window);
         self.expanded = false;
         self.reshape(window, cx);
@@ -189,7 +229,21 @@ impl FloatingStrip {
         if std::mem::take(&mut self.suppress_click) {
             return;
         }
-        self.toggle_expanded(window, cx);
+        if self.timer_face(cx).idle {
+            self.dispatch(cx, |model, window, cx| model.new_task(window, cx));
+        } else {
+            self.toggle_expanded(window, cx);
+        }
+    }
+
+    pub(crate) fn model_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.timer_face(cx).idle && self.drawer_visible {
+            self.disclosure_task = None;
+            self.expanded = false;
+            self.drawer_visible = false;
+            self.reshape(window, cx);
+        }
+        cx.notify();
     }
 
     fn move_face(&mut self, event: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
@@ -264,10 +318,14 @@ impl FloatingStrip {
             .debug_selector(|| "strip-face".into())
             .absolute()
             .left(px(6.))
-            .top(px(4.))
+            .top(px(if self.drag_start.is_some() { 6. } else { 4. }))
             .w(px(76.))
             .h(px(116.))
             .cursor_pointer()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.face_hovered = *hovered;
+                cx.notify();
+            }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_face_press))
             .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
             .child(
@@ -276,7 +334,7 @@ impl FloatingStrip {
                     .left(px(-0.5))
                     .top(px(-0.5))
                     .w(px(77.))
-                    .h(px(if self.expanded { 54. } else { 113. }))
+                    .h(px(if self.drawer_visible { 54. } else { 113. }))
                     .overflow_hidden()
                     .child(
                         Icon::default()
@@ -297,7 +355,23 @@ impl FloatingStrip {
                     .top_0()
                     .w(px(76.))
                     .h(px(112.))
-                    .text_color(rgb(INK)),
+                    .text_color(rgb(if self.drag_start.is_some() {
+                        0x353535
+                    } else if self.face_hovered {
+                        0x242424
+                    } else {
+                        INK
+                    })),
+            )
+            .child(
+                Icon::default()
+                    .path("force-cat-eyes.svg")
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .w(px(76.))
+                    .h(px(112.))
+                    .text_color(rgb(0xf5f5f5)),
             )
             .child(
                 div()
@@ -324,6 +398,8 @@ impl FloatingStrip {
                         "!".to_owned()
                     } else if face.completed {
                         "✓".to_owned()
+                    } else if face.idle {
+                        "+".to_owned()
                     } else {
                         minutes
                     }),
@@ -344,13 +420,15 @@ impl FloatingStrip {
                         "完成".to_owned()
                     } else if face.paused {
                         "暂停".to_owned()
+                    } else if face.idle {
+                        "新任务".to_owned()
                     } else {
                         detail
                     }),
             )
     }
 
-    fn drawer(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
+    fn drawer(&self, face: &TimerFace, cx: &mut Context<Self>) -> Div {
         let primary_label = if face.failed {
             "重试"
         } else if face.completed {
@@ -378,8 +456,8 @@ impl FloatingStrip {
             .absolute()
             .left(px(14.))
             .top(px(58.))
-            .w(px(242.))
-            .h(px(92.))
+            .w(px(222.))
+            .h(px(86.))
             .rounded(px(20.))
             .bg(rgb(INK))
             .border_1()
@@ -388,13 +466,16 @@ impl FloatingStrip {
                 div()
                     .absolute()
                     .left(px(80.))
-                    .top(px(13.))
-                    .w(px(136.))
+                    .top(px(12.))
+                    .w(px(122.))
                     .h(px(20.))
                     .id("cat-task-details")
                     .debug_selector(|| "strip-open".into())
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.expanded {
+                            return;
+                        }
                         this.dispatch(cx, move |model, window, cx| {
                             if let Some(id) = session_id {
                                 model.show_manager(window, cx);
@@ -417,8 +498,8 @@ impl FloatingStrip {
                 div()
                     .absolute()
                     .left(px(80.))
-                    .top(px(37.))
-                    .w(px(136.))
+                    .top(px(35.))
+                    .w(px(122.))
                     .h(px(15.))
                     .child(
                         single_line(face.status.clone(), 10.)
@@ -431,9 +512,9 @@ impl FloatingStrip {
                     .debug_selector(|| "strip-controls".into())
                     .absolute()
                     .left(px(80.))
-                    .top(px(58.))
-                    .h(px(28.))
-                    .w(px(148.))
+                    .top(px(54.))
+                    .h(px(26.))
+                    .w(px(128.))
                     .flex()
                     .items_center()
                     .gap(px(6.))
@@ -441,7 +522,7 @@ impl FloatingStrip {
                         button("bar-primary")
                             .debug_selector(|| "strip-primary".into())
                             .w(px(82.))
-                            .h(px(28.))
+                            .h(px(26.))
                             .rounded(px(8.))
                             .custom(
                                 ButtonCustomVariant::new(cx)
@@ -459,7 +540,7 @@ impl FloatingStrip {
                                     .child(primary_label),
                             )
                             .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
-                                if event.click_count() == 1 {
+                                if this.expanded && event.click_count() == 1 {
                                     this.dispatch(cx, |model, window, cx| {
                                         model.strip_primary_action(window, cx)
                                     });
@@ -470,7 +551,7 @@ impl FloatingStrip {
                         button("bar-finish")
                             .debug_selector(|| "strip-finish".into())
                             .w(px(36.))
-                            .h(px(28.))
+                            .h(px(26.))
                             .rounded(px(7.))
                             .custom(cat_secondary_variant(cx))
                             .child(
@@ -480,24 +561,11 @@ impl FloatingStrip {
                                     .child("结束"),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                this.dispatch(cx, move |model, _, cx| model.finish(id, cx))
+                                if this.expanded {
+                                    this.dispatch(cx, move |model, _, cx| model.finish(id, cx))
+                                }
                             }))
                     })),
-            )
-            .child(
-                button("cat-collapse")
-                    .debug_selector(|| "strip-collapse".into())
-                    .absolute()
-                    .right(px(5.))
-                    .top(px(5.))
-                    .size(px(20.))
-                    .rounded(px(6.))
-                    .custom(cat_secondary_variant(cx))
-                    .icon(control_icon(
-                        Icon::new(IconName::Minus).size(px(12.)),
-                        0xa6a6a6,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| this.toggle_expanded(window, cx))),
             )
     }
 
@@ -528,6 +596,8 @@ impl FloatingStrip {
                         "!".to_owned()
                     } else if face.completed {
                         "✓".to_owned()
+                    } else if face.idle {
+                        "+".to_owned()
                     } else {
                         minutes
                     }),
@@ -557,7 +627,10 @@ impl Render for FloatingStrip {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let face = self.timer_face(cx);
         let move_face = cx.listener(Self::move_face);
-        let release_face = cx.listener(|this, _: &MouseUpEvent, _, _| this.clear_face_press());
+        let release_face = cx.listener(|this, _: &MouseUpEvent, _, cx| {
+            this.clear_face_press();
+            cx.notify();
+        });
         div()
             .debug_selector(|| "strip-root".into())
             .track_focus(&self.focus_handle)
@@ -565,13 +638,27 @@ impl Render for FloatingStrip {
             .size_full()
             .relative()
             .text_color(rgb(INK))
-            .child(if self.docked.is_some() && !self.expanded {
+            .child(if self.docked.is_some() && !self.drawer_visible {
                 self.dock_face(&face, cx).into_any_element()
             } else {
                 div()
                     .size_full()
                     .relative()
-                    .when(self.expanded, |body| body.child(self.drawer(&face, cx)))
+                    .when(self.drawer_visible, |body| {
+                        let from = self.disclosure_from;
+                        let target = if self.expanded { 1. } else { 0. };
+                        body.child(self.drawer(&face, cx).with_animation(
+                            ElementId::NamedInteger(
+                                "cat-disclosure".into(),
+                                self.disclosure_serial,
+                            ),
+                            Animation::new(Duration::from_millis(160)).with_easing(ease_in_out),
+                            move |panel, delta| {
+                                let reveal = from + (target - from) * delta;
+                                panel.opacity(reveal).left(px(14. - 12. * (1. - reveal)))
+                            },
+                        ))
+                    })
                     .child(self.cat_face(&face, cx))
                     .into_any_element()
             })

@@ -357,50 +357,80 @@ impl ForceView {
                     .border_t_1()
                     .border_color(rgb(LINE))
                     .flex()
-                    .items_center()
-                    .justify_between()
+                    .flex_col()
+                    .gap(px(8.))
                     .child(
                         div()
+                            .w_full()
                             .flex()
                             .items_center()
-                            .gap(px(10.))
-                            .child(
-                                Icon::default()
-                                    .path("force-logo.svg")
-                                    .size(px(20.))
-                                    .text_color(rgb(INK)),
-                            )
+                            .justify_between()
                             .child(
                                 div()
-                                    .text_size(px(14.))
-                                    .text_color(rgb(MUTED))
-                                    .child(format!("Force {}", env!("CARGO_PKG_VERSION"))),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(8.))
-                            .child(
-                                button("data-folder")
-                                    .ghost()
-                                    .h(px(36.))
-                                    .child(control_label("打开数据文件夹", MUTED))
-                                    .on_click(
-                                        cx.listener(|this, _, _, cx| {
-                                            cx.reveal_path(&this.data_dir)
-                                        }),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(10.))
+                                    .child(
+                                        Icon::default()
+                                            .path("force-logo.svg")
+                                            .size(px(20.))
+                                            .text_color(rgb(INK)),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(14.))
+                                            .text_color(rgb(MUTED))
+                                            .child(format!("Force {}", env!("CARGO_PKG_VERSION"))),
+                                    )
+                                    .child(
+                                        button("check-updates")
+                                            .debug_selector(|| "settings-update".into())
+                                            .ghost()
+                                            .h(px(36.))
+                                            .unavailable(
+                                                self.update_state
+                                                    == crate::updates::UpdateState::Checking,
+                                            )
+                                            .child(control_label(self.update_state.label(), MUTED))
+                                            .on_click(
+                                                cx.listener(|this, _, _, cx| {
+                                                    this.update_action(cx)
+                                                }),
+                                            ),
                                     ),
                             )
                             .child(
-                                button("quit-force")
-                                    .ghost()
-                                    .h(px(36.))
-                                    .child(control_label("退出 Force", MUTED))
-                                    .on_click(cx.listener(|_, _, _, cx| cx.quit())),
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(8.))
+                                    .child(
+                                        button("data-folder")
+                                            .ghost()
+                                            .h(px(36.))
+                                            .child(control_label("打开数据文件夹", MUTED))
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                cx.reveal_path(&this.data_dir)
+                                            })),
+                                    )
+                                    .child(
+                                        button("quit-force")
+                                            .ghost()
+                                            .h(px(36.))
+                                            .child(control_label("退出 Force", MUTED))
+                                            .on_click(cx.listener(|_, _, _, cx| cx.quit())),
+                                    ),
                             ),
-                    ),
+                    )
+                    .when_some(self.update_state.message(), |footer, message| {
+                        footer.child(
+                            div()
+                                .debug_selector(|| "settings-update-status".into())
+                                .text_size(px(12.))
+                                .text_color(rgb(MUTED))
+                                .child(message),
+                        )
+                    }),
             )
     }
 }

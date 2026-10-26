@@ -16,6 +16,7 @@ mod platform;
 mod records_view;
 mod settings_view;
 mod tag_picker;
+mod updates;
 mod view;
 
 #[cfg(all(test, feature = "ui-test-support"))]
@@ -39,6 +40,7 @@ actions!(
         StartBreak,
         ShowRecords,
         ShowSettings,
+        CheckUpdates,
         ClosePanel
     ]
 );
@@ -57,6 +59,7 @@ impl AssetSource for Assets {
             ))));
         }
         let custom: Option<&'static [u8]> = match path {
+            "force-cat-eyes.svg" => Some(include_bytes!("../../../assets/cat-eyes.svg")),
             "force-cat-clock.svg" => Some(include_bytes!("../../../assets/cat-clock.svg")),
             "force-wordmark.svg" => Some(include_bytes!("../../../assets/wordmark.svg")),
             "force-icons/trash.svg" => Some(include_bytes!("../../../assets/icons/trash.svg")),
@@ -176,6 +179,7 @@ fn main() -> anyhow::Result<()> {
                 name: "Force".into(),
                 items: vec![
                     MenuItem::action("设置…", ShowSettings),
+                    MenuItem::action("检查更新…", CheckUpdates),
                     MenuItem::separator(),
                     MenuItem::action("退出 Force", Quit),
                 ],
@@ -327,6 +331,12 @@ fn main() -> anyhow::Result<()> {
                 cx.on_action(move |_: &ShowSettings, cx| {
                     with_force(handle, cx, |this, window, cx| {
                         this.navigate(model::Page::Settings, window, cx);
+                    })
+                });
+                cx.on_action(move |_: &CheckUpdates, cx| {
+                    with_force(handle, cx, |this, window, cx| {
+                        this.navigate(model::Page::Settings, window, cx);
+                        this.check_for_updates(cx);
                     })
                 });
                 cx.on_action(move |_: &ClosePanel, cx| {
