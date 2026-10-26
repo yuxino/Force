@@ -215,6 +215,7 @@ impl FloatingStrip {
         cx.notify();
     }
 
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn settle_drag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_face_press();
         self.disclosure_task = None;

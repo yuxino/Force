@@ -13,6 +13,9 @@ pub(crate) const STRIP_EXPANDED_HEIGHT: f32 = 152.;
 pub(crate) const STRIP_DOCKED_WIDTH: f32 = 28.;
 pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 80.;
 
+// Linux retains free movement and shares the geometry API, but never constructs
+// a native dock edge. Geometry tests still exercise both edges on every platform.
+#[cfg_attr(not(any(target_os = "macos", target_os = "windows")), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum DockEdge {
     Left,
@@ -40,6 +43,7 @@ fn floating_geometry(
     Bounds::new(point(x, current.origin.y.clamp(top, bottom)), dimensions)
 }
 
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn dock_edge_for_bounds(
     bounds: gpui::Bounds<gpui::Pixels>,
     available: gpui::Bounds<gpui::Pixels>,
@@ -96,7 +100,8 @@ fn floating_work_area(window: &gpui::Window) -> Option<gpui::Bounds<gpui::Pixels
         UI::WindowsAndMessaging::GetWindowRect,
     };
 
-    let RawWindowHandle::Win32(handle) = window.window_handle().ok()?.as_raw() else {
+    let RawWindowHandle::Win32(handle) = HasWindowHandle::window_handle(window).ok()?.as_raw()
+    else {
         return None;
     };
     let hwnd = handle.hwnd.get() as _;
@@ -134,6 +139,7 @@ fn floating_work_area(_window: &gpui::Window) -> Option<gpui::Bounds<gpui::Pixel
 }
 
 /// Detect after a native drag has finished, before resizing the floating object.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub(crate) fn floating_dock_edge(window: &gpui::Window) -> Option<DockEdge> {
     dock_edge_for_bounds(window.bounds(), floating_work_area(window)?)
 }
@@ -214,8 +220,7 @@ fn set_floating_bounds(
         },
     };
 
-    let handle = window
-        .window_handle()
+    let handle = HasWindowHandle::window_handle(window)
         .map_err(|error| anyhow::anyhow!("Native window is unavailable: {error:?}"))?;
     let RawWindowHandle::Win32(handle) = handle.as_raw() else {
         bail!("Unsupported native window handle");
