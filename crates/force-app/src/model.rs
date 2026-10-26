@@ -1789,7 +1789,7 @@ impl ForceView {
         self.toast = None;
     }
 
-    pub(crate) fn export(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.export_busy {
             return;
         }
@@ -1806,11 +1806,25 @@ impl ForceView {
                     .to_path_buf()
             })
             .unwrap_or_else(|| self.data_dir.clone());
+        let return_focus = window.focused(cx);
         let path = cx.prompt_for_new_path(&default_directory, Some(&suggested));
         let database = self.data_dir.join("force.sqlite3");
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            let selected_path = match path.await {
+        cx.spawn_in(window, async move |this, cx| {
+            let selection = path.await;
+            // App-level save panels can return key status to the independent
+            // floating clock. Return to the originating visible workspace.
+            let _ = cx.update(|window, cx| {
+                let _ = this.update(cx, |this, _| {
+                    if !this.compact {
+                        window.activate_window();
+                        if let Some(focus) = return_focus.as_ref() {
+                            focus.focus(window);
+                        }
+                    }
+                });
+            });
+            let selected_path = match selection {
                 Ok(Ok(Some(path))) => path,
                 Ok(Ok(None)) => {
                     let _ = this.update(cx, |this, cx| {

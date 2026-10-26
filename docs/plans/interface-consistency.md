@@ -45,7 +45,7 @@ Use spacing between columns without a full-height dividing line.
   content fills the left column and keeps the same left edge and width in all
   three states, aligned with the heading above. Setup keeps
   task name first, then equal-width tag and timing-mode fields on one row.
-  The round duration sits below them, and a separated footer groups Start and Save. Use compact
+  The round duration sits below them, and whitespace groups Start and Save beneath the fields. Use compact
   倒计时 / 正计时 choices; countdown always exposes one editable minute field
   with 25/45/60 shortcuts beside it. Mode switches retain that input. New task
   drafts offer 保存任务 beside 开始计时; saving creates no timer. Keep compact
@@ -85,23 +85,23 @@ Use spacing between columns without a full-height dividing line.
 
 ## Styling and settings
 
-Use the system font, soft white surfaces and neutral black/gray hierarchy. The
+Use the system font, white working surfaces and soft-white navigation chrome and neutral black/gray hierarchy. The
 68-point header aligns the geometric wordmark, two destinations and settings
 with the content grid. The global 新任务 action is quiet; primary emphasis belongs
 to the current task action. Date navigation sits beside its date. Tag menus match
-their triggers, and open menus have no redundant trigger tooltip. Today uses a 16-point heading, 13-point date, 22-point
-accumulated time and a full-width two-point goal line. Task headings are 28 points;
-setup, calendar, records and settings use 28-point page headings. Section headings are 16 points, body
+their triggers, and open menus have no redundant trigger tooltip. Today uses a 14-point heading, 13-point date, 20-point
+accumulated time and a full-width two-point goal line. Task headings and calendar dates are 28 points;
+setup, records and settings use 26-point page headings. Section headings are 16 points, body
 and control labels 14 points, and secondary metadata 13 points. Compact task/summary durations show seconds
 below one minute and omit zero minutes after whole hours. Keep necessary labels and errors visible;
 optional explanations use contextual help. Routine removal icons stay neutral.
 
-Settings use a readable column of at most 640 points, aligned to the main
-content left edge. Stack section titles above their rows, with 24 points between
+Settings use a readable column of at most 560 points, aligned to the main
+content left edge. Stack section titles above their rows, with 20 points between
 groups. Keep labels and their controls on the same row. Timing preferences contain clock
 pinning, completion sound and daily goal. Pinning and sound each use a
 keyboard-accessible buttons with directly clickable switches. Knob and outer
-button actions must each toggle once. Tags use 44-point
+button actions must each toggle once. Timing rows use 48 points. Tags use 40-point
 rows and a list capped at 240 points. The tag input and 添加 / 保存
 stay on one row at the minimum width. New labels are focus tags; existing rest
 labels remain editable. Highlight the row currently being renamed with the
@@ -111,8 +111,8 @@ not change a saved task's label selection, including an archived label. Compare
 tag edits with their original input so external renames do not become apparent
 user changes or get overwritten by an untouched field. Daily-goal 保存 / 撤销
 appear below the goal row only while changed, so typing never moves the input.
-Local data exposes the folder; export is owned by
-records.
+The footer places version/update on one row and folder/quit maintenance actions below.
+Local data exposes the folder; export is owned by records.
 
 Single-line inputs and settings controls are 40 points high; main start and
 running actions are 44 points. Set input styled height explicitly because
@@ -281,3 +281,18 @@ a no-op: `on_next_frame` and `ScrollAnchor`
 callbacks are not exercised by ordinary headless refreshes. Use simulated wheel
 events to check viewport bounds and controls; verify automatic scroll targeting
 natively instead of changing production behavior to satisfy this test limitation.
+
+## Visual roles and stable editing
+
+White canvas, #fafafa navigation/outside-month surfaces, #e8e8e8 dividers,
+#c9c9c9 control boundaries, #f7f7f7 selected rows, #f2f2f2 hover and #e7e7e7
+press states have separate roles. Secondary operations are white outlined
+buttons without a shadow; quiet actions share a custom neutral variant instead
+of the library Ghost's fixed darkening. Timing mode selection uses an ink border
+on white, while duration presets use an underline. Neither resembles disabled
+Start. The task sidebar heading is subordinate at 14 points.
+
+Calendar editors reserve two lines for validation so bottom-snapped title and
+time fields do not jump when typing clears an error. The fields scroll within
+the popup and Save/Cancel remain reachable. A fixed error slot is functional
+space, not an invitation to add helper prose to pristine forms.

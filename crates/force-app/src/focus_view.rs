@@ -9,7 +9,8 @@ use crate::{
     view::{
         ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, TASK_SIDEBAR_WIDTH, TASK_TEXT_WIDTH,
         action_icon, button, choice_button, clock, control_icon, control_label, field, field_label,
-        page_heading, primary_button, section_heading, short_time, task_heading, timer_font,
+        outlined_button, page_heading, primary_button, section_heading, selection_button,
+        short_time, task_heading, timer_font, underline_button,
     },
 };
 
@@ -25,8 +26,8 @@ impl ForceView {
             .flex_shrink_0()
             .flex()
             .flex_col()
-            .gap(px(16.))
-            .pb(px(28.))
+            .gap(px(12.))
+            .pb(px(24.))
             .child(
                 div()
                     .flex()
@@ -40,7 +41,7 @@ impl ForceView {
                             .flex()
                             .items_baseline()
                             .gap(px(12.))
-                            .child(section_heading("今日专注"))
+                            .child(section_heading("今日专注").text_size(px(14.)))
                             .child(
                                 div()
                                     .text_size(px(13.))
@@ -64,7 +65,7 @@ impl ForceView {
                                 div()
                                     .debug_selector(|| "focus-day-total".into())
                                     .font(timer_font(cx))
-                                    .text_size(px(22.))
+                                    .text_size(px(20.))
                                     .line_height(relative(1.2))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child(total.replace(' ', "")),
@@ -102,7 +103,7 @@ impl ForceView {
                     .child("无法读写本地数据。原文件已保留。"),
             )
             .child(
-                button("retry-storage")
+                outlined_button("retry-storage")
                     .debug_selector(|| "retry-storage".into())
                     .child(control_label("重试", INK))
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -214,7 +215,7 @@ impl ForceView {
                                         .child(
                                             button("reset-task")
                                                 .debug_selector(|| "reset-task".into())
-                                                .ghost()
+                                                .custom(crate::view::quiet_variant(cx))
                                                 .h(px(32.))
                                                 .child(control_label("撤销", MUTED))
                                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -222,11 +223,18 @@ impl ForceView {
                                                 })),
                                         )
                                         .child(
-                                            button("save-task")
+                                            outlined_button("save-task")
                                                 .debug_selector(|| "save-task".into())
                                                 .h(px(32.))
                                                 .unavailable(!self.can_save_task(cx))
-                                                .child(control_label("保存", INK))
+                                                .child(control_label(
+                                                    "保存",
+                                                    if self.can_save_task(cx) {
+                                                        INK
+                                                    } else {
+                                                        MUTED
+                                                    },
+                                                ))
                                                 .on_click(cx.listener(|this, _, _, cx| {
                                                     this.save_task_changes(cx);
                                                 })),
@@ -262,7 +270,7 @@ impl ForceView {
                             .child(field_label("标签"))
                             .when(no_focus_tags, |row| {
                                 row.child(
-                                    button("add-focus-tag")
+                                    outlined_button("add-focus-tag")
                                         .debug_selector(|| "add-focus-tag".into())
                                         .small()
                                         .h(px(40.))
@@ -305,14 +313,13 @@ impl ForceView {
                                 [(true, "倒计时"), (false, "正计时")].into_iter().map(
                                     |(countdown, label)| {
                                         let selected = self.countdown == countdown;
-                                        choice_button(
+                                        selection_button(
                                             if countdown {
                                                 "duration-custom"
                                             } else {
                                                 "duration-0"
                                             },
                                             selected,
-                                            SURFACE,
                                             cx,
                                         )
                                         .debug_selector(move || {
@@ -381,10 +388,10 @@ impl ForceView {
                                             .parse::<u32>()
                                             .ok()
                                             == Some(minutes);
-                                        choice_button(
+                                        underline_button(
                                             ("duration", minutes as u64),
                                             selected,
-                                            SURFACE,
+                                            false,
                                             cx,
                                         )
                                         .debug_selector(move || format!("duration-{minutes}"))
@@ -424,9 +431,7 @@ impl ForceView {
             .child(
                 div()
                     .debug_selector(|| "prepare-actions".into())
-                    .pt(px(16.))
-                    .border_t_1()
-                    .border_color(rgb(LINE))
+                    .pt(px(20.))
                     .flex()
                     .items_center()
                     .gap(px(12.))
@@ -455,11 +460,14 @@ impl ForceView {
                         row.child(
                             button("save-new-task")
                                 .debug_selector(|| "save-new-task".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(44.))
                                 .px(px(8.))
                                 .unavailable(!self.can_save_task(cx))
-                                .child(control_label("保存任务", MUTED))
+                                .child(control_label(
+                                    "保存任务",
+                                    if self.can_save_task(cx) { INK } else { MUTED },
+                                ))
                                 .tooltip("加入任务列表，稍后再开始计时")
                                 .on_click(cx.listener(|this, _, _, cx| {
                                     this.save_task_changes(cx);
@@ -478,7 +486,7 @@ impl ForceView {
                     body.child(
                         button("complete-task")
                             .debug_selector(|| "complete-task".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .h(px(36.))
                             .w(px(112.))
                             .child(control_label("完成任务", MUTED))
@@ -524,7 +532,7 @@ impl ForceView {
                             .flex()
                             .items_baseline()
                             .gap(px(8.))
-                            .child(section_heading("任务"))
+                            .child(section_heading("任务").text_size(px(14.)))
                             .child(
                                 div()
                                     .debug_selector(|| "task-count".into())
@@ -787,7 +795,7 @@ impl ForceView {
                                 row.child(
                                     button("edit-duration")
                                         .debug_selector(|| "edit-duration".into())
-                                        .ghost()
+                                        .custom(crate::view::quiet_variant(cx))
                                         .h(px(24.))
                                         .px(px(8.))
                                         .flex_shrink_0()
@@ -843,7 +851,7 @@ impl ForceView {
                     })
                     .child(
                         (if rest {
-                            button("running-pause")
+                            outlined_button("running-pause")
                         } else {
                             primary_button("running-pause")
                         })
@@ -877,7 +885,7 @@ impl ForceView {
                     )
                     .when(!rest, |row| {
                         row.child(
-                            button("running-finish")
+                            outlined_button("running-finish")
                                 .debug_selector(|| "running-finish".into())
                                 .w(px(116.))
                                 .h(px(44.))
@@ -894,7 +902,7 @@ impl ForceView {
                             button("running-rest")
                                 .debug_selector(|| "running-rest".into())
                                 .w(px(124.))
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(44.))
                                 .px(px(12.))
                                 .child(control_label("休息 5 分钟", MUTED))
@@ -929,10 +937,17 @@ impl ForceView {
                         )
                         .child(control_label("分钟", MUTED))
                         .child(
-                            button("save-duration")
+                            outlined_button("save-duration")
                                 .debug_selector(|| "save-duration".into())
                                 .h(px(40.))
-                                .child(control_label("保存", INK))
+                                .child(control_label(
+                                    "保存",
+                                    if self.can_save_duration(cx) {
+                                        INK
+                                    } else {
+                                        MUTED
+                                    },
+                                ))
                                 .unavailable(!self.can_save_duration(cx))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.save_duration(window, cx)
@@ -941,7 +956,7 @@ impl ForceView {
                         .child(
                             button("cancel-duration")
                                 .debug_selector(|| "cancel-duration".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(40.))
                                 .child(control_label("取消", MUTED))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -1065,7 +1080,7 @@ impl ForceView {
                     )
                     .when(!rest, |row| {
                         row.child(
-                            button("rest-five")
+                            outlined_button("rest-five")
                                 .debug_selector(|| "rest-five".into())
                                 .w(px(124.))
                                 .h(px(44.))
@@ -1082,7 +1097,7 @@ impl ForceView {
                             button("complete-task")
                                 .debug_selector(|| "complete-task".into())
                                 .w(px(112.))
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(44.))
                                 .child(control_label("完成任务", MUTED))
                                 .tooltip("从任务列表移出，保留全部计时记录")

@@ -762,7 +762,8 @@ fn agenda_ui_popup_editor_stays_bounded_over_a_six_week_month(cx: &mut TestAppCo
         assert_inside(manager.bounds("agenda-cancel"), popup);
         let collapsed_actions = manager.bounds("agenda-editor-actions");
         let note_toggle = manager.bounds("agenda-note-toggle");
-        assert!(collapsed_actions.top() - note_toggle.bottom() <= px(36.));
+        let validation = manager.bounds("agenda-validation-slot");
+        assert!(collapsed_actions.top() - note_toggle.bottom() - validation.size.height <= px(36.));
         manager.click("agenda-note-toggle");
         assert_inside(
             manager.bounds("agenda-save"),
@@ -1939,4 +1940,52 @@ fn agenda_ui_double_click_cannot_undo_completion_or_accidentally_start_a_round(
         assert_eq!(view.active.len(), 1);
         assert!(view.active[0].is_running());
     });
+}
+
+#[gpui::test]
+fn agenda_ui_bottom_editor_fields_do_not_jump_when_validation_changes(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let date = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            view.agenda.month = date.with_day(1).unwrap();
+            view.agenda.date = date;
+            cx.notify();
+        });
+        settle(&mut manager);
+        manager.click("agenda-overview-add");
+        fill_plan(
+            &mut manager,
+            "Keep the field still",
+            date,
+            "10:00",
+            "invalid",
+            "",
+        );
+        let title = manager.bounds("agenda-title-input");
+        let end = manager.bounds("agenda-end-input");
+        let popup = manager.bounds("agenda-popover");
+        manager.click("agenda-save");
+        manager
+            .view
+            .read_with(&manager.cx, |view, _| assert!(view.agenda.error.is_some()));
+        assert_same_bounds(manager.bounds("agenda-title-input"), title);
+        assert_same_bounds(manager.bounds("agenda-end-input"), end);
+        assert_same_bounds(manager.bounds("agenda-popover"), popup);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.agenda
+                .end_input
+                .update(cx, |input, cx| input.set_value("11:00", window, cx));
+        });
+        settle(&mut manager);
+        manager
+            .view
+            .read_with(&manager.cx, |view, _| assert!(view.agenda.error.is_none()));
+        assert_same_bounds(manager.bounds("agenda-title-input"), title);
+        assert_same_bounds(manager.bounds("agenda-end-input"), end);
+        assert_inside(
+            manager.bounds("agenda-save"),
+            Bounds::new(Point::default(), size(px(width), px(height))),
+        );
+    }
 }

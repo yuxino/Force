@@ -10,9 +10,9 @@ use crate::{
     label::single_line,
     model::{ForceView, Page, day_bounds},
     view::{
-        ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, action_icon, button, choice_button,
-        clock, control_icon, control_label, field_label, primary_button, section_heading,
-        short_time, timer_font,
+        CHROME, ControlState, DESTRUCTIVE, HOVER, INK, LINE, MUTED, PAPER, PRESSED, SURFACE,
+        action_icon, button, choice_button, clock, control_icon, control_label, field_label,
+        primary_button, section_heading, short_time, timer_font,
     },
 };
 
@@ -267,11 +267,11 @@ impl ForceView {
                                 .debug_selector(move || format!("agenda-month-day-{date}"))
                                 .custom(
                                     ButtonCustomVariant::new(cx)
-                                        .color(rgb(0xfafafa).into())
+                                        .color(rgb(if in_month { PAPER } else { CHROME }).into())
                                         .foreground(rgb(INK).into())
                                         .border(transparent_black())
-                                        .hover(rgb(0xf0f0f0).into())
-                                        .active(rgb(0xe9e9e9).into()),
+                                        .hover(rgb(HOVER).into())
+                                        .active(rgb(PRESSED).into()),
                                 )
                                 .size_full()
                                 .p_0()
@@ -319,7 +319,7 @@ impl ForceView {
                     .child(
                         button("agenda-overview-previous")
                             .debug_selector(|| "agenda-overview-previous".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(32.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
                             .tooltip("上个月")
@@ -330,7 +330,7 @@ impl ForceView {
                     .child(
                         button("agenda-overview-next")
                             .debug_selector(|| "agenda-overview-next".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(32.))
                             .icon(control_icon(IconName::ChevronRight, INK))
                             .tooltip("下个月")
@@ -341,7 +341,7 @@ impl ForceView {
                     .child(
                         button("agenda-overview-today")
                             .debug_selector(|| "agenda-overview-today".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .h(px(32.))
                             .child(control_label("今天", INK))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -356,7 +356,7 @@ impl ForceView {
                         header.child(
                             button("agenda-resume-draft")
                                 .debug_selector(|| "agenda-resume-draft".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(32.))
                                 .child(control_label("继续草稿", MUTED))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -369,7 +369,7 @@ impl ForceView {
                         header.child(
                             button("agenda-overview-timer")
                                 .debug_selector(|| "agenda-overview-timer".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(32.))
                                 .tooltip(format!("返回计时：{}", session.title))
                                 .child(control_label("返回计时", INK))
@@ -382,7 +382,7 @@ impl ForceView {
                         header.child(
                             button("agenda-overview-add")
                                 .debug_selector(|| "agenda-overview-add".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(36.))
                                 .px(px(12.))
                                 .unavailable(self.storage_failed)
@@ -546,7 +546,7 @@ impl ForceView {
                     .child(
                         button("agenda-month-previous")
                             .debug_selector(|| "agenda-month-previous".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
                             .tooltip("上个月")
@@ -558,7 +558,7 @@ impl ForceView {
                     .child(
                         button("agenda-month-next")
                             .debug_selector(|| "agenda-month-next".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronRight, INK))
                             .tooltip("下个月")
@@ -587,7 +587,7 @@ impl ForceView {
             .child(
                 button("agenda-today")
                     .debug_selector(|| "agenda-today".into())
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .w_full()
                     .h(px(32.))
                     .mt(px(8.))
@@ -620,7 +620,7 @@ impl ForceView {
                         let id = task.id;
                         button(("agenda-pending", id as u64))
                             .debug_selector(move || format!("agenda-pending-{id}"))
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .w_full()
                             .h(px(40.))
                             .px(px(6.))
@@ -743,7 +743,7 @@ impl ForceView {
                         )
                         .child(
                             button("agenda-live-detail")
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(28.))
                                 .w_full()
                                 .child(control_label("查看计时", MUTED))
@@ -758,7 +758,7 @@ impl ForceView {
                 brief.child(
                     button("agenda-next-plan")
                         .debug_selector(|| "agenda-next-plan".into())
-                        .ghost()
+                        .custom(crate::view::quiet_variant(cx))
                         .overflow_hidden()
                         .w_full()
                         .h(px(70.))
@@ -852,7 +852,7 @@ impl ForceView {
                     .child(
                         button("agenda-back-to-month")
                             .debug_selector(|| "agenda-back-to-month".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .h(px(32.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
                             .child(control_label("月历", INK))
@@ -874,7 +874,7 @@ impl ForceView {
                     )
                     .child(
                         button("agenda-day-previous")
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronLeft, MUTED))
                             .tooltip("前一天")
@@ -887,7 +887,7 @@ impl ForceView {
                     )
                     .child(
                         button("agenda-day-next")
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronRight, MUTED))
                             .tooltip("后一天")
@@ -902,7 +902,7 @@ impl ForceView {
                     .child(
                         button("agenda-add")
                             .debug_selector(|| "agenda-add".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .h(px(36.))
                             .px(px(12.))
                             .unavailable(self.storage_failed)
@@ -1156,7 +1156,7 @@ impl ForceView {
             .px(px(3.))
             .child(
                 button(("agenda-event", index))
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .debug_selector(move || match target {
                         CalendarTarget::Plan(id) => format!("agenda-plan-{id}"),
                         CalendarTarget::Record(id) => format!("agenda-record-{id}"),
@@ -1553,7 +1553,7 @@ impl ForceView {
                         .child(
                             button("agenda-plan-edit")
                                 .debug_selector(|| "agenda-plan-edit".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(36.))
                                 .unavailable(self.storage_failed)
                                 .child(control_label("编辑", MUTED))
@@ -1565,7 +1565,7 @@ impl ForceView {
                     .child(
                         button("agenda-plan-delete")
                             .debug_selector(|| "agenda-plan-delete".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(36.))
                             .unavailable(self.storage_failed)
                             .icon(control_icon(
@@ -1583,7 +1583,7 @@ impl ForceView {
                         row.child(
                             button("agenda-plan-tomorrow")
                                 .debug_selector(|| "agenda-plan-tomorrow".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(36.))
                                 .unavailable(self.storage_failed)
                                 .child(control_label("移到明天", MUTED))

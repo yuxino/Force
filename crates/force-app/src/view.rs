@@ -16,9 +16,15 @@ use crate::{
 
 pub(crate) const INK: u32 = 0x141414;
 pub(crate) const MUTED: u32 = 0x626262;
-pub(crate) const LINE: u32 = 0xe3e3e3;
-pub(crate) const PAPER: u32 = 0xfafafa;
-pub(crate) const SURFACE: u32 = 0xf0f0f0;
+// Surface and interaction roles are deliberately separate: a divider should
+// not look like an input border, and selection should not resemble disabled UI.
+pub(crate) const LINE: u32 = 0xe8e8e8;
+pub(crate) const CONTROL_LINE: u32 = 0xc9c9c9;
+pub(crate) const PAPER: u32 = 0xffffff;
+pub(crate) const CHROME: u32 = 0xfafafa;
+pub(crate) const SURFACE: u32 = 0xf7f7f7;
+pub(crate) const HOVER: u32 = 0xf2f2f2;
+pub(crate) const PRESSED: u32 = 0xe7e7e7;
 pub(crate) const DESTRUCTIVE: u32 = 0x963f3f;
 
 pub(crate) const TASK_SIDEBAR_WIDTH: f32 = 240.;
@@ -63,7 +69,7 @@ impl ForceView {
                         .text_color(rgb(MUTED)),
                 )
                 .child(
-                    button("return-current-timer")
+                    outlined_button("return-current-timer")
                         .debug_selector(|| "return-current-timer".into())
                         .h(px(32.))
                         .flex_shrink_0()
@@ -87,6 +93,7 @@ impl ForceView {
     fn panel_navigation(&self, cx: &mut Context<Self>) -> Div {
         div()
             .debug_selector(|| "manager-header".into())
+            .bg(rgb(CHROME))
             .h(px(68.))
             .flex_shrink_0()
             .border_b_1()
@@ -142,7 +149,7 @@ impl ForceView {
                     .child(div().flex_1())
                     .child(
                         button("global-new-task")
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .debug_selector(|| "global-new-task".into())
                             .h(px(32.))
                             .px(px(12.))
@@ -200,7 +207,7 @@ impl ForceView {
             )
             .child(
                 button("dismiss-feedback")
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .size(px(24.))
                     .icon(control_icon(IconName::Close, MUTED))
                     .tooltip("关闭提示")
@@ -261,7 +268,7 @@ impl ForceView {
                                 row.child(
                                     button("export-records")
                                         .debug_selector(|| "export-records".into())
-                                        .ghost()
+                                        .custom(crate::view::quiet_variant(cx))
                                         .h(px(36.))
                                         .icon(control_icon(
                                             Icon::new(IconName::ArrowDown).size(px(14.)),
@@ -276,7 +283,9 @@ impl ForceView {
                                             },
                                             MUTED,
                                         ))
-                                        .on_click(cx.listener(|this, _, _, cx| this.export(cx))),
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.export(window, cx)
+                                        })),
                                 )
                             }),
                     )
@@ -356,15 +365,8 @@ pub(crate) fn choice_button(
             } else {
                 rgba(0x00000000).into()
             })
-            .hover(
-                rgb(if selected && selected_surface == PAPER {
-                    0xf7f7f7
-                } else {
-                    0xe9e9e9
-                })
-                .into(),
-            )
-            .active(rgb(0xdcdcdc).into()),
+            .hover(rgb(HOVER).into())
+            .active(rgb(PRESSED).into()),
     )
 }
 
@@ -388,12 +390,45 @@ pub(crate) fn underline_button(
                 } else {
                     rgba(0x00000000).into()
                 })
-                .hover(rgb(SURFACE).into())
-                .active(rgb(0xe9e9e9).into()),
+                .hover(rgb(HOVER).into())
+                .active(rgb(PRESSED).into()),
         )
         .rounded(px(0.))
         .border_0()
         .border_b_2()
+}
+
+pub(crate) fn quiet_variant(cx: &App) -> ButtonCustomVariant {
+    // The library's Ghost darkens the base by a fixed amount, independently of
+    // secondary_hover. Use the same hover/press roles on every quiet action.
+    ButtonCustomVariant::new(cx)
+        .color(rgba(0x00000000).into())
+        .foreground(rgb(INK).into())
+        .border(rgba(0x00000000).into())
+        .hover(rgb(HOVER).into())
+        .active(rgb(PRESSED).into())
+}
+
+pub(crate) fn outlined_button(id: impl Into<ElementId>) -> Button {
+    // Keep the library's pointer/focus behavior, without its default shadow.
+    button(id).outline().shadow(Vec::new())
+}
+
+pub(crate) fn selection_button(id: impl Into<ElementId>, selected: bool, cx: &App) -> Button {
+    button(id)
+        .custom(
+            ButtonCustomVariant::new(cx)
+                .color(rgb(PAPER).into())
+                .foreground(rgb(if selected { INK } else { MUTED }).into())
+                .border(if selected {
+                    rgb(INK).into()
+                } else {
+                    rgba(0x00000000).into()
+                })
+                .hover(rgb(HOVER).into())
+                .active(rgb(PRESSED).into()),
+        )
+        .when(selected, |button| button.font_weight(FontWeight::MEDIUM))
 }
 
 pub(crate) fn primary_button(id: impl Into<ElementId>) -> Button {
@@ -446,7 +481,7 @@ pub(crate) fn action_icon(name: &str) -> Icon {
 }
 pub(crate) fn page_heading(title: &str) -> Div {
     div()
-        .text_size(px(28.))
+        .text_size(px(26.))
         .line_height(relative(1.2))
         .font_weight(FontWeight::SEMIBOLD)
         .child(title.to_owned())

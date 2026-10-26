@@ -10,7 +10,7 @@ use crate::{
     model::ForceView,
     view::{
         ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, button, control_icon, control_label,
-        field, field_label, section_heading,
+        field, field_label, outlined_button, section_heading,
     },
 };
 
@@ -19,10 +19,10 @@ impl ForceView {
         div()
             .debug_selector(|| "settings-column".into())
             .w_full()
-            .max_w(px(640.))
+            .max_w(px(560.))
             .flex()
             .flex_col()
-            .gap(px(24.))
+            .gap(px(20.))
             .when_some(self.timer_context(cx), |body, context| {
                 body.child(context.pb_0().border_b_0())
             })
@@ -40,7 +40,7 @@ impl ForceView {
                             .child(
                                 button("pin-strip")
                                     .debug_selector(|| "settings-pin".into())
-                                    .ghost()
+                                    .custom(crate::view::quiet_variant(cx))
                                     .h(px(40.))
                                     .px(px(8.))
                                     .unavailable(!cfg!(any(
@@ -86,7 +86,7 @@ impl ForceView {
                             .child(
                                 button("completion-sound")
                                     .debug_selector(|| "settings-sound".into())
-                                    .ghost()
+                                    .custom(crate::view::quiet_variant(cx))
                                     .h(px(40.))
                                     .px(px(8.))
                                     .unavailable(!cfg!(any(
@@ -150,12 +150,15 @@ impl ForceView {
                                 .gap(px(8.))
                                 .pb(px(8.))
                                 .child(
-                                    button("save-goal")
+                                    outlined_button("save-goal")
                                         .debug_selector(|| "save-goal".into())
                                         .h(px(40.))
                                         .w(px(72.))
                                         .px(px(12.))
-                                        .child(control_label("保存", INK))
+                                        .child(control_label(
+                                            "保存",
+                                            if self.can_save_goal(cx) { INK } else { MUTED },
+                                        ))
                                         .unavailable(!self.can_save_goal(cx))
                                         .on_click(cx.listener(|this, _, window, cx| {
                                             this.save_goal(cx);
@@ -166,7 +169,7 @@ impl ForceView {
                                 .child(
                                     button("reset-goal")
                                         .debug_selector(|| "reset-goal".into())
-                                        .ghost()
+                                        .custom(crate::view::quiet_variant(cx))
                                         .h(px(40.))
                                         .w(px(56.))
                                         .px(px(8.))
@@ -208,7 +211,7 @@ impl ForceView {
                             .when(self.tags.is_empty(), |list| {
                                 list.child(
                                     div()
-                                        .h(px(44.))
+                                        .h(px(40.))
                                         .flex()
                                         .items_center()
                                         .text_size(px(14.))
@@ -228,7 +231,7 @@ impl ForceView {
                                             format!("tag-row-{id}")
                                         }
                                     })
-                                    .h(px(44.))
+                                    .h(px(40.))
                                     .flex_shrink_0()
                                     .when(editing, |row| row.bg(rgb(SURFACE)))
                                     .flex()
@@ -258,7 +261,7 @@ impl ForceView {
                                     .child(
                                         button(("edit-tag", id as u64))
                                             .debug_selector(move || format!("edit-tag-{id}"))
-                                            .ghost()
+                                            .custom(crate::view::quiet_variant(cx))
                                             .size(px(32.))
                                             .icon(control_icon(
                                                 Icon::default()
@@ -273,7 +276,7 @@ impl ForceView {
                                     )
                                     .child(
                                         button(("remove-tag", id as u64))
-                                            .ghost()
+                                            .custom(crate::view::quiet_variant(cx))
                                             .size(px(32.))
                                             .icon(control_icon(
                                                 Icon::default()
@@ -317,7 +320,7 @@ impl ForceView {
                                             )),
                                     )
                                     .child(
-                                        button("save-tag")
+                                        outlined_button("save-tag")
                                             .debug_selector(|| "save-tag".into())
                                             .h(px(40.))
                                             .w(px(64.))
@@ -329,7 +332,7 @@ impl ForceView {
                                                 } else {
                                                     "添加"
                                                 },
-                                                INK,
+                                                if self.can_save_tag(cx) { INK } else { MUTED },
                                             ))
                                             .on_click(cx.listener(|this, _, window, cx| {
                                                 if this.editing_tag.is_none() {
@@ -342,7 +345,7 @@ impl ForceView {
                                         row.child(
                                             button("cancel-tag-edit")
                                                 .debug_selector(|| "cancel-tag-edit".into())
-                                                .ghost()
+                                                .custom(crate::view::quiet_variant(cx))
                                                 .h(px(40.))
                                                 .w(px(56.))
                                                 .px(px(8.))
@@ -366,7 +369,7 @@ impl ForceView {
             ))
             .child(
                 div()
-                    .pt(px(20.))
+                    .pt(px(16.))
                     .border_t_1()
                     .border_color(rgb(LINE))
                     .flex()
@@ -377,7 +380,9 @@ impl ForceView {
                             .w_full()
                             .flex()
                             .items_center()
-                            .justify_between()
+                            .flex_col()
+                            .items_start()
+                            .gap(px(4.))
                             .child(
                                 div()
                                     .flex()
@@ -398,7 +403,7 @@ impl ForceView {
                                     .child(
                                         button("check-updates")
                                             .debug_selector(|| "settings-update".into())
-                                            .ghost()
+                                            .custom(crate::view::quiet_variant(cx))
                                             .h(px(36.))
                                             .unavailable(
                                                 self.update_state
@@ -419,18 +424,18 @@ impl ForceView {
                                     .gap(px(8.))
                                     .child(
                                         button("data-folder")
-                                            .ghost()
+                                            .custom(crate::view::quiet_variant(cx))
                                             .h(px(36.))
-                                            .child(control_label("数据文件夹", MUTED))
+                                            .child(control_label("打开数据文件夹", MUTED))
                                             .on_click(cx.listener(|this, _, _, cx| {
                                                 cx.reveal_path(&this.data_dir)
                                             })),
                                     )
                                     .child(
                                         button("quit-force")
-                                            .ghost()
+                                            .custom(crate::view::quiet_variant(cx))
                                             .h(px(36.))
-                                            .child(control_label("退出应用", MUTED))
+                                            .child(control_label("退出 Force", MUTED))
                                             .on_click(cx.listener(|_, _, _, cx| cx.quit())),
                                     ),
                             ),
@@ -451,7 +456,7 @@ impl ForceView {
 fn settings_section(title: &'static str, content: impl IntoElement) -> Div {
     div()
         .w_full()
-        .pt(px(20.))
+        .pt(px(16.))
         .border_t_1()
         .border_color(rgb(LINE))
         .flex()
@@ -463,8 +468,8 @@ fn settings_section(title: &'static str, content: impl IntoElement) -> Div {
 
 fn settings_row() -> Div {
     div()
-        .min_h(px(56.))
-        .py(px(8.))
+        .min_h(px(48.))
+        .py(px(4.))
         .flex()
         .items_center()
         .gap(px(10.))

@@ -2658,7 +2658,7 @@ fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut Te
     let mut manager = ManagerHarness::new(cx, 780., 620.);
     manager.click("settings-tab");
     let height = manager.bounds("tag-row-1").size.height;
-    assert_eq!(height, px(44.));
+    assert_eq!(height, px(40.));
     manager.click("edit-tag-1");
     assert_eq!(manager.bounds("editing-tag-row-1").size.height, height);
     // TestPlatform drops native frame callbacks, so ScrollAnchor's deferred
@@ -2762,4 +2762,27 @@ fn headless_ui_update_status_and_download_action_fit_small_settings(cx: &mut Tes
             manager.bounds("manager-content"),
         );
     }
+}
+
+#[gpui::test]
+fn headless_ui_export_cancel_restores_input_focus_and_keeps_the_record_filter(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Records);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.record_search.update(cx, |input, cx| {
+            input.set_value("Keep", window, cx);
+            input.focus(window, cx);
+        });
+        view.export(window, cx);
+    });
+    manager.cx.run_until_parked();
+    manager.cx.simulate_new_path_selection(|_| None);
+    manager.cx.run_until_parked();
+    manager.cx.simulate_input(" typing");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(!view.export_busy);
+        assert!(matches!(view.page, Page::Records));
+        assert_eq!(view.record_search.read(cx).value(), "Keep typing");
+    });
 }
