@@ -49,7 +49,7 @@ impl UpdateState {
             Self::Available { download: None, .. } => {
                 Some("发现新版本，当前系统的安装包尚未就绪。")
             }
-            Self::Failed => Some("暂时无法连接 GitHub，请检查网络后重试。"),
+            Self::Failed => Some("暂时无法检查更新，请稍后重试。"),
             _ => None,
         }
     }

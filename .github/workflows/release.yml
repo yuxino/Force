@@ -82,7 +82,9 @@ jobs:
           $bundle = 'build/windows/Force'
           New-Item -ItemType Directory -Force $bundle | Out-Null
           Copy-Item "target/$env:CARGO_BUILD_TARGET/release/force.exe" "$bundle/Force.exe"
-          if ((& "$bundle/Force.exe" --version) -ne "Force $version") { throw 'Executable version mismatch' }
+          $expected = [Version]$version
+          $metadata = [System.Diagnostics.FileVersionInfo]::GetVersionInfo((Resolve-Path "$bundle/Force.exe"))
+          if ($metadata.ProductMajorPart -ne $expected.Major -or $metadata.ProductMinorPart -ne $expected.Minor -or $metadata.ProductBuildPart -ne $expected.Build) { throw 'Executable version mismatch' }
           Copy-Item LICENSE $bundle
           New-Item -ItemType Directory -Force build/release | Out-Null
           Compress-Archive -Path $bundle -DestinationPath "build/release/Force-v$version-windows-x86_64.zip" -Force
@@ -134,7 +136,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+          if gh release view "$RELEASE_TAG" --json isDraft --jq '.isDraft' > build/release-state; then
+            test "$(cat build/release-state)" = true || { echo 'This version is already published; leave its assets unchanged.' >&2; exit 1; }
+          else
             gh release create "$RELEASE_TAG" --verify-tag --draft --title "Force $RELEASE_TAG" --notes-file "docs/releases/$RELEASE_TAG.md"
           fi
           gh release upload "$RELEASE_TAG" build/release/* --clobber
