@@ -1,8 +1,8 @@
 use force_core::TagKind;
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Disableable, Icon, IconName, Sizable, button::ButtonVariants, scroll::ScrollableElement,
-    switch::Switch, tooltip::Tooltip,
+    Disableable, Icon, Sizable, button::ButtonVariants, scroll::ScrollableElement, switch::Switch,
+    tooltip::Tooltip,
 };
 
 use crate::{
@@ -351,22 +351,6 @@ impl ForceView {
                             }),
                     ),
             ))
-            .child(settings_section(
-                "本地数据",
-                div()
-                    .min_h(px(56.))
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(
-                        button("data-folder")
-                            .h(px(40.))
-                            .px(px(14.))
-                            .icon(control_icon(IconName::FolderOpen, INK))
-                            .child(control_label("数据文件夹", INK))
-                            .on_click(cx.listener(|this, _, _, cx| cx.reveal_path(&this.data_dir))),
-                    ),
-            ))
             .child(
                 div()
                     .pt(px(20.))
@@ -394,11 +378,28 @@ impl ForceView {
                             ),
                     )
                     .child(
-                        button("quit-force")
-                            .ghost()
-                            .h(px(36.))
-                            .child(control_label("退出 Force", MUTED))
-                            .on_click(cx.listener(|_, _, _, cx| cx.quit())),
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(8.))
+                            .child(
+                                button("data-folder")
+                                    .ghost()
+                                    .h(px(36.))
+                                    .child(control_label("打开数据文件夹", MUTED))
+                                    .on_click(
+                                        cx.listener(|this, _, _, cx| {
+                                            cx.reveal_path(&this.data_dir)
+                                        }),
+                                    ),
+                            )
+                            .child(
+                                button("quit-force")
+                                    .ghost()
+                                    .h(px(36.))
+                                    .child(control_label("退出 Force", MUTED))
+                                    .on_click(cx.listener(|_, _, _, cx| cx.quit())),
+                            ),
                     ),
             )
     }
