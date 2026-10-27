@@ -63,8 +63,14 @@ impl AssetSource for Assets {
             ))));
         }
         let custom: Option<&'static [u8]> = match path {
-            "force-cat-eyes.svg" => Some(include_bytes!("../../../assets/cat-eyes.svg")),
-            "force-cat-clock.svg" => Some(include_bytes!("../../../assets/cat-clock.svg")),
+            "force-cat-side-eyes.svg" => Some(include_bytes!("../../../assets/cat-eyes.svg")),
+            "force-cat-side-clock.svg" => Some(include_bytes!("../../../assets/cat-clock.svg")),
+            "force-cat-side-expanded-clock.svg" => Some(include_bytes!(
+                "../../../assets/cat-side-expanded-clock.svg"
+            )),
+            "force-cat-side-expanded-clock-outline.svg" => Some(include_bytes!(
+                "../../../assets/cat-side-expanded-clock-outline.svg"
+            )),
             "force-wordmark.svg" => Some(include_bytes!("../../../assets/wordmark.svg")),
             "force-icons/trash.svg" => Some(include_bytes!("../../../assets/icons/trash.svg")),
             "force-icons/pencil.svg" => Some(include_bytes!("../../../assets/icons/pencil.svg")),
