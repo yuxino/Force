@@ -805,6 +805,35 @@ fn headless_ui_activity_days_fit_and_select_records_without_resetting_scroll(
 }
 
 #[gpui::test]
+fn headless_ui_record_details_show_the_full_saved_tag(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Records);
+        let tag_name = "需要完整显示的很长很长的专注标签用于检查记录详情中的文字换行";
+        manager.view.update(&mut manager.cx, |view, cx| {
+            let now = view.now;
+            let store = view.store.as_mut().unwrap();
+            let tag = store
+                .create_tag(tag_name, force_core::TagKind::Focus)
+                .unwrap();
+            let session = store.start("A recorded task", tag.id, now - 100).unwrap();
+            store.finish(session.id, now - 50).unwrap();
+            // Finished records retain the tag name they had at the time.
+            store.rename_tag(tag.id, "新名称").unwrap();
+            view.refresh(cx);
+            assert_eq!(view.history[0].tag_name, tag_name);
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.scroll("records-content", -500.);
+        manager.click("record-details-1");
+        let row = manager.bounds("record-row-1");
+        let tag = manager.bounds("record-detail-tag-1");
+        assert_horizontally_inside(tag, row);
+        assert!(tag.size.width > px(0.) && tag.size.height > px(0.));
+    }
+}
+
+#[gpui::test]
 fn headless_ui_global_new_task_is_available_without_scheduling_and_preserves_its_draft(
     cx: &mut TestAppContext,
 ) {

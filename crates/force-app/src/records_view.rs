@@ -197,7 +197,7 @@ impl ForceView {
         let (start, end) = day_bounds(self.record_date);
         let day_seconds = session.elapsed_between(start, end, self.now);
         let total_seconds = session.elapsed_at(self.now);
-        let metadata = if session.title == session.tag_name {
+        let metadata = if expanded || session.title == session.tag_name {
             session_times(session)
         } else {
             format!("{} · {}", session_times(session), session.tag_name)
@@ -233,6 +233,7 @@ impl ForceView {
                             .gap(px(8.))
                             .child(
                                 choice_button(("record-details", id as u64), expanded, SURFACE, cx)
+                                    .debug_selector(move || format!("record-details-{id}"))
                                     .size(px(28.))
                                     .flex_shrink_0()
                                     .icon(control_icon(
@@ -384,6 +385,10 @@ impl ForceView {
                         .flex()
                         .flex_col()
                         .gap(px(8.))
+                        .child(
+                            record_detail("标签", session.tag_name.clone())
+                                .debug_selector(move || format!("record-detail-tag-{id}")),
+                        )
                         .when(session.paused_at(self.now) > 0, |body| {
                             body.child(record_detail("暂停", clock(session.paused_at(self.now))))
                         })

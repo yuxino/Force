@@ -41,6 +41,16 @@ pub(crate) enum TaskDestination {
     AgendaPlan(i64),
 }
 
+#[derive(Clone)]
+struct UntitledTaskDraft {
+    title: String,
+    tag: i64,
+    tag_baseline: i64,
+    countdown: bool,
+    timer_value: String,
+    timer_minutes: u32,
+}
+
 #[derive(Clone, Copy)]
 enum TagDestination {
     Edit(i64),
@@ -74,6 +84,10 @@ pub(crate) struct ForceView {
     pub(crate) manager_window: Option<WindowHandle<Root>>,
     pub(crate) strip_window: Option<WindowHandle<Root>>,
     pub(crate) preparing: bool,
+    untitled_tag_baseline: i64,
+    suspended_untitled_task: Option<UntitledTaskDraft>,
+    discarding_untitled_task: bool,
+    restored_tag_needs_reselection: bool,
     pub(crate) pinned: bool,
     pub(crate) task_input: Entity<InputState>,
     pub(crate) tag_input: Entity<InputState>,
@@ -123,6 +137,7 @@ impl ForceView {
                     .any(|tag| tag.id == id && tag.kind == TagKind::Focus)
                 {
                     this.selected_tag = id;
+                    this.restored_tag_needs_reselection = false;
                     cx.notify();
                 } else {
                     this.notify("这个计时标签已变更，请重新选择。", cx);
@@ -260,6 +275,10 @@ impl ForceView {
             manager_window: None,
             strip_window: None,
             preparing: false,
+            untitled_tag_baseline: 0,
+            suspended_untitled_task: None,
+            discarding_untitled_task: false,
+            restored_tag_needs_reselection: false,
             pinned: cfg!(any(target_os = "macos", target_os = "windows")),
             task_input,
             tag_input,
@@ -304,6 +323,7 @@ impl ForceView {
             Err(_) => view.notify("无法读取上次选择的计时，将显示可用计时。", cx),
         }
         view.open_store(cx);
+        view.untitled_tag_baseline = view.selected_tag;
         if view
             .active
             .iter()
@@ -514,7 +534,8 @@ impl ForceView {
                 self.record_stats = record_stats;
                 self.activity_days = activity_days;
                 self.storage_failed = false;
-                let preserve_task_tag = self.preparing && self.selected_task.is_some();
+                let preserve_task_tag = self.preparing
+                    && (self.selected_task.is_some() || self.restored_tag_needs_reselection);
                 let selected_tag_available = self.tags.iter().any(|tag| {
                     tag.id == self.selected_tag && (!self.preparing || tag.kind == TagKind::Focus)
                 });
@@ -679,6 +700,34 @@ impl ForceView {
 
     pub(crate) fn is_new_task_form(&self) -> bool {
         self.preparing && self.selected_task.is_none() && self.completed.is_none()
+    }
+
+    /// Keep an unfinished, untitled setup if a different task takes over the form.
+    /// Valid settings such as 37 minutes are drafts too, not a request to save
+    /// a nameless task. Restoring the draft consumes it exactly once.
+    fn suspend_untitled_task(&mut self, cx: &gpui::App) {
+        if self.discarding_untitled_task || !self.is_new_task_form() {
+            return;
+        }
+        let title = self.task_input.read(cx).value().to_string();
+        if !title.trim().is_empty() {
+            return;
+        }
+        let timer_value = self.timer_input.read(cx).value().to_string();
+        let changed = !title.is_empty()
+            || self.selected_tag != self.untitled_tag_baseline
+            || !self.countdown
+            || parse_goal_draft(&timer_value) != Some(25);
+        if changed {
+            self.suspended_untitled_task = Some(UntitledTaskDraft {
+                title,
+                tag: self.selected_tag,
+                tag_baseline: self.untitled_tag_baseline,
+                countdown: self.countdown,
+                timer_value,
+                timer_minutes: self.timer_minutes,
+            });
+        }
     }
 
     pub(crate) fn timer_duration_error(&self, cx: &gpui::App) -> Option<&'static str> {
@@ -901,6 +950,9 @@ impl ForceView {
                             this.task_input
                                 .update(cx, |input, cx| input.set_value("", window, cx));
                         }
+                        // A named new draft was explicitly discarded. Do not
+                        // reinterpret its leftover timing as an untitled draft.
+                        this.discarding_untitled_task = choice == 1 && selected.is_none();
                         match destination {
                             TaskDestination::New => this.new_task(window, cx),
                             TaskDestination::Task(id) => this.select_task(id, window, cx),
@@ -910,6 +962,7 @@ impl ForceView {
                                 this.start_plan_timer(id, window, cx)
                             }
                         }
+                        this.discarding_untitled_task = false;
                     });
                 });
             }
@@ -997,6 +1050,8 @@ impl ForceView {
             self.return_task = session.task_id;
             self.return_target_seconds = session.target_seconds;
         }
+        self.suspend_untitled_task(cx);
+        self.restored_tag_needs_reselection = false;
         self.preparing = false;
         self.apply_session_selection(&session);
         self.reset_focus_scroll();
@@ -1104,6 +1159,8 @@ impl ForceView {
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
+        self.suspend_untitled_task(cx);
+        self.restored_tag_needs_reselection = false;
         self.preparing = false;
         self.completed = None;
         self.page = Page::Focus;
@@ -1126,6 +1183,8 @@ impl ForceView {
             self.notify("这件事已变更，请刷新后重试。", cx);
             return;
         };
+        self.suspend_untitled_task(cx);
+        self.restored_tag_needs_reselection = false;
         self.editing_duration = None;
         self.selected_task = Some(id);
         self.selected_tag = task.tag_id;
@@ -1177,10 +1236,14 @@ impl ForceView {
         self.selected_session = None;
         self.completed = None;
         self.page = Page::Focus;
-        self.countdown = true;
-        self.timer_minutes = 25;
+        let suspended = self.suspended_untitled_task.take();
+        self.countdown = suspended.as_ref().is_none_or(|draft| draft.countdown);
+        self.timer_minutes = suspended.as_ref().map_or(25, |draft| draft.timer_minutes);
+        let timer_value = suspended
+            .as_ref()
+            .map_or_else(|| "25".to_owned(), |draft| draft.timer_value.clone());
         self.timer_input
-            .update(cx, |input, cx| input.set_value("25", window, cx));
+            .update(cx, |input, cx| input.set_value(timer_value, window, cx));
         self.editing_duration = None;
         if !self
             .tags
@@ -1193,8 +1256,29 @@ impl ForceView {
                 .find(|tag| tag.kind == TagKind::Focus)
                 .map_or(0, |tag| tag.id);
         }
+        self.restored_tag_needs_reselection = false;
+        if let Some(draft) = &suspended {
+            self.selected_tag = draft.tag;
+            self.untitled_tag_baseline = draft.tag_baseline;
+            if !self
+                .tags
+                .iter()
+                .any(|tag| tag.id == draft.tag && tag.kind == TagKind::Focus)
+            {
+                self.restored_tag_needs_reselection = true;
+                self.notify("原标签已不可用，请重新选择标签。", cx);
+            }
+        } else {
+            self.untitled_tag_baseline = self.selected_tag;
+        }
         self.task_input.update(cx, |input, cx| {
-            input.set_value("", window, cx);
+            input.set_value(
+                suspended
+                    .as_ref()
+                    .map_or_else(String::new, |draft| draft.title.clone()),
+                window,
+                cx,
+            );
             input.focus(window, cx);
         });
         self.set_expanded(true, window, cx);
@@ -1614,6 +1698,7 @@ impl ForceView {
                 && let Some(id) = created_id
             {
                 self.selected_tag = id;
+                self.restored_tag_needs_reselection = false;
             }
             self.cancel_tag_edit(window, cx);
             self.notify(
