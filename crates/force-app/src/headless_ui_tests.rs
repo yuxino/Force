@@ -1793,14 +1793,38 @@ fn headless_ui_record_class_filter_changes_only_the_list(cx: &mut TestAppContext
         });
         manager.click("records-tab");
         manager.scroll("records-content", -500.);
-        assert!(manager.cx.debug_bounds("record-title-1").is_some());
-        assert!(manager.cx.debug_bounds("record-title-2").is_some());
+        assert!(manager.cx.debug_bounds("record-visible-all-1").is_some());
+        assert!(manager.cx.debug_bounds("record-visible-all-2").is_some());
         let total_before = manager
             .view
             .read_with(&manager.cx, |view, _| view.record_stats.focus_seconds);
         manager.click("record-filter-positive");
-        assert!(manager.cx.debug_bounds("record-title-1").is_some());
-        assert!(manager.cx.debug_bounds("record-title-2").is_none());
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(
+                view.record_class_filter,
+                Some(force_core::TagClass::Positive)
+            );
+            assert_eq!(
+                view.history.iter().find(|s| s.id == 1).unwrap().tag_class,
+                force_core::TagClass::Positive
+            );
+            assert_eq!(
+                view.history.iter().find(|s| s.id == 2).unwrap().tag_class,
+                force_core::TagClass::Leisure
+            );
+        });
+        assert!(
+            manager
+                .cx
+                .debug_bounds("record-visible-positive-1")
+                .is_some()
+        );
+        assert!(
+            manager
+                .cx
+                .debug_bounds("record-visible-positive-2")
+                .is_none()
+        );
         assert_eq!(
             manager
                 .view
@@ -1808,7 +1832,7 @@ fn headless_ui_record_class_filter_changes_only_the_list(cx: &mut TestAppContext
             total_before
         );
         manager.click("record-filter-all");
-        assert!(manager.cx.debug_bounds("record-title-2").is_some());
+        assert!(manager.cx.debug_bounds("record-visible-all-2").is_some());
         manager.click("record-filter-negative");
         assert!(manager.cx.debug_bounds("record-empty-state").is_some());
         let previous_date = manager
@@ -3044,6 +3068,8 @@ fn headless_ui_adding_a_tag_does_not_retag_a_saved_task(cx: &mut TestAppContext)
     });
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
+    // The extended tag form continues below the visible settings viewport.
+    manager.scroll("manager-content", -500.);
     manager.click("save-tag");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert!(view.tags.iter().any(|tag| tag.name == "Additional tag"));

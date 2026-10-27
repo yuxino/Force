@@ -220,6 +220,9 @@ impl ForceView {
 
     fn record_row(&self, session: &Session, cx: &mut Context<Self>) -> Div {
         let id = session.id;
+        let filter_key = self
+            .record_class_filter
+            .map_or("all", crate::settings_view::tag_class_key);
         let expanded = self.record_details == Some(id);
         let help_title = session.title.clone();
         let (start, end) = day_bounds(self.record_date);
@@ -315,6 +318,9 @@ impl ForceView {
                                     })
                                     .child(
                                         div()
+                                            .debug_selector(move || {
+                                                format!("record-visible-{filter_key}-{id}")
+                                            })
                                             .mt(px(5.))
                                             .flex()
                                             .items_center()

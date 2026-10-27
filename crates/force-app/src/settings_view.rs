@@ -622,7 +622,7 @@ pub(crate) fn tag_class_label(class: TagClass) -> &'static str {
     }
 }
 
-fn tag_class_key(class: TagClass) -> &'static str {
+pub(crate) fn tag_class_key(class: TagClass) -> &'static str {
     match class {
         TagClass::Positive => "positive",
         TagClass::Neutral => "neutral",
