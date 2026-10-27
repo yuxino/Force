@@ -10,17 +10,32 @@ use crate::{
     label::single_line,
     model::{ForceView, Page, day_bounds},
     view::{
-        ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, action_icon, button, choice_button,
-        clock, control_icon, control_label, field_label, primary_button, section_heading,
-        short_time, timer_font,
+        CHROME, ControlState, DESTRUCTIVE, HOVER, INK, LINE, MUTED, PAPER, PRESSED, SURFACE,
+        action_icon, button, choice_button, clock, control_icon, control_label, field_label,
+        primary_button, section_heading, short_time, timer_font,
     },
 };
 
 const MONTH_WIDTH: f32 = 208.;
 const COLUMN_GAP: f32 = 24.;
 const HOUR_HEIGHT: f32 = 60.;
+const HOUR_LABEL_TOP: f32 = 3.;
+const HOUR_LABEL_HEIGHT: f32 = 16.;
+const CURRENT_TIME_LINE_TOP: f32 = 10.;
+const CURRENT_TIME_LABEL_OFFSET: f32 = -8.;
+const CURRENT_TIME_LABEL_HEIGHT: f32 = 16.;
 const TIME_GUTTER: f32 = 46.;
 const MIN_EVENT_HEIGHT: f32 = 28.;
+
+fn hour_label_overlaps_current_time(hour: u32, current_minute: Option<f32>) -> bool {
+    let Some(current_minute) = current_minute else {
+        return false;
+    };
+    let hour_top = hour as f32 * HOUR_HEIGHT + HOUR_LABEL_TOP;
+    let current_top =
+        current_minute / 60. * HOUR_HEIGHT + CURRENT_TIME_LINE_TOP + CURRENT_TIME_LABEL_OFFSET;
+    current_top < hour_top + HOUR_LABEL_HEIGHT && current_top + CURRENT_TIME_LABEL_HEIGHT > hour_top
+}
 
 #[derive(Clone, Copy)]
 enum CalendarTarget {
@@ -267,11 +282,11 @@ impl ForceView {
                                 .debug_selector(move || format!("agenda-month-day-{date}"))
                                 .custom(
                                     ButtonCustomVariant::new(cx)
-                                        .color(rgb(0xfafafa).into())
+                                        .color(rgb(if in_month { PAPER } else { CHROME }).into())
                                         .foreground(rgb(INK).into())
                                         .border(transparent_black())
-                                        .hover(rgb(0xf0f0f0).into())
-                                        .active(rgb(0xe9e9e9).into()),
+                                        .hover(rgb(HOVER).into())
+                                        .active(rgb(PRESSED).into()),
                                 )
                                 .size_full()
                                 .p_0()
@@ -319,7 +334,7 @@ impl ForceView {
                     .child(
                         button("agenda-overview-previous")
                             .debug_selector(|| "agenda-overview-previous".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(32.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
                             .tooltip("上个月")
@@ -330,7 +345,7 @@ impl ForceView {
                     .child(
                         button("agenda-overview-next")
                             .debug_selector(|| "agenda-overview-next".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(32.))
                             .icon(control_icon(IconName::ChevronRight, INK))
                             .tooltip("下个月")
@@ -341,7 +356,7 @@ impl ForceView {
                     .child(
                         button("agenda-overview-today")
                             .debug_selector(|| "agenda-overview-today".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .h(px(32.))
                             .child(control_label("今天", INK))
                             .on_click(cx.listener(|this, _, window, cx| {
@@ -356,7 +371,7 @@ impl ForceView {
                         header.child(
                             button("agenda-resume-draft")
                                 .debug_selector(|| "agenda-resume-draft".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(32.))
                                 .child(control_label("继续草稿", MUTED))
                                 .on_click(cx.listener(|this, _, window, cx| {
@@ -369,7 +384,7 @@ impl ForceView {
                         header.child(
                             button("agenda-overview-timer")
                                 .debug_selector(|| "agenda-overview-timer".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(32.))
                                 .tooltip(format!("返回计时：{}", session.title))
                                 .child(control_label("返回计时", INK))
@@ -382,7 +397,7 @@ impl ForceView {
                         header.child(
                             button("agenda-overview-add")
                                 .debug_selector(|| "agenda-overview-add".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(36.))
                                 .px(px(12.))
                                 .unavailable(self.storage_failed)
@@ -546,7 +561,7 @@ impl ForceView {
                     .child(
                         button("agenda-month-previous")
                             .debug_selector(|| "agenda-month-previous".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
                             .tooltip("上个月")
@@ -558,7 +573,7 @@ impl ForceView {
                     .child(
                         button("agenda-month-next")
                             .debug_selector(|| "agenda-month-next".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronRight, INK))
                             .tooltip("下个月")
@@ -587,7 +602,7 @@ impl ForceView {
             .child(
                 button("agenda-today")
                     .debug_selector(|| "agenda-today".into())
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .w_full()
                     .h(px(32.))
                     .mt(px(8.))
@@ -620,11 +635,12 @@ impl ForceView {
                         let id = task.id;
                         button(("agenda-pending", id as u64))
                             .debug_selector(move || format!("agenda-pending-{id}"))
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .w_full()
                             .h(px(40.))
                             .px(px(6.))
                             .rounded(px(0.))
+                            .border_0()
                             .border_b_1()
                             .border_color(rgb(LINE))
                             .tooltip(format!("安排：{}", task.title))
@@ -743,7 +759,7 @@ impl ForceView {
                         )
                         .child(
                             button("agenda-live-detail")
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(28.))
                                 .w_full()
                                 .child(control_label("查看计时", MUTED))
@@ -758,7 +774,7 @@ impl ForceView {
                 brief.child(
                     button("agenda-next-plan")
                         .debug_selector(|| "agenda-next-plan".into())
-                        .ghost()
+                        .custom(crate::view::quiet_variant(cx))
                         .overflow_hidden()
                         .w_full()
                         .h(px(70.))
@@ -852,7 +868,7 @@ impl ForceView {
                     .child(
                         button("agenda-back-to-month")
                             .debug_selector(|| "agenda-back-to-month".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .h(px(32.))
                             .icon(control_icon(IconName::ChevronLeft, INK))
                             .child(control_label("月历", INK))
@@ -874,7 +890,7 @@ impl ForceView {
                     )
                     .child(
                         button("agenda-day-previous")
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronLeft, MUTED))
                             .tooltip("前一天")
@@ -887,7 +903,7 @@ impl ForceView {
                     )
                     .child(
                         button("agenda-day-next")
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(30.))
                             .icon(control_icon(IconName::ChevronRight, MUTED))
                             .tooltip("后一天")
@@ -902,7 +918,7 @@ impl ForceView {
                     .child(
                         button("agenda-add")
                             .debug_selector(|| "agenda-add".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .h(px(36.))
                             .px(px(12.))
                             .unavailable(self.storage_failed)
@@ -996,6 +1012,11 @@ impl ForceView {
             group_start = group_end;
         }
         let canvas_width = day_width.max(TIME_GUTTER + maximum_lanes as f32 * 140.);
+        let date = self.agenda.date;
+        let now = Local.timestamp_opt(self.now, 0).single();
+        let current_minute = now.filter(|time| time.date_naive() == date).map(|time| {
+            time.hour() as f32 * 60. + time.minute() as f32 + time.second() as f32 / 60.
+        });
         let mut hours = Vec::new();
         for hour in 0..24 {
             hours.push(
@@ -1012,16 +1033,24 @@ impl ForceView {
                     .left_0()
                     .right_0()
                     .h(px(HOUR_HEIGHT))
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(3.))
-                            .left_0()
-                            .w(px(TIME_GUTTER - 8.))
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .text_align(TextAlign::Right)
-                            .child(format!("{hour:02}:00")),
+                    .when(
+                        !hour_label_overlaps_current_time(hour, current_minute),
+                        |slot| {
+                            slot.child(
+                                div()
+                                    .debug_selector(move || format!("agenda-hour-label-{hour}"))
+                                    .absolute()
+                                    .top(px(HOUR_LABEL_TOP))
+                                    .left_0()
+                                    .w(px(TIME_GUTTER - 8.))
+                                    .h(px(HOUR_LABEL_HEIGHT))
+                                    .text_size(px(12.))
+                                    .line_height(px(HOUR_LABEL_HEIGHT))
+                                    .text_color(rgb(MUTED))
+                                    .text_align(TextAlign::Right)
+                                    .child(format!("{hour:02}:00")),
+                            )
+                        },
                     )
                     .child(
                         div()
@@ -1034,11 +1063,6 @@ impl ForceView {
                     ),
             );
         }
-        let date = self.agenda.date;
-        let now = Local.timestamp_opt(self.now, 0).single();
-        let current_minute = now.filter(|time| time.date_naive() == date).map(|time| {
-            time.hour() as f32 * 60. + time.minute() as f32 + time.second() as f32 / 60.
-        });
         div()
             .id("agenda-day-scroll")
             .debug_selector(|| "agenda-day-grid".into())
@@ -1073,7 +1097,7 @@ impl ForceView {
                         grid.child(
                             div()
                                 .absolute()
-                                .top(px(minute / 60. * HOUR_HEIGHT + 10.))
+                                .top(px(minute / 60. * HOUR_HEIGHT + CURRENT_TIME_LINE_TOP))
                                 .left_0()
                                 .right_0()
                                 .h(px(1.))
@@ -1082,12 +1106,14 @@ impl ForceView {
                                     div()
                                         .absolute()
                                         .left_0()
-                                        .top(px(-8.))
+                                        .top(px(CURRENT_TIME_LABEL_OFFSET))
                                         .w(px(TIME_GUTTER))
+                                        .h(px(CURRENT_TIME_LABEL_HEIGHT))
                                         .py(px(2.))
                                         .rounded(px(3.))
                                         .text_center()
                                         .text_size(px(10.))
+                                        .line_height(px(12.))
                                         .bg(rgb(INK))
                                         .text_color(rgb(0xffffff))
                                         .child(minute_label(minute as u16)),
@@ -1156,7 +1182,7 @@ impl ForceView {
             .px(px(3.))
             .child(
                 button(("agenda-event", index))
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .debug_selector(move || match target {
                         CalendarTarget::Plan(id) => format!("agenda-plan-{id}"),
                         CalendarTarget::Record(id) => format!("agenda-record-{id}"),
@@ -1553,7 +1579,7 @@ impl ForceView {
                         .child(
                             button("agenda-plan-edit")
                                 .debug_selector(|| "agenda-plan-edit".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(36.))
                                 .unavailable(self.storage_failed)
                                 .child(control_label("编辑", MUTED))
@@ -1565,7 +1591,7 @@ impl ForceView {
                     .child(
                         button("agenda-plan-delete")
                             .debug_selector(|| "agenda-plan-delete".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(36.))
                             .unavailable(self.storage_failed)
                             .icon(control_icon(
@@ -1583,7 +1609,7 @@ impl ForceView {
                         row.child(
                             button("agenda-plan-tomorrow")
                                 .debug_selector(|| "agenda-plan-tomorrow".into())
-                                .ghost()
+                                .custom(crate::view::quiet_variant(cx))
                                 .h(px(36.))
                                 .unavailable(self.storage_failed)
                                 .child(control_label("移到明天", MUTED))
@@ -1644,4 +1670,28 @@ fn clock_minute(date: NaiveDate, timestamp: i64) -> f32 {
         .map_or(0., |time| {
             time.hour() as f32 * 60. + time.minute() as f32 + time.second() as f32 / 60.
         })
+}
+
+#[cfg(test)]
+mod time_label_tests {
+    use super::hour_label_overlaps_current_time;
+
+    #[test]
+    fn hides_only_hour_labels_overlapped_by_the_current_time_label() {
+        assert!(!hour_label_overlaps_current_time(12, None));
+        assert!(!hour_label_overlaps_current_time(12, Some(11. * 60. + 45.)));
+        assert!(hour_label_overlaps_current_time(
+            12,
+            Some(11. * 60. + 45. + 1. / 60.)
+        ));
+        assert!(hour_label_overlaps_current_time(12, Some(11. * 60. + 52.)));
+        assert!(!hour_label_overlaps_current_time(11, Some(11. * 60. + 52.)));
+        assert!(hour_label_overlaps_current_time(
+            12,
+            Some(12. * 60. + 16. + 59. / 60.)
+        ));
+        assert!(!hour_label_overlaps_current_time(12, Some(12. * 60. + 17.)));
+        assert!(hour_label_overlaps_current_time(0, Some(0.)));
+        assert!(hour_label_overlaps_current_time(23, Some(23. * 60.)));
+    }
 }

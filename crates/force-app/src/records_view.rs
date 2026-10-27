@@ -27,7 +27,7 @@ impl ForceView {
             .child(
                 button("previous-day")
                     .debug_selector(|| "previous-day".into())
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .size(px(32.))
                     .icon(control_icon(IconName::ChevronLeft, INK))
                     .tooltip("前一天")
@@ -47,9 +47,16 @@ impl ForceView {
             .child(
                 button("next-day")
                     .debug_selector(|| "next-day".into())
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .size(px(32.))
-                    .icon(control_icon(IconName::ChevronRight, INK))
+                    .icon(control_icon(
+                        IconName::ChevronRight,
+                        if self.record_date >= Local::now().date_naive() {
+                            MUTED
+                        } else {
+                            INK
+                        },
+                    ))
                     .tooltip("后一天")
                     .unavailable(self.record_date >= Local::now().date_naive())
                     .on_click(cx.listener(|this, _, _, cx| {
@@ -61,7 +68,7 @@ impl ForceView {
             .when(self.record_date != Local::now().date_naive(), |row| {
                 row.child(
                     button("record-today")
-                        .ghost()
+                        .custom(crate::view::quiet_variant(cx))
                         .h(px(32.))
                         .px(px(10.))
                         .child(control_label("今天", INK))
@@ -159,7 +166,7 @@ impl ForceView {
                                         .when(!query.is_empty(), |input| input.suffix(
                                             button("clear-record-search")
                                                 .debug_selector(|| "clear-record-search".into())
-                                                .ghost().size(px(24.))
+                                                .custom(crate::view::quiet_variant(cx)).size(px(24.))
                                                 .icon(control_icon(Icon::new(IconName::Close).size(px(13.)), MUTED))
                                                 .tooltip("清空搜索")
                                                 .on_click(cx.listener(|this, _, window, cx| this.clear_record_search(window, cx))),
@@ -173,9 +180,9 @@ impl ForceView {
                             .text_size(px(14.)).text_color(rgb(MUTED))
                             .child(if query.is_empty() { "当天没有计时记录" } else { "没有匹配的记录" })
                             .when(!query.is_empty(), |row| row.child(
-                                button("clear-empty-record-search")
+                                crate::view::outlined_button("clear-empty-record-search")
                                     .debug_selector(|| "clear-empty-record-search".into())
-                                    .ghost().h(px(32.)).px(px(8.))
+                                    .custom(crate::view::quiet_variant(cx)).h(px(32.)).px(px(8.))
                                     .child(control_label("清空搜索", INK))
                                     .on_click(cx.listener(|this, _, window, cx| this.clear_record_search(window, cx))),
                             )),
@@ -340,7 +347,7 @@ impl ForceView {
                             .when(session.finished_at.is_some(), |actions| {
                                 actions.child(
                                     destructive_button(("delete-record", id as u64))
-                                        .ghost()
+                                        .custom(crate::view::quiet_variant(cx))
                                         .size(px(28.))
                                         .icon(control_icon(
                                             Icon::default()
@@ -356,8 +363,8 @@ impl ForceView {
                             })
                             .when(session.finished_at.is_none(), |actions| {
                                 actions.child(
-                                    button(("open-record-timer", id as u64))
-                                        .ghost()
+                                    crate::view::outlined_button(("open-record-timer", id as u64))
+                                        .custom(crate::view::quiet_variant(cx))
                                         .h(px(32.))
                                         .px(px(8.))
                                         .child(control_label("查看计时", INK))

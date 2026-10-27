@@ -1204,6 +1204,26 @@ impl ForceView {
         preferred_strip_session(&self.active, self.selected_session, self.now)
     }
 
+    /// Open the task already represented by the cat, preserving its draft.
+    pub(crate) fn show_strip_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page == Page::Agenda {
+            self.suspend_agenda_popup(window, cx);
+        }
+        self.page = Page::Focus;
+        self.show_manager(window, cx);
+        if self.preparing && !self.storage_failed {
+            let title_invalid = self.task_input.read(cx).value().trim().is_empty()
+                || self.task_title_error(cx).is_some();
+            if !title_invalid && self.timer_duration_error(cx).is_some() {
+                self.timer_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            } else {
+                self.task_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+        }
+    }
+
     pub(crate) fn strip_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.storage_failed {
             self.page = Page::Focus;
@@ -1789,7 +1809,7 @@ impl ForceView {
         self.toast = None;
     }
 
-    pub(crate) fn export(&mut self, cx: &mut Context<Self>) {
+    pub(crate) fn export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.export_busy {
             return;
         }
@@ -1806,11 +1826,25 @@ impl ForceView {
                     .to_path_buf()
             })
             .unwrap_or_else(|| self.data_dir.clone());
+        let return_focus = window.focused(cx);
         let path = cx.prompt_for_new_path(&default_directory, Some(&suggested));
         let database = self.data_dir.join("force.sqlite3");
         cx.notify();
-        cx.spawn(async move |this, cx| {
-            let selected_path = match path.await {
+        cx.spawn_in(window, async move |this, cx| {
+            let selection = path.await;
+            // App-level save panels can return key status to the independent
+            // floating clock. Return to the originating visible workspace.
+            let _ = cx.update(|window, cx| {
+                let _ = this.update(cx, |this, _| {
+                    if !this.compact {
+                        window.activate_window();
+                        if let Some(focus) = return_focus.as_ref() {
+                            focus.focus(window);
+                        }
+                    }
+                });
+            });
+            let selected_path = match selection {
                 Ok(Ok(Some(path))) => path,
                 Ok(Ok(None)) => {
                     let _ = this.update(cx, |this, cx| {
@@ -2016,6 +2050,8 @@ pub(crate) struct FloatingStrip {
     pub(crate) disclosure_started: Instant,
     pub(crate) disclosure_task: Option<gpui::Task<()>>,
     pub(crate) face_hovered: bool,
+    pub(crate) face_click_serial: u64,
+    pub(crate) face_click_started: Option<Instant>,
     pub(crate) docked: Option<crate::platform::DockEdge>,
     pub(crate) drag_start: Option<gpui::Point<gpui::Pixels>>,
     #[cfg(target_os = "macos")]
@@ -2062,6 +2098,8 @@ impl FloatingStrip {
             disclosure_started: Instant::now(),
             disclosure_task: None,
             face_hovered: false,
+            face_click_serial: 0,
+            face_click_started: None,
             docked: None,
             drag_start: None,
             #[cfg(target_os = "macos")]

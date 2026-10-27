@@ -8,7 +8,7 @@ use gpui_component::{
 
 use crate::{
     label::single_line,
-    view::{INK, LINE, SURFACE},
+    view::{CONTROL_LINE, HOVER, INK, PRESSED},
 };
 
 const WIDTH: f32 = 220.;
@@ -226,14 +226,14 @@ impl Render for TagPicker {
                         ButtonCustomVariant::new(cx)
                             .color(rgb(0xffffff).into())
                             .foreground(rgb(INK).into())
-                            .border(rgb(LINE).into())
-                            .hover(rgb(SURFACE).into())
-                            .active(rgb(0xe9e9e9).into()),
+                            .border(rgb(CONTROL_LINE).into())
+                            .hover(rgb(HOVER).into())
+                            .active(rgb(PRESSED).into()),
                     )
                     .cursor_pointer()
                     .disabled(!self.enabled)
                     .when(!self.enabled, |button| {
-                        button.bg(rgb(0xe9e9e9)).cursor_default()
+                        button.bg(rgb(PRESSED)).cursor_default()
                     })
                     .child(
                         single_line(title, 14.)

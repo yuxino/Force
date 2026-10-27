@@ -15,6 +15,8 @@ use crate::{
 
 const POPUP_WIDTH: f32 = 360.;
 const TAG_WIDTH: f32 = POPUP_WIDTH - 38.;
+const VALIDATION_HEIGHT: f32 = 36.;
+const EDITOR_GAP: f32 = 12.;
 
 impl ForceView {
     pub(crate) fn agenda_popover(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
@@ -70,9 +72,9 @@ impl ForceView {
             .w(px(width))
             .max_h(px(max_height))
             .p(px(18.))
-            .rounded(px(9.))
+            .rounded(px(8.))
             .border_1()
-            .border_color(rgb(0xd4d4d4))
+            .border_color(rgb(crate::view::CONTROL_LINE))
             .bg(rgb(0xffffff))
             .occlude()
             .flex()
@@ -100,7 +102,7 @@ impl ForceView {
                     .child(
                         button("agenda-popover-close")
                             .debug_selector(|| "agenda-popover-close".into())
-                            .ghost()
+                            .custom(crate::view::quiet_variant(cx))
                             .size(px(26.))
                             .icon(control_icon(IconName::Close, MUTED))
                             .tooltip(if self.agenda.editor_visible {
@@ -120,8 +122,12 @@ impl ForceView {
                         .min_h_0()
                         .flex()
                         .flex_col()
-                        .gap(px(12.))
-                        .child(self.agenda_compact_editor(body_limit, cx))
+                        .gap(px(EDITOR_GAP))
+                        .child(self.agenda_compact_editor(
+                            (body_limit - VALIDATION_HEIGHT - EDITOR_GAP).max(100.),
+                            cx,
+                        ))
+                        .child(self.agenda_validation())
                         .child(self.agenda_editor_actions(cx)),
                 )
             })
@@ -156,7 +162,7 @@ impl ForceView {
                             .child(
                                 button("agenda-popover-timeline")
                                     .debug_selector(|| "agenda-popover-timeline".into())
-                                    .ghost()
+                                    .custom(crate::view::quiet_variant(cx))
                                     .h(px(34.))
                                     .child(control_label("展开时间轴", MUTED))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -165,7 +171,7 @@ impl ForceView {
                             )
                             .child(if selected_detail {
                                 button("agenda-popover-day")
-                                    .ghost()
+                                    .custom(crate::view::quiet_variant(cx))
                                     .h(px(34.))
                                     .child(control_label("当天概览", INK))
                                     .on_click(cx.listener(|this, _, window, cx| {
@@ -174,7 +180,7 @@ impl ForceView {
                             } else {
                                 button("agenda-add")
                                     .debug_selector(|| "agenda-add".into())
-                                    .ghost()
+                                    .custom(crate::view::quiet_variant(cx))
                                     .h(px(34.))
                                     .unavailable(self.storage_failed)
                                     .child(control_label(
@@ -211,7 +217,7 @@ impl ForceView {
             .track_scroll(&self.agenda.editor_scroll)
             .flex()
             .flex_col()
-            .gap(px(12.))
+            .gap(px(8.))
             .child(editor_field("安排名称").child(
                 div().debug_selector(|| "agenda-title-input".into()).child(
                     field(&self.agenda.title_input).disabled(self.agenda.draft_task.is_some()),
@@ -263,7 +269,7 @@ impl ForceView {
             .child(
                 button("agenda-note-toggle")
                     .debug_selector(|| "agenda-note-toggle".into())
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .h(px(28.))
                     .px(px(0.))
                     .justify_start()
@@ -276,9 +282,8 @@ impl ForceView {
                         MUTED,
                     ))
                     .child(control_label("备注", MUTED))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.agenda.note_expanded = !this.agenda.note_expanded;
-                        cx.notify();
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.toggle_agenda_note(window, cx);
                     })),
             )
             .when(self.agenda.note_expanded, |body| {
@@ -291,11 +296,21 @@ impl ForceView {
                         )),
                 )
             })
-            .when_some(self.agenda.error.as_ref(), |body, message| {
-                body.child(
+    }
+
+    fn agenda_validation(&self) -> Div {
+        // Keep validation visible outside the scrolling fields. The reserved
+        // height also keeps bottom-snapped inputs stationary while it changes.
+        div()
+            .debug_selector(|| "agenda-validation-slot".into())
+            .min_h(px(VALIDATION_HEIGHT))
+            .flex_shrink_0()
+            .when_some(self.agenda.error.as_ref(), |slot, message| {
+                slot.child(
                     div()
                         .debug_selector(|| "agenda-error".into())
-                        .text_size(px(14.))
+                        .text_size(px(13.))
+                        .line_height(px(18.))
                         .text_color(rgb(DESTRUCTIVE))
                         .whitespace_normal()
                         .child(message.clone()),
@@ -316,7 +331,7 @@ impl ForceView {
             .child(
                 button("agenda-cancel")
                     .debug_selector(|| "agenda-cancel".into())
-                    .ghost()
+                    .custom(crate::view::quiet_variant(cx))
                     .h(px(36.))
                     .child(control_label("取消", MUTED))
                     .on_click(cx.listener(|this, _, window, cx| this.cancel_plan_edit(window, cx))),
@@ -348,6 +363,7 @@ impl ForceView {
             };
             rows.push(
                 summary_row(
+                    cx,
                     format!("agenda-summary-plan-{id}"),
                     &plan.title,
                     format!(
@@ -366,6 +382,7 @@ impl ForceView {
             let seconds = record.elapsed_between(start, end, self.now);
             rows.push(
                 summary_row(
+                    cx,
                     format!("agenda-summary-record-{id}"),
                     &record.title,
                     if seconds > 0 {
@@ -398,6 +415,7 @@ impl ForceView {
             let id = task.id;
             rows.push(
                 summary_row(
+                    cx,
                     format!("agenda-summary-completion-{id}"),
                     &task.title,
                     "已完成 · 未计时".to_owned(),
@@ -432,11 +450,16 @@ fn editor_field(label: &str) -> Div {
         .child(field_label(label))
 }
 
-fn summary_row(id: String, title: &str, detail: String) -> gpui_component::button::Button {
+fn summary_row(
+    cx: &App,
+    id: String,
+    title: &str,
+    detail: String,
+) -> gpui_component::button::Button {
     let selector = id.clone();
     button(SharedString::from(id))
         .debug_selector(move || selector.clone())
-        .ghost()
+        .custom(crate::view::quiet_variant(cx))
         .w_full()
         .h(px(56.))
         .px(px(4.))

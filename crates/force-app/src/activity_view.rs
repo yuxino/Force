@@ -10,7 +10,7 @@ use crate::{
     view::{INK, MUTED, PAPER, button, section_heading},
 };
 
-const EMPTY: u32 = 0xececec;
+const EMPTY: u32 = 0xf0f0f0;
 const LEVELS: [u32; 4] = [0xc9c9c9, 0x989898, 0x626262, 0x242424];
 const FUTURE: u32 = 0xf8f8f8;
 

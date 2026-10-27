@@ -4,8 +4,8 @@ use std::{cell::Cell, collections::BTreeMap};
 use chrono::{Datelike, Days, Local, Months, NaiveDate, Timelike};
 use force_core::{PlanDraft, PlanEntry, Session, Stats, TagKind, Task};
 use gpui::{
-    AppContext as _, Context, Entity, FocusHandle, Focusable as _, PromptButton, PromptLevel,
-    ScrollHandle, Subscription, Window,
+    AppContext as _, Context, Entity, FocusHandle, Focusable as _, Pixels, Point, PromptButton,
+    PromptLevel, ScrollHandle, Subscription, Window,
 };
 use gpui_component::input::{InputEvent, InputState};
 
@@ -13,6 +13,28 @@ use crate::{
     model::{ForceView, Page, TaskDestination, day_bounds},
     tag_picker::{FocusTagOption, TagPicked, TagPicker},
 };
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PlanField {
+    Title,
+    Date,
+    Start,
+    End,
+    Tag,
+    Note,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PlanError {
+    field: PlanField,
+    message: &'static str,
+}
+
+impl PlanError {
+    fn new(field: PlanField, message: &'static str) -> Self {
+        Self { field, message }
+    }
+}
 
 #[derive(Clone, Eq, PartialEq)]
 struct PlanInputSnapshot {
@@ -71,6 +93,9 @@ pub(crate) struct AgendaState {
     pub(crate) calendar_scroll: ScrollHandle,
     pub(crate) inspector_scroll: ScrollHandle,
     pub(crate) editor_scroll: ScrollHandle,
+    note_return_scroll: Option<Point<Pixels>>,
+    note_return_focus: Option<FocusHandle>,
+    resume_note_focused: bool,
     pub(crate) calendar_scroll_target: Cell<Option<u16>>,
     month_records: Vec<Session>,
     month_completions: Vec<Task>,
@@ -178,6 +203,9 @@ impl AgendaState {
             calendar_scroll: ScrollHandle::default(),
             inspector_scroll: ScrollHandle::default(),
             editor_scroll: ScrollHandle::default(),
+            note_return_scroll: None,
+            note_return_focus: None,
+            resume_note_focused: false,
             month_records: Vec::new(),
             month_completions: Vec::new(),
             month_plans: Vec::new(),
@@ -478,6 +506,15 @@ impl ForceView {
             self.cancel_plan_edit(window, cx);
             return;
         }
+        if self.agenda.editing && self.agenda.editor_visible {
+            self.agenda.resume_note_focused = self.agenda.note_expanded
+                && self
+                    .agenda
+                    .note_input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window);
+        }
         self.agenda.popup_open = false;
         self.agenda.editor_visible = false;
         self.agenda
@@ -504,7 +541,18 @@ impl ForceView {
         self.page = Page::Agenda;
         self.clear_agenda_selection();
         self.refresh_agenda(cx);
-        self.focus_agenda_editor(window, cx);
+        if self.agenda.note_expanded && self.agenda.resume_note_focused {
+            self.agenda.editor_scroll.scroll_to_bottom();
+            self.agenda
+                .note_input
+                .update(cx, |input, cx| input.focus(window, cx));
+        } else {
+            self.agenda
+                .editor_scroll
+                .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
+            self.focus_agenda_editor(window, cx);
+        }
+        self.agenda.resume_note_focused = false;
         cx.notify();
     }
 
@@ -720,6 +768,9 @@ impl ForceView {
         self.agenda.popup_open = true;
         self.agenda.month_overview = true;
         self.agenda.note_expanded = false;
+        self.agenda.note_return_scroll = None;
+        self.agenda.note_return_focus = None;
+        self.agenda.resume_note_focused = false;
         self.agenda.draft_origin_date = Some(self.agenda.date);
         self.page = Page::Agenda;
         self.agenda.edit_id = None;
@@ -778,6 +829,9 @@ impl ForceView {
         self.agenda.popup_open = true;
         self.agenda.month_overview = true;
         self.agenda.note_expanded = !plan.note.is_empty();
+        self.agenda.note_return_scroll = None;
+        self.agenda.note_return_focus = None;
+        self.agenda.resume_note_focused = false;
         self.agenda.draft_origin_date = Some(self.agenda.date);
         self.page = Page::Agenda;
         self.agenda.edit_id = Some(id);
@@ -836,19 +890,81 @@ impl ForceView {
         }
     }
 
-    pub(crate) fn agenda_draft_error(&self, cx: &gpui::App) -> Option<String> {
+    fn agenda_draft_error(&self, cx: &gpui::App) -> Option<PlanError> {
         let draft = self.agenda.snapshot(cx);
-        validate_plan_fields(&draft)
-            .err()
-            .map(str::to_owned)
-            .or_else(|| {
-                (draft.task.is_none()
-                    && !self
-                        .tags
-                        .iter()
-                        .any(|tag| tag.id == draft.tag && tag.kind == TagKind::Focus))
-                .then(|| "请先在设置中添加可用的计时标签。".to_owned())
-            })
+        validate_plan_fields(&draft).err().or_else(|| {
+            (draft.task.is_none()
+                && !self
+                    .tags
+                    .iter()
+                    .any(|tag| tag.id == draft.tag && tag.kind == TagKind::Focus))
+            .then(|| PlanError::new(PlanField::Tag, "请先在设置中添加可用的计时标签。"))
+        })
+    }
+
+    pub(crate) fn toggle_agenda_note(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.agenda.note_expanded {
+            self.agenda.note_expanded = false;
+            if let Some(offset) = self.agenda.note_return_scroll.take() {
+                self.agenda.editor_scroll.set_offset(offset);
+            }
+            let note_focused = self
+                .agenda
+                .note_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window);
+            if note_focused {
+                if let Some(focus) = self.agenda.note_return_focus.take() {
+                    focus.focus(window);
+                } else {
+                    window.focus(&self.agenda.calendar_focus);
+                }
+            } else {
+                self.agenda.note_return_focus = None;
+            }
+        } else {
+            self.agenda.note_return_scroll = Some(self.agenda.editor_scroll.offset());
+            self.agenda.note_return_focus = window.focused(cx);
+            self.agenda.note_expanded = true;
+            // Unlike scroll_to_item, scroll_to_bottom uses the new viewport and
+            // content size in the same prepaint, even when the popup moves.
+            self.agenda.editor_scroll.scroll_to_bottom();
+            self.agenda
+                .note_input
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
+        cx.notify();
+    }
+
+    fn reveal_agenda_error(
+        &mut self,
+        field: PlanField,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (item, input) = match field {
+            PlanField::Title => (0, Some(&self.agenda.title_input)),
+            PlanField::Date => (1, Some(&self.agenda.date_input)),
+            PlanField::Start => (2, Some(&self.agenda.start_input)),
+            PlanField::End => (2, Some(&self.agenda.end_input)),
+            PlanField::Tag => (3, None),
+            PlanField::Note => {
+                if !self.agenda.note_expanded {
+                    self.agenda.note_return_scroll = Some(self.agenda.editor_scroll.offset());
+                    self.agenda.note_return_focus = window.focused(cx);
+                    self.agenda.note_expanded = true;
+                }
+                self.agenda.editor_scroll.scroll_to_bottom();
+                (5, Some(&self.agenda.note_input))
+            }
+        };
+        if field != PlanField::Note {
+            self.agenda.editor_scroll.scroll_to_item(item);
+        }
+        if let Some(input) = input {
+            input.update(cx, |input, cx| input.focus(window, cx));
+        }
     }
 
     pub(crate) fn save_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -856,7 +972,8 @@ impl ForceView {
             return;
         }
         if let Some(error) = self.agenda_draft_error(cx) {
-            self.agenda.error = Some(error);
+            self.agenda.error = Some(error.message.to_owned());
+            self.reveal_agenda_error(error.field, window, cx);
             cx.notify();
             return;
         }
@@ -1386,22 +1503,30 @@ fn parse_plan_time(value: &str, allow_midnight_end: bool) -> Option<u16> {
     Some(hour * 60 + minute)
 }
 
-fn validate_plan_fields(draft: &PlanInputSnapshot) -> Result<(NaiveDate, u16, u16), &'static str> {
+fn validate_plan_fields(draft: &PlanInputSnapshot) -> Result<(NaiveDate, u16, u16), PlanError> {
     if draft.title.is_empty()
         || draft.title.chars().count() > 200
         || draft.title.chars().any(char::is_control)
     {
-        return Err("请输入 1–200 字的事情名称。");
+        return Err(PlanError::new(
+            PlanField::Title,
+            "请输入 1–200 字的安排名称。",
+        ));
     }
     let day = NaiveDate::parse_from_str(&draft.day, "%Y-%m-%d")
         .ok()
         .filter(|day| (1..=9999).contains(&day.year()))
-        .ok_or("日期格式应为 YYYY-MM-DD。");
-    let start = parse_plan_time(&draft.start, false)
-        .ok_or("开始时间格式应为 09:00，范围为 00:00–23:59。")?;
-    let end = parse_plan_time(&draft.end, true).ok_or("结束时间格式应为 10:00，最晚为 24:00。")?;
+        .ok_or(PlanError::new(PlanField::Date, "日期格式应为 YYYY-MM-DD。"))?;
+    let start = parse_plan_time(&draft.start, false).ok_or(PlanError::new(
+        PlanField::Start,
+        "开始时间格式应为 09:00，范围为 00:00–23:59。",
+    ))?;
+    let end = parse_plan_time(&draft.end, true).ok_or(PlanError::new(
+        PlanField::End,
+        "结束时间格式应为 10:00，最晚为 24:00。",
+    ))?;
     if end <= start {
-        return Err("结束时间须晚于开始时间。");
+        return Err(PlanError::new(PlanField::End, "结束时间须晚于开始时间。"));
     }
     if draft.note.chars().count() > 2000
         || draft
@@ -1409,9 +1534,12 @@ fn validate_plan_fields(draft: &PlanInputSnapshot) -> Result<(NaiveDate, u16, u1
             .chars()
             .any(|c| c.is_control() && c != '\n' && c != '\t')
     {
-        return Err("备注最多 2000 字，且不能包含无效字符。");
+        return Err(PlanError::new(
+            PlanField::Note,
+            "备注最多 2000 字，且不能包含无效字符。",
+        ));
     }
-    Ok((day?, start, end))
+    Ok((day, start, end))
 }
 
 #[cfg(test)]
