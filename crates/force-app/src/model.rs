@@ -78,6 +78,15 @@ pub(crate) struct ForceView {
     tag_picker_options: Vec<FocusTagOption>,
     pub(crate) selected_session: Option<i64>,
     pub(crate) record_date: NaiveDate,
+    pub(crate) activity_focus: FocusHandle,
+    pub(crate) activity_hovered_day: Option<NaiveDate>,
+    pub(crate) activity_invalidated_tooltip_day: Option<NaiveDate>,
+    pub(crate) activity_tooltip_generation: u64,
+    #[cfg(all(test, feature = "ui-test-support"))]
+    pub(crate) activity_tooltip_probe: std::rc::Rc<std::cell::RefCell<Option<(NaiveDate, String)>>>,
+    pub(crate) activity_pointer_focus: bool,
+    pub(crate) activity_reactivating: bool,
+    pub(crate) activity_bounds: std::rc::Rc<std::cell::Cell<gpui::Bounds<gpui::Pixels>>>,
     pub(crate) goal: u32,
     pub(crate) page: Page,
     pub(crate) compact: bool,
@@ -128,6 +137,20 @@ impl ForceView {
         let duration_input = cx.new(|cx| InputState::new(window, cx));
         let record_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索任务或标签"));
         let tag_picker = cx.new(TagPicker::new);
+        let activity_focus = cx.focus_handle().tab_index(0).tab_stop(true);
+        let activity_focus_subscription = cx.on_focus(&activity_focus, window, |this, _, cx| {
+            this.activity_focus_entered(cx);
+        });
+        let activity_blur_subscription = cx.on_blur(&activity_focus, window, |this, _, cx| {
+            this.activity_pointer_focus = false;
+            this.activity_reactivating = false;
+            cx.notify();
+        });
+        let activity_activation_subscription =
+            cx.observe_window_activation(window, |this, window, _| {
+                this.activity_reactivating =
+                    window.is_window_active() && this.activity_focus.is_focused(window);
+            });
         let tag_picker_subscription =
             cx.subscribe(&tag_picker, |this, _, event: &TagPicked, cx| {
                 let id = event.0;
@@ -269,6 +292,15 @@ impl ForceView {
             tag_picker_options: Vec::new(),
             selected_session: None,
             record_date: Local::now().date_naive(),
+            activity_focus,
+            activity_hovered_day: None,
+            activity_invalidated_tooltip_day: None,
+            activity_tooltip_generation: 0,
+            #[cfg(all(test, feature = "ui-test-support"))]
+            activity_tooltip_probe: Default::default(),
+            activity_pointer_focus: false,
+            activity_reactivating: false,
+            activity_bounds: Default::default(),
             goal: 300,
             page: Page::Agenda,
             compact: true,
@@ -315,6 +347,9 @@ impl ForceView {
                 duration_subscription,
                 search_subscription,
                 tag_picker_subscription,
+                activity_focus_subscription,
+                activity_blur_subscription,
+                activity_activation_subscription,
                 quit_subscription,
             ],
         };
@@ -581,6 +616,36 @@ impl ForceView {
                 self.notify("更新本地数据失败。已有内容已保留，请重试。", cx);
             }
         }
+    }
+
+    pub(crate) fn activity_focus_entered(&mut self, cx: &mut Context<Self>) {
+        let pointer = std::mem::take(&mut self.activity_pointer_focus);
+        let reactivating = std::mem::take(&mut self.activity_reactivating);
+        if pointer || reactivating {
+            cx.notify();
+            return;
+        }
+        self.reveal_activity_grid(cx);
+    }
+
+    pub(crate) fn reveal_activity_grid(&mut self, cx: &mut Context<Self>) {
+        let grid = self.activity_bounds.get();
+        let scroll = &self.panel_scroll[1];
+        let viewport = scroll.bounds();
+        if grid.size.height > gpui::px(0.) && viewport.size.height > gpui::px(0.) {
+            let adjustment = if grid.top() < viewport.top() {
+                viewport.top() - grid.top()
+            } else if grid.bottom() > viewport.bottom() {
+                viewport.bottom() - grid.bottom()
+            } else {
+                gpui::px(0.)
+            };
+            if adjustment != gpui::px(0.) {
+                let offset = scroll.offset();
+                scroll.set_offset(gpui::point(offset.x, offset.y + adjustment));
+            }
+        }
+        cx.notify();
     }
 
     pub(crate) fn select_record_date(&mut self, date: NaiveDate, cx: &mut Context<Self>) {
