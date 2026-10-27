@@ -553,7 +553,11 @@ fn completion_sound_defaults_on_and_remains_off_after_restart_and_schema_upgrade
     let connection = Connection::open(&path).unwrap();
     connection
         .execute_batch(
-            "ALTER TABLE preferences DROP COLUMN completion_sound; PRAGMA user_version = 3;",
+            "ALTER TABLE preferences DROP COLUMN completion_sound;
+             DROP TABLE imported_sessions;
+             ALTER TABLE tags DROP COLUMN class; ALTER TABLE tags DROP COLUMN color;
+             ALTER TABLE sessions DROP COLUMN tag_class; ALTER TABLE sessions DROP COLUMN tag_color;
+             PRAGMA user_version = 3;",
         )
         .unwrap();
     drop(connection);

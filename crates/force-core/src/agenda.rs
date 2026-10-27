@@ -63,9 +63,9 @@ pub(super) fn migrate_v4(connection: &mut Connection) -> Result<()> {
             // An interrupted/foreign schema with the same table name must fail
             // rather than receive a newer version marker over missing columns.
             transaction.prepare(SELECT_PLAN)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 5)?;
         }
-        SCHEMA_VERSION => (),
+        5 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;

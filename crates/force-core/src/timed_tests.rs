@@ -210,7 +210,10 @@ fn export_caps_expired_countdowns_without_writing_to_the_database() {
             )),
             "{row}"
         );
-        assert!(row.ends_with(&format!("\"{}\"", utc_timestamp(Some(expected_end)))));
+        assert!(row.ends_with(&format!(
+            "\"{}\",\"positive\",\"\",\"false\",\"false\"",
+            utc_timestamp(Some(expected_end))
+        )));
     }
     assert_eq!(store.active_sessions().unwrap(), before);
     assert!(store.sessions().unwrap().is_empty());

@@ -8,7 +8,7 @@ use std::{
 use crate::tag_picker::{FocusTagOption, TagPicked, TagPicker};
 
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone};
-use force_core::{MAX_GOAL_MINUTES, Session, Stats, Store, Tag, TagKind, Task};
+use force_core::{MAX_GOAL_MINUTES, Session, Stats, Store, Tag, TagClass, TagKind, Task};
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, PromptButton, PromptLevel, Subscription, Window,
     WindowHandle,
@@ -100,16 +100,21 @@ pub(crate) struct ForceView {
     pub(crate) pinned: bool,
     pub(crate) task_input: Entity<InputState>,
     pub(crate) tag_input: Entity<InputState>,
+    pub(crate) tag_color_input: Entity<InputState>,
     pub(crate) goal_input: Entity<InputState>,
     pub(crate) timer_input: Entity<InputState>,
     pub(crate) duration_input: Entity<InputState>,
     pub(crate) editing_duration: Option<i64>,
     pub(crate) record_search: Entity<InputState>,
+    pub(crate) record_class_filter: Option<TagClass>,
     pub(crate) record_help_open: bool,
     pub(crate) record_details: Option<i64>,
     pub(crate) new_tag_kind: TagKind,
+    pub(crate) new_tag_class: TagClass,
     pub(crate) editing_tag: Option<i64>,
     tag_edit_original: Option<String>,
+    tag_edit_original_class: TagClass,
+    tag_edit_original_color: Option<String>,
     pub(crate) toast: Option<(String, Instant)>,
     pub(crate) export_busy: bool,
     pub(crate) update_state: crate::updates::UpdateState,
@@ -132,6 +137,7 @@ impl ForceView {
     pub(crate) fn new(data_dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
         let task_input = cx.new(|cx| InputState::new(window, cx).placeholder("任务名称"));
         let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
+        let tag_color_input = cx.new(|cx| InputState::new(window, cx).placeholder("#RRGGBB"));
         let goal_input = cx.new(|cx| InputState::new(window, cx).placeholder("每日目标（分钟）"));
         let timer_input = cx.new(|cx| InputState::new(window, cx).default_value("25"));
         let duration_input = cx.new(|cx| InputState::new(window, cx));
@@ -189,6 +195,20 @@ impl ForceView {
         );
         let tag_subscription = cx.subscribe_in(
             &tag_input,
+            window,
+            |this, _, event: &InputEvent, window, cx| {
+                if matches!(event, InputEvent::Change) {
+                    cx.notify();
+                } else if matches!(event, InputEvent::PressEnter { secondary: false })
+                    && !this.compact
+                    && this.page == Page::Settings
+                {
+                    this.save_tag(window, cx);
+                }
+            },
+        );
+        let tag_color_subscription = cx.subscribe_in(
+            &tag_color_input,
             window,
             |this, _, event: &InputEvent, window, cx| {
                 if matches!(event, InputEvent::Change) {
@@ -314,16 +334,21 @@ impl ForceView {
             pinned: cfg!(any(target_os = "macos", target_os = "windows")),
             task_input,
             tag_input,
+            tag_color_input,
             goal_input,
             timer_input,
             duration_input,
             editing_duration: None,
             record_search,
+            record_class_filter: None,
             record_help_open: false,
             record_details: None,
             new_tag_kind: TagKind::Focus,
+            new_tag_class: TagClass::Positive,
             editing_tag: None,
             tag_edit_original: None,
+            tag_edit_original_class: TagClass::Positive,
+            tag_edit_original_color: None,
             toast: None,
             export_busy: false,
             update_state: crate::updates::UpdateState::Idle,
@@ -342,6 +367,7 @@ impl ForceView {
             _subscriptions: vec![
                 subscription,
                 tag_subscription,
+                tag_color_subscription,
                 goal_subscription,
                 timer_subscription,
                 duration_subscription,
@@ -438,6 +464,7 @@ impl ForceView {
             .map(|tag| FocusTagOption {
                 id: tag.id,
                 name: tag.name.clone(),
+                color: tag.color.clone(),
             })
             .collect();
         let selected = options
@@ -1629,8 +1656,15 @@ impl ForceView {
         };
         let name = tag.name.clone();
         self.new_tag_kind = tag.kind;
+        self.new_tag_class = tag.class;
+        self.tag_edit_original_class = tag.class;
+        self.tag_edit_original_color = tag.color.clone();
+        let color = tag.color.clone().unwrap_or_default();
         self.editing_tag = Some(id);
         self.tag_edit_original = Some(name.clone());
+        self.tag_color_input.update(cx, |input, cx| {
+            input.set_value(color, window, cx);
+        });
         self.tag_input.update(cx, |input, cx| {
             input.set_value(name, window, cx);
             input.focus(window, cx);
@@ -1641,9 +1675,19 @@ impl ForceView {
 
     fn tag_has_unsaved_changes(&self, cx: &gpui::App) -> bool {
         let name = self.tag_input.read(cx).value();
+        let color = self.tag_color_input.read(cx).value();
+        let color = parse_tag_color(color.as_ref());
         match self.editing_tag {
-            Some(_) => self.tag_edit_original.as_deref() != Some(name.trim()),
-            None => !name.trim().is_empty(),
+            Some(_) => {
+                self.tag_edit_original.as_deref() != Some(name.trim())
+                    || self.new_tag_class != self.tag_edit_original_class
+                    || color.as_ref().ok() != Some(&self.tag_edit_original_color)
+            }
+            None => {
+                !name.trim().is_empty()
+                    || self.new_tag_class != TagClass::Positive
+                    || color.as_ref().ok() != Some(&None)
+            }
         }
     }
 
@@ -1658,6 +1702,8 @@ impl ForceView {
         }
         let editing = self.editing_tag;
         let draft = self.tag_input.read(cx).value();
+        let class = self.new_tag_class;
+        let color = self.tag_color_input.read(cx).value();
         let answer = window.prompt(
             PromptLevel::Info,
             if editing.is_some() {
@@ -1677,7 +1723,11 @@ impl ForceView {
             Ok(choice @ (1 | 2)) => {
                 let _ = cx.update(|window, cx| {
                     let _ = this.update(cx, |this, cx| {
-                        if this.editing_tag != editing || this.tag_input.read(cx).value() != draft {
+                        if this.editing_tag != editing
+                            || this.tag_input.read(cx).value() != draft
+                            || this.new_tag_class != class
+                            || this.tag_color_input.read(cx).value() != color
+                        {
                             return;
                         }
                         if choice == 2 {
@@ -1709,6 +1759,7 @@ impl ForceView {
             self.editing_tag,
             &self.tags,
         )
+        .or_else(|| parse_tag_color(self.tag_color_input.read(cx).value().as_ref()).err())
     }
 
     pub(crate) fn can_save_tag(&self, cx: &gpui::App) -> bool {
@@ -1719,7 +1770,10 @@ impl ForceView {
             Some(_) => self.tag_edit_original.as_deref(),
             None => None,
         };
-        tag_draft_has_changes(self.tag_input.read(cx).value().as_ref(), original)
+        let name = self.tag_input.read(cx).value();
+        !name.trim().is_empty()
+            && (tag_draft_has_changes(name.as_ref(), original)
+                || (self.editing_tag.is_some() && self.tag_has_unsaved_changes(cx)))
     }
 
     pub(crate) fn save_tag(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1739,6 +1793,14 @@ impl ForceView {
             return false;
         }
         let editing = self.editing_tag;
+        let class = self.new_tag_class;
+        let color = match parse_tag_color(self.tag_color_input.read(cx).value().as_ref()) {
+            Ok(color) => color,
+            Err(message) => {
+                self.notify(message, cx);
+                return false;
+            }
+        };
         let kind = if editing.is_some() {
             self.new_tag_kind
         } else {
@@ -1750,9 +1812,13 @@ impl ForceView {
         if self.write(
             |store| {
                 if let Some(id) = editing {
-                    store.rename_tag(id, &name)?;
+                    store.update_tag(id, &name, class, color.as_deref())?;
                 } else {
-                    created_id = Some(store.create_tag(&name, kind)?.id);
+                    created_id = Some(
+                        store
+                            .create_tag_with_details(&name, kind, class, color.as_deref())?
+                            .id,
+                    );
                 }
                 Ok(())
             },
@@ -1784,6 +1850,11 @@ impl ForceView {
         self.editing_tag = None;
         self.tag_edit_original = None;
         self.new_tag_kind = TagKind::Focus;
+        self.new_tag_class = TagClass::Positive;
+        self.tag_edit_original_class = TagClass::Positive;
+        self.tag_edit_original_color = None;
+        self.tag_color_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
         self.tag_input.update(cx, |input, cx| {
             input.set_value("", window, cx);
             input.focus(window, cx);
@@ -2510,6 +2581,20 @@ fn tag_draft_error_for(value: &str, editing: Option<i64>, tags: &[Tag]) -> Optio
 fn tag_draft_has_changes(value: &str, original: Option<&str>) -> bool {
     let name = value.trim();
     !name.is_empty() && name.chars().count() <= 40 && !name.contains('\0') && original != Some(name)
+}
+
+fn parse_tag_color(value: &str) -> Result<Option<String>, &'static str> {
+    let color = value.trim();
+    if color.is_empty() {
+        return Ok(None);
+    }
+    if color.len() != 7
+        || !color.starts_with('#')
+        || !color[1..].bytes().all(|b| b.is_ascii_hexdigit())
+    {
+        return Err("颜色请填写 #RRGGBB，或留空。");
+    }
+    Ok(Some(color.to_ascii_uppercase()))
 }
 
 fn validation_message(message: &str) -> &'static str {
