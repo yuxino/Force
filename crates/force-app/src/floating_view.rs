@@ -53,7 +53,7 @@ impl TimerFace {
         } else {
             (
                 compact_clock(self.seconds),
-                if self.seconds / 3_600 >= 10_000 {
+                if self.seconds >= 3_600 {
                     format!("{:02}:{:02}", self.seconds / 60 % 60, self.seconds % 60)
                 } else {
                     String::new()
@@ -421,6 +421,10 @@ impl FloatingStrip {
         };
         let readout_size = if face.idle || face.failed || face.completed || face.invalid_duration {
             18.
+        } else if face.seconds >= 3_600 && readout.chars().count() >= 6 {
+            10.
+        } else if face.seconds >= 3_600 && readout.chars().count() == 5 {
+            12.5
         } else {
             match readout.chars().count() {
                 0..=5 => 14.,
@@ -973,8 +977,12 @@ fn cat_eye_motion(progress: f32) -> (f32, f32, f32) {
 }
 
 fn compact_clock(seconds: i64) -> String {
-    if seconds / 3_600 >= 10_000 {
+    let seconds = seconds.max(0);
+    let hours = seconds / 3_600;
+    if hours >= 10_000 {
         "9999h+".to_owned()
+    } else if hours > 0 {
+        format!("{hours}h")
     } else {
         clock(seconds)
     }
@@ -1170,14 +1178,16 @@ mod tests {
                 );
                 assert!(text.size.width > px(0.) && text.size.height > px(0.));
             }
-            if state == 2 || state == 3 {
-                let pause = visual.debug_bounds("strip-paused-mark").unwrap();
-                assert!(time_text.bottom() <= pause.top() + px(1.));
-                assert!(pause.bottom() <= face.top() + px(96.));
-                if state == 3 {
-                    let detail = visual.debug_bounds("strip-detail-text").unwrap();
+            if (1..=3).contains(&state) {
+                let detail = visual.debug_bounds("strip-detail-text").unwrap();
+                assert!(time_text.bottom() <= detail.top());
+                assert!(detail.left() >= face.left() + px(23.));
+                assert!(detail.right() <= face.left() + px(70.));
+                if state >= 2 {
+                    let pause = visual.debug_bounds("strip-paused-mark").unwrap();
+                    assert!(time_text.bottom() <= pause.top() + px(1.));
+                    assert!(pause.bottom() <= face.top() + px(90.));
                     assert!(pause.right() < detail.left());
-                    assert!(time_text.bottom() <= detail.top());
                 }
             } else if state >= 4 {
                 let detail = visual.debug_bounds("strip-detail").unwrap();
@@ -1488,11 +1498,21 @@ mod tests {
             ready: false,
             idle: false,
         };
-        assert_eq!(face.compact_display(), ("100:02:15".into(), String::new()));
-        face.seconds = 10_000 * 3600 + 135;
-        assert_eq!(face.compact_display(), ("9999h+".into(), "02:15".into()));
-        face.paused = false;
-        assert_eq!(face.compact_display(), ("9999h+".into(), "02:15".into()));
+        for paused in [false, true] {
+            face.paused = paused;
+            for (hours, expected) in [
+                (1, "1h"),
+                (99, "99h"),
+                (100, "100h"),
+                (9_999, "9999h"),
+                (10_000, "9999h+"),
+            ] {
+                face.seconds = hours * 3_600 + 3_599;
+                assert_eq!(face.compact_display(), (expected.into(), "59:59".into()));
+            }
+            face.seconds = 3_599;
+            assert_eq!(face.compact_display(), ("59:59".into(), String::new()));
+        }
     }
 
     #[test]

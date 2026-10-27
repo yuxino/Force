@@ -1191,6 +1191,67 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
 }
 
 #[gpui::test]
+fn headless_ui_cat_long_times_fit_and_keep_pause_controls_usable(cx: &mut TestAppContext) {
+    for hours in [1_i64, 99, 100, 9_999, 10_000] {
+        for paused in [false, true] {
+            let mut manager = ManagerHarness::new(cx, 1040., 780.);
+            let id = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                let session = view
+                    .store
+                    .as_mut()
+                    .unwrap()
+                    .start("Long timer", 1, view.now - hours * 3_600 - 3_599)
+                    .unwrap();
+                if paused {
+                    view.store
+                        .as_mut()
+                        .unwrap()
+                        .pause(session.id, view.now)
+                        .unwrap();
+                }
+                view.refresh(cx);
+                view.select_session(session.id, window, cx);
+                view.hide_manager(window, cx);
+                session.id
+            });
+            let (cat, mut strip) = open_test_strip(&mut manager);
+            let face = strip.debug_bounds("strip-face").unwrap();
+            let time = strip.debug_bounds("strip-time-text").unwrap();
+            let detail = strip.debug_bounds("strip-detail-text").unwrap();
+            assert!(time.left() >= face.left() + px(23.));
+            assert!(time.right() <= face.left() + px(70.));
+            if hours >= 9_999 {
+                // Long hour labels need margin from the side-cat outline,
+                // not merely an un-clipped outer text box.
+                assert!(time.right() <= face.left() + px(66.5), "{time:?}");
+            }
+            assert!(detail.left() >= face.left() + px(23.));
+            assert!(detail.right() <= face.left() + px(70.));
+            assert!(time.bottom() <= detail.top());
+            assert!(detail.bottom() <= face.top() + px(90.));
+            if paused {
+                let marker = strip.debug_bounds("strip-paused-mark").unwrap();
+                assert!(marker.right() < detail.left());
+                assert!(time.bottom() <= marker.top() + px(1.));
+            } else {
+                assert!(strip.debug_bounds("strip-paused-mark").is_none());
+            }
+            // The separate title and control area remain reachable with a
+            // long readout; a click pauses or resumes the same session.
+            click_test_strip(&cat, &mut strip, "strip-face");
+            strip_control_bounds(&mut strip);
+            click_test_strip(&cat, &mut strip, "strip-primary");
+            manager.view.read_with(&manager.cx, |view, _| {
+                let session = view.active.iter().find(|session| session.id == id).unwrap();
+                assert_eq!(session.is_running(), paused);
+            });
+            strip.update(|window, _| window.remove_window());
+            strip.run_until_parked();
+        }
+    }
+}
+
+#[gpui::test]
 fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborrows(
     cx: &mut TestAppContext,
 ) {
