@@ -44,7 +44,7 @@ pub(super) fn migrate_v2(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch(SCHEMA)?;
             transaction.pragma_update(None, "user_version", 3)?;
         }
-        3 | 4 | SCHEMA_VERSION => (),
+        3 | 4 | 5 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -112,8 +112,8 @@ impl Store {
             params![title, tag.id, tag.name, tag.kind.as_str(), id],
         )?;
         transaction.execute(
-            "UPDATE sessions SET title = ?1, tag_id = ?2, tag_name = ?3, tag_kind = ?4 WHERE task_id = ?5 AND finished_at IS NULL",
-            params![title, tag.id, tag.name, tag.kind.as_str(), id],
+            "UPDATE sessions SET title = ?1, tag_id = ?2, tag_name = ?3, tag_kind = ?4, tag_class = ?5, tag_color = ?6 WHERE task_id = ?7 AND finished_at IS NULL",
+            params![title, tag.id, tag.name, tag.kind.as_str(), tag.class.as_str(), tag.color, id],
         )?;
         transaction.commit()?;
         Ok(())
@@ -328,8 +328,8 @@ impl Store {
             existing.id
         } else {
             transaction.execute(
-                "INSERT INTO sessions (title, tag_id, tag_name, tag_kind, started_at, target_seconds) VALUES ('休息', ?1, ?2, 'rest', ?3, ?4)",
-                params![tag.id, tag.name, now, target],
+                "INSERT INTO sessions (title, tag_id, tag_name, tag_kind, tag_class, tag_color, started_at, target_seconds) VALUES ('休息', ?1, ?2, 'rest', ?3, ?4, ?5, ?6)",
+                params![tag.id, tag.name, tag.class.as_str(), tag.color, now, target],
             )?;
             let id = transaction.last_insert_rowid();
             transaction.execute(
@@ -401,6 +401,8 @@ fn start_task_in_transaction(
             id: session.tag_id,
             name: session.tag_name.clone(),
             kind: session.tag_kind,
+            class: session.tag_class,
+            color: session.tag_color.clone(),
         },
         None => available_tag(transaction, task.tag_id)?,
     };
@@ -427,8 +429,8 @@ fn start_task_in_transaction(
         session.id
     } else {
         transaction.execute(
-            "INSERT INTO sessions (task_id, title, tag_id, tag_name, tag_kind, started_at, target_seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![id, task.title, tag.id, tag.name, tag.kind.as_str(), now, target],
+            "INSERT INTO sessions (task_id, title, tag_id, tag_name, tag_kind, tag_class, tag_color, started_at, target_seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![id, task.title, tag.id, tag.name, tag.kind.as_str(), tag.class.as_str(), tag.color, now, target],
         )?;
         let session_id = transaction.last_insert_rowid();
         transaction.execute(
@@ -489,14 +491,23 @@ fn pause_for_break(
 }
 
 pub(super) fn available_tag(connection: &Connection, id: i64) -> Result<Tag> {
-    let (name, kind, archived): (String, String, bool) = connection
-        .query_row(
-            "SELECT name, kind, archived FROM tags WHERE id = ?1",
-            [id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )
-        .optional()?
-        .ok_or(Error::NotFound)?;
+    let (name, kind, archived, class, color): (String, String, bool, String, Option<String>) =
+        connection
+            .query_row(
+                "SELECT name, kind, archived, class, color FROM tags WHERE id = ?1",
+                [id],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get(1)?,
+                        row.get(2)?,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
     if archived {
         return Err(Error::ArchivedTag);
     }
@@ -504,6 +515,8 @@ pub(super) fn available_tag(connection: &Connection, id: i64) -> Result<Tag> {
         id,
         name,
         kind: TagKind::parse(&kind)?,
+        class: TagClass::parse(&class)?,
+        color,
     })
 }
 

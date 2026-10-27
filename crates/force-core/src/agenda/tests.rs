@@ -293,7 +293,10 @@ fn version_four_migration_preserves_existing_tasks_intervals_and_preferences() {
     store.pause(session.id, 130).unwrap();
     store.set_goal_minutes(90).unwrap();
     let sessions = store.sessions().unwrap();
-    store.connection.execute_batch("DROP TABLE agenda_entries; DROP INDEX completed_task_calendar; PRAGMA user_version = 4;").unwrap();
+    store.connection.execute_batch("DROP TABLE agenda_entries; DROP INDEX completed_task_calendar;
+        DROP TABLE imported_sessions; ALTER TABLE tags DROP COLUMN class; ALTER TABLE tags DROP COLUMN color;
+        ALTER TABLE sessions DROP COLUMN tag_class; ALTER TABLE sessions DROP COLUMN tag_color;
+        PRAGMA user_version = 4;").unwrap();
     drop(store);
     let path = directory.path().join("force.sqlite3");
     let mut store = Store::open(&path).unwrap();
@@ -305,7 +308,7 @@ fn version_four_migration_preserves_existing_tasks_intervals_and_preferences() {
             .connection
             .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
             .unwrap(),
-        5
+        SCHEMA_VERSION
     );
     let plan = store.create_plan(&draft(), 150).unwrap();
     drop(store);

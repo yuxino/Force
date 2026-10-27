@@ -1,5 +1,5 @@
 use chrono::{Days, Local};
-use force_core::{Session, TagKind};
+use force_core::{Session, TagClass, TagKind};
 use gpui::{prelude::*, *};
 use gpui_component::{Icon, IconName, button::ButtonVariants, tooltip::Tooltip};
 
@@ -96,9 +96,11 @@ impl ForceView {
             .history
             .iter()
             .filter(|session| {
-                query.is_empty()
-                    || session.title.to_lowercase().contains(&query)
-                    || session.tag_name.to_lowercase().contains(&query)
+                self.record_class_filter
+                    .is_none_or(|class| session.tag_class == class)
+                    && (query.is_empty()
+                        || session.title.to_lowercase().contains(&query)
+                        || session.tag_name.to_lowercase().contains(&query))
             })
             .collect();
 
@@ -152,7 +154,7 @@ impl ForceView {
             .when(self.record_help_open, |body| body.child(
                 div().pl(px(12.)).border_l_2().border_color(rgb(LINE))
                     .text_size(px(13.)).text_color(rgb(MUTED)).whitespace_normal()
-                    .child("时长按本地日期统计，扣除暂停和休息，重叠时段只计一次。跨日记录分别计入每天；搜索只筛选列表。"),
+                    .child("专注标签的正向、负向及原有未分类记录计入专注；休息、中性和休闲不计入。暂停不计时，重叠时段只计一次，跨日按天统计。搜索和分类只筛选列表。"),
             ))
             .child(
                 div().flex().flex_col()
@@ -161,7 +163,7 @@ impl ForceView {
                             .pb(px(12.)).border_b_1().border_color(rgb(LINE))
                             .flex().items_center().justify_between().gap(px(24.))
                             .child(div().text_size(px(14.)).text_color(rgb(MUTED))
-                                .child(if query.is_empty() { format!("{} 条记录", self.history.len()) }
+                                .child(if query.is_empty() && self.record_class_filter.is_none() { format!("{} 条记录", self.history.len()) }
                                     else { format!("匹配 {} 条", records.len()) }))
                             .child(
                                 div().w(px(240.)).flex_shrink_0()
@@ -177,18 +179,40 @@ impl ForceView {
                                         ))),
                             ),
                     )
+                    .child(div().debug_selector(|| "record-class-filters".into()).flex().flex_wrap().gap(px(6.)).py(px(10.))
+                        .children([
+                            (None, "全部", "all"),
+                            (Some(TagClass::Positive), "正向", "positive"),
+                            (Some(TagClass::Neutral), "中性", "neutral"),
+                            (Some(TagClass::Negative), "负向", "negative"),
+                            (Some(TagClass::Leisure), "休闲", "leisure"),
+                            (Some(TagClass::Legacy), "未分类", "legacy"),
+                        ].into_iter().enumerate().map(|(index, (class, label, key))| {
+                            let selected = self.record_class_filter == class;
+                            choice_button(("record-class-filter", index as u64), selected, SURFACE, cx)
+                                .debug_selector(move || format!("record-filter-{key}"))
+                                .h(px(32.)).px(px(10.))
+                                .child(control_label(label, if selected { INK } else { MUTED }))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.record_class_filter = class;
+                                    cx.notify();
+                                }))
+                        })))
                     .children(records.iter().map(|session| self.record_row(session, cx)))
                     .when(records.is_empty(), |body| body.child(
                         div().debug_selector(|| "record-empty-state".into()).py(px(32.))
                             .flex().items_center().gap(px(12.))
                             .text_size(px(14.)).text_color(rgb(MUTED))
-                            .child(if query.is_empty() { "当天没有计时记录" } else { "没有匹配的记录" })
-                            .when(!query.is_empty(), |row| row.child(
+                            .child(if query.is_empty() && self.record_class_filter.is_none() { "当天没有计时记录" } else { "没有匹配的记录" })
+                            .when(!query.is_empty() || self.record_class_filter.is_some(), |row| row.child(
                                 crate::view::outlined_button("clear-empty-record-search")
                                     .debug_selector(|| "clear-empty-record-search".into())
                                     .custom(crate::view::quiet_variant(cx)).h(px(32.)).px(px(8.))
-                                    .child(control_label("清空搜索", INK))
-                                    .on_click(cx.listener(|this, _, window, cx| this.clear_record_search(window, cx))),
+                                    .child(control_label(if self.record_class_filter.is_some() { "清除筛选" } else { "清空搜索" }, INK))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.record_class_filter = None;
+                                        this.clear_record_search(window, cx);
+                                    })),
                             )),
                     )),
             )
@@ -196,6 +220,9 @@ impl ForceView {
 
     fn record_row(&self, session: &Session, cx: &mut Context<Self>) -> Div {
         let id = session.id;
+        let filter_key = self
+            .record_class_filter
+            .map_or("all", crate::settings_view::tag_class_key);
         let expanded = self.record_details == Some(id);
         let help_title = session.title.clone();
         let (start, end) = day_bounds(self.record_date);
@@ -290,9 +317,43 @@ impl ForceView {
                                             })
                                     })
                                     .child(
-                                        single_line(metadata, 13.)
+                                        div()
+                                            .debug_selector(move || {
+                                                format!("record-visible-{filter_key}-{id}")
+                                            })
                                             .mt(px(5.))
-                                            .text_color(rgb(MUTED)),
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.))
+                                            .when_some(
+                                                session
+                                                    .tag_color
+                                                    .as_deref()
+                                                    .and_then(crate::settings_view::tag_color_rgb),
+                                                |line, color| {
+                                                    line.child(
+                                                        div()
+                                                            .size(px(8.))
+                                                            .flex_shrink_0()
+                                                            .rounded_full()
+                                                            .bg(rgb(color)),
+                                                    )
+                                                },
+                                            )
+                                            .child(
+                                                single_line(
+                                                    format!(
+                                                        "{} · {}",
+                                                        metadata,
+                                                        crate::settings_view::tag_class_label(
+                                                            session.tag_class
+                                                        )
+                                                    ),
+                                                    13.,
+                                                )
+                                                .min_w_0()
+                                                .text_color(rgb(MUTED)),
+                                            ),
                                     )
                                     .when_some(status, |body, status| {
                                         body.child(
@@ -306,7 +367,34 @@ impl ForceView {
                                                 }))
                                                 .child(status),
                                         )
-                                    }),
+                                    })
+                                    .when(session.timing_estimated, |body| {
+                                        body.child(
+                                            div()
+                                                .debug_selector(move || {
+                                                    format!("record-estimated-{id}")
+                                                })
+                                                .mt(px(5.))
+                                                .text_size(px(12.))
+                                                .text_color(rgb(MUTED))
+                                                .child("时段为估算"),
+                                        )
+                                    })
+                                    .when(
+                                        session.timing_adjusted && !session.timing_estimated,
+                                        |body| {
+                                            body.child(
+                                                div()
+                                                    .debug_selector(move || {
+                                                        format!("record-rounded-{id}")
+                                                    })
+                                                    .mt(px(5.))
+                                                    .text_size(px(12.))
+                                                    .text_color(rgb(MUTED))
+                                                    .child("时间按秒取整"),
+                                            )
+                                        },
+                                    ),
                             ),
                     )
                     .child(
@@ -393,9 +481,30 @@ impl ForceView {
                             record_detail("标签", session.tag_name.clone())
                                 .debug_selector(move || format!("record-detail-tag-{id}")),
                         )
-                        .when(session.paused_at(self.now) > 0, |body| {
-                            body.child(record_detail("暂停", clock(session.paused_at(self.now))))
+                        .child(record_detail(
+                            "分类",
+                            crate::settings_view::tag_class_label(session.tag_class).to_owned(),
+                        ))
+                        .when(session.timing_estimated, |body| {
+                            body.child(record_detail("时间", "时段为估算".to_owned()))
                         })
+                        .when(
+                            session.timing_adjusted && !session.timing_estimated,
+                            |body| body.child(record_detail("时间", "按秒取整".to_owned())),
+                        )
+                        .when(
+                            !session.timing_estimated
+                                && !session.timing_adjusted
+                                && session.paused_at(self.now) > 0,
+                            |body| {
+                                body.child(
+                                    record_detail("暂停", clock(session.paused_at(self.now)))
+                                        .debug_selector(move || {
+                                            format!("record-detail-pause-{id}")
+                                        }),
+                                )
+                            },
+                        )
                         .child(record_detail("开始", record_timestamp(session.started_at)))
                         .child(record_detail(
                             "结束",

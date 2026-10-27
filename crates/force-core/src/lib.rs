@@ -13,7 +13,7 @@ pub const HISTORY_LIMIT: usize = 500;
 pub const MAX_GOAL_MINUTES: u32 = 24 * 60;
 pub const MIN_TARGET_SECONDS: i64 = 60;
 pub const MAX_TARGET_SECONDS: i64 = 24 * 60 * 60;
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
 mod agenda;
 mod task;
@@ -65,11 +65,48 @@ impl TagKind {
     }
 }
 
+/// Evaluation is separate from whether a timer is a focus or a rest timer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TagClass {
+    Positive,
+    #[default]
+    Neutral,
+    Negative,
+    Leisure,
+    /// Older Force records had no evaluation category.
+    Legacy,
+}
+
+impl TagClass {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Positive => "positive",
+            Self::Neutral => "neutral",
+            Self::Negative => "negative",
+            Self::Leisure => "leisure",
+            Self::Legacy => "legacy",
+        }
+    }
+
+    fn parse(value: &str) -> Result<Self> {
+        match value {
+            "positive" => Ok(Self::Positive),
+            "neutral" => Ok(Self::Neutral),
+            "negative" => Ok(Self::Negative),
+            "leisure" => Ok(Self::Leisure),
+            "legacy" => Ok(Self::Legacy),
+            _ => Err(Error::InvalidData),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Tag {
     pub id: i64,
     pub name: String,
     pub kind: TagKind,
+    pub class: TagClass,
+    pub color: Option<String>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -86,6 +123,12 @@ pub struct Session {
     pub tag_id: i64,
     pub tag_name: String,
     pub tag_kind: TagKind,
+    pub tag_class: TagClass,
+    pub tag_color: Option<String>,
+    /// True when the recorded interval had to be estimated during import.
+    pub timing_estimated: bool,
+    /// True if a source's intervals were adjusted rather than recorded exactly.
+    pub timing_adjusted: bool,
     pub started_at: i64,
     pub finished_at: Option<i64>,
     pub target_seconds: Option<i64>,
@@ -171,17 +214,24 @@ impl Store {
                 task::migrate_v2(&mut connection)?;
                 migrate_v3(&mut connection)?;
                 agenda::migrate_v4(&mut connection)?;
+                migrate_v5(&mut connection)?;
             }
             2 => {
                 task::migrate_v2(&mut connection)?;
                 migrate_v3(&mut connection)?;
                 agenda::migrate_v4(&mut connection)?;
+                migrate_v5(&mut connection)?;
             }
             3 => {
                 migrate_v3(&mut connection)?;
                 agenda::migrate_v4(&mut connection)?;
+                migrate_v5(&mut connection)?;
             }
-            4 => agenda::migrate_v4(&mut connection)?,
+            4 => {
+                agenda::migrate_v4(&mut connection)?;
+                migrate_v5(&mut connection)?;
+            }
+            5 => migrate_v5(&mut connection)?,
             SCHEMA_VERSION => (),
             _ => return Err(Error::UnsupportedSchema),
         }
@@ -199,26 +249,51 @@ impl Store {
     }
 
     pub fn tags(&self) -> Result<Vec<Tag>> {
-        let mut statement = self
-            .connection
-            .prepare("SELECT id, name, kind FROM tags WHERE archived = 0 ORDER BY id")?;
+        let mut statement = self.connection.prepare(
+            "SELECT id, name, kind, class, color FROM tags WHERE archived = 0 ORDER BY id",
+        )?;
         let rows = statement.query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get::<_, String>(2)?))
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get(4)?,
+            ))
         })?;
         rows.map(|row| {
-            let (id, name, kind) = row?;
+            let (id, name, kind, class, color) = row?;
             Ok(Tag {
                 id,
                 name,
                 kind: TagKind::parse(&kind)?,
+                class: TagClass::parse(&class)?,
+                color,
             })
         })
         .collect()
     }
 
     pub fn create_tag(&mut self, name: &str, kind: TagKind) -> Result<Tag> {
+        let class = match kind {
+            TagKind::Focus => TagClass::Positive,
+            TagKind::Rest => TagClass::Leisure,
+        };
+        self.create_tag_with_details(name, kind, class, None)
+    }
+
+    pub fn create_tag_with_details(
+        &mut self,
+        name: &str,
+        kind: TagKind,
+        class: TagClass,
+        color: Option<&str>,
+    ) -> Result<Tag> {
         let name = valid_text(name, 40, "Enter a tag name of 1–40 characters")?;
-        let transaction = self.connection.transaction()?;
+        let color = valid_color(color)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM tags WHERE name = ?1 COLLATE NOCASE AND archived = 0)",
             [name],
@@ -228,36 +303,33 @@ impl Store {
             return Err(Error::Validation("A tag with that name already exists"));
         }
         transaction.execute(
-            "INSERT INTO tags (name, kind) VALUES (?1, ?2)",
-            params![name, kind.as_str()],
+            "INSERT INTO tags (name, kind, class, color) VALUES (?1, ?2, ?3, ?4)",
+            params![name, kind.as_str(), class.as_str(), color],
         )?;
         let tag = Tag {
             id: transaction.last_insert_rowid(),
             name: name.to_owned(),
             kind,
+            class,
+            color,
         };
         transaction.commit()?;
         Ok(tag)
     }
 
-    /// Renames an available tag and its unfinished sessions in one transaction.
-    /// Completed sessions preserve the name shown when they were finished.
+    /// Renames a tag while retaining its other properties and historical snapshots.
     pub fn rename_tag(&mut self, id: i64, name: &str) -> Result<Tag> {
         let name = valid_text(name, 40, "Enter a tag name of 1–40 characters")?;
-        let transaction = self.connection.transaction()?;
-        let kind: String = transaction
-            .query_row(
-                "SELECT kind FROM tags WHERE id = ?1 AND archived = 0",
-                [id],
-                |row| row.get(0),
-            )
-            .optional()?
-            .ok_or(Error::NotFound)?;
-        let kind = TagKind::parse(&kind)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tag = task::available_tag(&transaction, id).map_err(|error| match error {
+            Error::ArchivedTag => Error::NotFound,
+            other => other,
+        })?;
         let exists: bool = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM tags WHERE id != ?1 AND name = ?2 COLLATE NOCASE AND archived = 0)",
-            params![id, name],
-            |row| row.get(0),
+            params![id, name], |row| row.get(0),
         )?;
         if exists {
             return Err(Error::Validation("A tag with that name already exists"));
@@ -267,6 +339,47 @@ impl Store {
             "UPDATE sessions SET tag_name = ?1 WHERE tag_id = ?2 AND finished_at IS NULL",
             params![name, id],
         )?;
+        transaction.execute("UPDATE tasks SET tag_name = ?1 WHERE tag_id = ?2 AND completed_at IS NULL AND deleted = 0", params![name, id])?;
+        transaction.commit()?;
+        Ok(Tag {
+            name: name.to_owned(),
+            ..tag
+        })
+    }
+
+    /// Edits an available tag and updates unfinished records atomically.
+    /// Completed sessions preserve the properties in effect when they ended.
+    pub fn update_tag(
+        &mut self,
+        id: i64,
+        name: &str,
+        class: TagClass,
+        color: Option<&str>,
+    ) -> Result<Tag> {
+        let name = valid_text(name, 40, "Enter a tag name of 1–40 characters")?;
+        let color = valid_color(color)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let tag = task::available_tag(&transaction, id).map_err(|error| match error {
+            Error::ArchivedTag => Error::NotFound,
+            other => other,
+        })?;
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM tags WHERE id != ?1 AND name = ?2 COLLATE NOCASE AND archived = 0)",
+            params![id, name], |row| row.get(0),
+        )?;
+        if exists {
+            return Err(Error::Validation("A tag with that name already exists"));
+        }
+        transaction.execute(
+            "UPDATE tags SET name = ?1, class = ?2, color = ?3 WHERE id = ?4",
+            params![name, class.as_str(), color, id],
+        )?;
+        transaction.execute(
+            "UPDATE sessions SET tag_name = ?1, tag_class = ?2, tag_color = ?3 WHERE tag_id = ?4 AND finished_at IS NULL",
+            params![name, class.as_str(), color, id],
+        )?;
         transaction.execute(
             "UPDATE tasks SET tag_name = ?1 WHERE tag_id = ?2 AND completed_at IS NULL AND deleted = 0",
             params![name, id],
@@ -275,7 +388,9 @@ impl Store {
         Ok(Tag {
             id,
             name: name.to_owned(),
-            kind,
+            kind: tag.kind,
+            class,
+            color,
         })
     }
 
@@ -370,18 +485,13 @@ impl Store {
     ) -> Result<Session> {
         let title = valid_text(title, 200, "Enter a task title of 1–200 characters")?;
         let transaction = self.connection.transaction()?;
-        let tag: Option<(String, String)> = transaction
-            .query_row(
-                "SELECT name, kind FROM tags WHERE id = ?1 AND archived = 0",
-                [tag_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        let (tag_name, tag_kind) = tag.ok_or(Error::NotFound)?;
-        TagKind::parse(&tag_kind)?;
+        let tag = task::available_tag(&transaction, tag_id).map_err(|error| match error {
+            Error::ArchivedTag => Error::NotFound,
+            other => other,
+        })?;
         transaction.execute(
-            "INSERT INTO sessions (title, tag_id, tag_name, tag_kind, started_at, target_seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![title, tag_id, tag_name, tag_kind, now, target_seconds],
+            "INSERT INTO sessions (title, tag_id, tag_name, tag_kind, tag_class, tag_color, started_at, target_seconds) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![title, tag_id, tag.name, tag.kind.as_str(), tag.class.as_str(), tag.color, now, target_seconds],
         )?;
         let id = transaction.last_insert_rowid();
         transaction.execute(
@@ -548,7 +658,7 @@ impl Store {
     pub fn csv_export(&self, now: i64) -> Result<String> {
         let sessions = load_sessions(&self.connection, "ORDER BY started_at, id", [])?;
         let mut csv = String::from(
-            "id,title,tag,kind,started_at,finished_at,target_seconds,elapsed_seconds,status,started_at_utc,finished_at_utc\r\n",
+            "id,title,tag,kind,started_at,finished_at,target_seconds,elapsed_seconds,status,started_at_utc,finished_at_utc,category,color,timing_estimated,timing_adjusted\r\n",
         );
         for session in sessions {
             let session = export_session_snapshot(session, now)?;
@@ -577,6 +687,10 @@ impl Store {
                 status.to_owned(),
                 utc_timestamp(Some(session.started_at)),
                 utc_timestamp(session.finished_at),
+                session.tag_class.as_str().to_owned(),
+                session.tag_color.clone().unwrap_or_default(),
+                session.timing_estimated.to_string(),
+                session.timing_adjusted.to_string(),
             ];
             csv.push_str(
                 &fields
@@ -609,7 +723,7 @@ fn calculate_focus_totals(
     let mut statement = connection.prepare(
         "SELECT i.started_at, MIN(COALESCE(i.ended_at, ?2), ?2)
          FROM intervals i JOIN sessions s ON s.id = i.session_id
-         WHERE s.tag_kind = 'focus' AND i.started_at < ?2
+         WHERE s.tag_kind = 'focus' AND s.tag_class IN ('positive', 'negative', 'legacy') AND i.started_at < ?2
            AND (i.ended_at > ?1 OR i.ended_at IS NULL)
          ORDER BY i.started_at",
     )?;
@@ -669,7 +783,7 @@ fn calculate_stats(connection: &Connection, start: i64, end: i64, now: i64) -> R
     }
     let interval_end = end.min(now);
     let mut statement = connection.prepare(
-        "SELECT i.started_at, MIN(COALESCE(i.ended_at, ?2), ?2), s.tag_kind
+        "SELECT i.started_at, MIN(COALESCE(i.ended_at, ?2), ?2), s.tag_kind, s.tag_class
          FROM intervals i JOIN sessions s ON s.id = i.session_id
          WHERE i.started_at < ?2 AND (i.ended_at > ?1 OR i.ended_at IS NULL)",
     )?;
@@ -678,17 +792,23 @@ fn calculate_stats(connection: &Connection, start: i64, end: i64, now: i64) -> R
             row.get::<_, i64>(0)?,
             row.get::<_, i64>(1)?,
             row.get::<_, String>(2)?,
+            row.get::<_, String>(3)?,
         ))
     })?;
     let mut focus = Vec::new();
     let mut task_seconds = 0_i64;
     for row in rows {
-        let (interval_start, interval_end, kind) = row?;
+        let (interval_start, interval_end, kind, class) = row?;
         let a = interval_start.max(start);
         let b = interval_end.min(end).min(now);
         if b > a {
             task_seconds = task_seconds.saturating_add(b.saturating_sub(a));
-            if TagKind::parse(&kind)? == TagKind::Focus {
+            if TagKind::parse(&kind)? == TagKind::Focus
+                && matches!(
+                    TagClass::parse(&class)?,
+                    TagClass::Positive | TagClass::Negative | TagClass::Legacy
+                )
+            {
                 focus.push((a, b));
             }
         }
@@ -728,6 +848,8 @@ fn initialize(connection: &mut Connection) -> Result<()> {
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT NOT NULL,
             kind TEXT NOT NULL CHECK (kind IN ('focus', 'rest')),
+            class TEXT NOT NULL DEFAULT 'legacy' CHECK (class IN ('positive', 'neutral', 'negative', 'leisure', 'legacy')),
+            color TEXT CHECK (color IS NULL OR (length(color) = 7 AND substr(color, 1, 1) = '#' AND substr(color, 2) NOT GLOB '*[^0-9A-Fa-f]*')),
             archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0, 1))
         );
         CREATE UNIQUE INDEX active_tag_name ON tags(name COLLATE NOCASE) WHERE archived = 0;
@@ -738,6 +860,8 @@ fn initialize(connection: &mut Connection) -> Result<()> {
             tag_id INTEGER NOT NULL REFERENCES tags(id),
             tag_name TEXT NOT NULL,
             tag_kind TEXT NOT NULL CHECK (tag_kind IN ('focus', 'rest')),
+            tag_class TEXT NOT NULL DEFAULT 'legacy' CHECK (tag_class IN ('positive', 'neutral', 'negative', 'leisure', 'legacy')),
+            tag_color TEXT CHECK (tag_color IS NULL OR (length(tag_color) = 7 AND substr(tag_color, 1, 1) = '#' AND substr(tag_color, 2) NOT GLOB '*[^0-9A-Fa-f]*')),
             started_at INTEGER NOT NULL,
             finished_at INTEGER CHECK (finished_at IS NULL OR finished_at >= started_at),
             target_seconds INTEGER CHECK (target_seconds IS NULL OR target_seconds BETWEEN 60 AND 86400)
@@ -758,11 +882,12 @@ fn initialize(connection: &mut Connection) -> Result<()> {
             completion_sound INTEGER NOT NULL DEFAULT 1 CHECK (completion_sound IN (0, 1))
         );
         INSERT INTO preferences (id, goal_minutes) VALUES (1, 300);
-        INSERT INTO tags (name, kind) VALUES ('工作', 'focus'), ('学习', 'focus'), ('阅读', 'focus'), ('休息', 'rest');
+        INSERT INTO tags (name, kind, class) VALUES ('工作', 'focus', 'positive'), ('学习', 'focus', 'positive'), ('阅读', 'focus', 'positive'), ('休息', 'rest', 'leisure');
         PRAGMA user_version = 4;",
     )?;
     transaction.execute_batch(task::SCHEMA)?;
     transaction.execute_batch(agenda::SCHEMA)?;
+    transaction.execute_batch(IMPORTED_SESSIONS_SCHEMA)?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -778,7 +903,7 @@ fn migrate_v1(connection: &mut Connection) -> Result<()> {
              CREATE INDEX interval_time_window ON intervals(ended_at, started_at);
              PRAGMA user_version = 2;",
         )?,
-        2 | 3 | 4 | SCHEMA_VERSION => (), // Another process completed the same migration.
+        2 | 3 | 4 | 5 | SCHEMA_VERSION => (), // Another process completed the same migration.
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -793,11 +918,62 @@ fn migrate_v3(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch("ALTER TABLE preferences ADD COLUMN completion_sound INTEGER NOT NULL DEFAULT 1 CHECK (completion_sound IN (0, 1));")?;
             transaction.pragma_update(None, "user_version", 4)?;
         }
-        4 | SCHEMA_VERSION => (),
+        4 | 5 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
     Ok(())
+}
+
+const IMPORTED_SESSIONS_SCHEMA: &str = "
+CREATE TABLE imported_sessions (
+    source TEXT NOT NULL,
+    source_id TEXT NOT NULL,
+    session_id INTEGER NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+    source_start TEXT NOT NULL,
+    source_end TEXT NOT NULL,
+    source_duration_seconds INTEGER NOT NULL CHECK (source_duration_seconds >= 0),
+    source_note TEXT,
+    source_tag_archived INTEGER NOT NULL DEFAULT 0 CHECK (source_tag_archived IN (0, 1)),
+    timing_estimated INTEGER NOT NULL DEFAULT 0 CHECK (timing_estimated IN (0, 1)),
+    timing_precision TEXT NOT NULL DEFAULT 'exact' CHECK (timing_precision IN ('exact', 'terminal_second_adjusted', 'estimated_from_start')),
+    CHECK (timing_estimated = (timing_precision = 'estimated_from_start')),
+    PRIMARY KEY(source, source_id)
+);";
+
+fn migrate_v5(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    match version {
+        5 => {
+            transaction.execute_batch("ALTER TABLE tags ADD COLUMN class TEXT NOT NULL DEFAULT 'legacy' CHECK (class IN ('positive', 'neutral', 'negative', 'leisure', 'legacy'));
+                ALTER TABLE tags ADD COLUMN color TEXT CHECK (color IS NULL OR (length(color) = 7 AND substr(color, 1, 1) = '#' AND substr(color, 2) NOT GLOB '*[^0-9A-Fa-f]*'));
+                ALTER TABLE sessions ADD COLUMN tag_class TEXT NOT NULL DEFAULT 'legacy' CHECK (tag_class IN ('positive', 'neutral', 'negative', 'leisure', 'legacy'));
+                ALTER TABLE sessions ADD COLUMN tag_color TEXT CHECK (tag_color IS NULL OR (length(tag_color) = 7 AND substr(tag_color, 1, 1) = '#' AND substr(tag_color, 2) NOT GLOB '*[^0-9A-Fa-f]*'));")?;
+            transaction.execute_batch(IMPORTED_SESSIONS_SCHEMA)?;
+            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+        }
+        SCHEMA_VERSION => (),
+        _ => return Err(Error::UnsupportedSchema),
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
+fn valid_color(color: Option<&str>) -> Result<Option<String>> {
+    color
+        .map(|value| {
+            if value.len() != 7
+                || !value.starts_with('#')
+                || !value[1..].bytes().all(|b| b.is_ascii_hexdigit())
+            {
+                return Err(Error::Validation(
+                    "Color must be a six-digit hexadecimal value",
+                ));
+            }
+            Ok(value.to_ascii_uppercase())
+        })
+        .transpose()
 }
 
 fn load_sessions(
@@ -818,7 +994,7 @@ fn load_sessions_in_snapshot(
 ) -> Result<Vec<Session>> {
     // `suffix` is always a fixed internal query, never user-provided SQL.
     let mut statement = connection.prepare(&format!(
-        "SELECT id, title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds, task_id FROM sessions {suffix}"
+        "SELECT id, title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds, task_id, tag_class, tag_color, COALESCE((SELECT timing_estimated FROM imported_sessions WHERE session_id = sessions.id), 0), COALESCE((SELECT timing_precision != 'exact' FROM imported_sessions WHERE session_id = sessions.id), 0) FROM sessions {suffix}"
     ))?;
     let mut rows = statement.query(parameters)?;
     let mut sessions = Vec::new();
@@ -830,6 +1006,10 @@ fn load_sessions_in_snapshot(
             tag_id: row.get(2)?,
             tag_name: row.get(3)?,
             tag_kind: TagKind::parse(&row.get::<_, String>(4)?)?,
+            tag_class: TagClass::parse(&row.get::<_, String>(9)?)?,
+            tag_color: row.get(10)?,
+            timing_estimated: row.get(11)?,
+            timing_adjusted: row.get(12)?,
             started_at: row.get(5)?,
             finished_at: row.get(6)?,
             target_seconds: row.get(7)?,
@@ -855,8 +1035,8 @@ fn load_sessions_in_snapshot(
 
 fn load_session(connection: &Connection, id: i64) -> Result<Session> {
     let session = connection.query_row(
-        "SELECT title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds, task_id FROM sessions WHERE id = ?1", [id],
-        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, Option<i64>>(5)?, row.get::<_, Option<i64>>(6)?, row.get::<_, Option<i64>>(7)?)),
+        "SELECT title, tag_id, tag_name, tag_kind, started_at, finished_at, target_seconds, task_id, tag_class, tag_color, COALESCE((SELECT timing_estimated FROM imported_sessions WHERE session_id = sessions.id), 0), COALESCE((SELECT timing_precision != 'exact' FROM imported_sessions WHERE session_id = sessions.id), 0) FROM sessions WHERE id = ?1", [id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, Option<i64>>(5)?, row.get::<_, Option<i64>>(6)?, row.get::<_, Option<i64>>(7)?, row.get::<_, String>(8)?, row.get::<_, Option<String>>(9)?, row.get::<_, bool>(10)?, row.get::<_, bool>(11)?)),
     ).optional()?.ok_or(Error::NotFound)?;
     let mut statement = connection.prepare(
         "SELECT started_at, ended_at FROM intervals WHERE session_id = ?1 ORDER BY started_at, id",
@@ -876,6 +1056,10 @@ fn load_session(connection: &Connection, id: i64) -> Result<Session> {
         tag_id: session.1,
         tag_name: session.2,
         tag_kind: TagKind::parse(&session.3)?,
+        tag_class: TagClass::parse(&session.8)?,
+        tag_color: session.9,
+        timing_estimated: session.10,
+        timing_adjusted: session.11,
         started_at: session.4,
         finished_at: session.5,
         target_seconds: session.6,

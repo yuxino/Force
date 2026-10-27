@@ -17,6 +17,7 @@ const WIDTH: f32 = 220.;
 pub(crate) struct FocusTagOption {
     pub(crate) id: i64,
     pub(crate) name: String,
+    pub(crate) color: Option<String>,
 }
 
 pub(crate) struct TagPicked(pub(crate) i64);
@@ -138,16 +139,38 @@ impl TagPicker {
             for option in options {
                 let id = option.id;
                 let name = option.name;
+                let color = option
+                    .color
+                    .as_deref()
+                    .and_then(crate::settings_view::tag_color_rgb);
                 let picker = picker.clone();
                 menu = menu.item(
                     PopupMenuItem::element(move |_, _| {
                         let help = name.clone();
-                        single_line(name.clone(), 14.)
-                            .id(("focus-tag-option", id as u64))
-                            .debug_selector(move || format!("focus-tag-option-{id}"))
-                            .w(px(menu_width - 46.))
-                            .text_color(rgb(INK))
-                            .tooltip(move |window, cx| Tooltip::new(help.clone()).build(window, cx))
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(if color.is_some() { 8. } else { 0. }))
+                            .when_some(color, |row, color| {
+                                row.child(
+                                    div()
+                                        .debug_selector(move || format!("focus-tag-color-{id}"))
+                                        .size(px(8.))
+                                        .flex_shrink_0()
+                                        .rounded_full()
+                                        .bg(rgb(color)),
+                                )
+                            })
+                            .child(
+                                single_line(name.clone(), 14.)
+                                    .id(("focus-tag-option", id as u64))
+                                    .debug_selector(move || format!("focus-tag-option-{id}"))
+                                    .w(px(menu_width - if color.is_some() { 62. } else { 46. }))
+                                    .text_color(rgb(INK))
+                                    .tooltip(move |window, cx| {
+                                        Tooltip::new(help.clone()).build(window, cx)
+                                    }),
+                            )
                     })
                     .checked(Some(id) == selected)
                     .on_click(move |_, _, cx| {
@@ -198,12 +221,16 @@ impl EventEmitter<TagPicked> for TagPicker {}
 
 impl Render for TagPicker {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let title = self
+        let selected_option = self
             .options
             .iter()
-            .find(|option| Some(option.id) == self.selected)
+            .find(|option| Some(option.id) == self.selected);
+        let title = selected_option
             .map_or("选择标签", |option| option.name.as_str())
             .to_owned();
+        let color = selected_option
+            .and_then(|option| option.color.as_deref())
+            .and_then(crate::settings_view::tag_color_rgb);
         let view = cx.entity();
         div()
             .id("focus-tag-picker")
@@ -235,9 +262,21 @@ impl Render for TagPicker {
                     .when(!self.enabled, |button| {
                         button.bg(rgb(PRESSED)).cursor_default()
                     })
+                    .when_some(color, |button, color| {
+                        button.child(
+                            div()
+                                .debug_selector(|| "focus-tag-selected-color".into())
+                                .size(px(8.))
+                                .flex_shrink_0()
+                                .rounded_full()
+                                .bg(rgb(color)),
+                        )
+                    })
                     .child(
                         single_line(title, 14.)
-                            .w(px(self.trigger_width - 48.))
+                            .w(px(
+                                self.trigger_width - if color.is_some() { 64. } else { 48. }
+                            ))
                             .text_color(rgb(INK)),
                     )
                     .child(

@@ -422,10 +422,10 @@ fn csv_escapes_user_text_and_neutralizes_spreadsheet_formulas() {
     store.finish(task.id, 20).unwrap();
     let csv = store.csv_export(30).unwrap();
     assert!(csv.starts_with(
-        "id,title,tag,kind,started_at,finished_at,target_seconds,elapsed_seconds,status,started_at_utc,finished_at_utc\r\n"
+        "id,title,tag,kind,started_at,finished_at,target_seconds,elapsed_seconds,status,started_at_utc,finished_at_utc,category,color,timing_estimated,timing_adjusted\r\n"
     ));
     assert!(csv.contains("\"'=HYPERLINK(\"\"example\"\")\nnext, line\",\"'@tag\""));
-    assert!(csv.ends_with("\"10\",\"20\",\"\",\"10\",\"completed\",\"1970-01-01T00:00:10Z\",\"1970-01-01T00:00:20Z\"\r\n"));
+    assert!(csv.ends_with("\"10\",\"20\",\"\",\"10\",\"completed\",\"1970-01-01T00:00:10Z\",\"1970-01-01T00:00:20Z\",\"positive\",\"\",\"false\",\"false\"\r\n"));
     assert_eq!(csv_field(" \t+SUM(1,2)"), "\"' \t+SUM(1,2)\"");
     assert_eq!(csv_field("\r\ntext"), "\"'\r\ntext\"");
 }
@@ -649,4 +649,226 @@ fn date_records_include_live_sessions_but_not_days_spent_only_paused() {
             .iter()
             .all(|s| s.id != empty.id)
     );
+}
+
+#[test]
+fn tag_evaluation_color_and_finished_session_snapshots_are_preserved() {
+    let (_directory, mut store) = database();
+    let tag = store
+        .create_tag_with_details(
+            "Classified",
+            TagKind::Focus,
+            TagClass::Positive,
+            Some("#12abEF"),
+        )
+        .unwrap();
+    assert_eq!(tag.color.as_deref(), Some("#12ABEF"));
+    let finished = store.start("Finished", tag.id, 100).unwrap();
+    store.finish(finished.id, 130).unwrap();
+    let active = store.start("Active", tag.id, 140).unwrap();
+    let changed = store
+        .update_tag(tag.id, "Renamed", TagClass::Negative, Some("#112233"))
+        .unwrap();
+    assert_eq!(changed.class, TagClass::Negative);
+    let history = store.sessions().unwrap();
+    assert_eq!(
+        (history[0].tag_class, history[0].tag_color.as_deref()),
+        (TagClass::Positive, Some("#12ABEF"))
+    );
+    let current = store.active_sessions().unwrap();
+    let active = current.iter().find(|s| s.id == active.id).unwrap();
+    assert_eq!(
+        (active.tag_class, active.tag_color.as_deref()),
+        (TagClass::Negative, Some("#112233"))
+    );
+    for color in ["", "#123", "#12345z", "123456", "#１２３４５６"] {
+        assert!(
+            store
+                .update_tag(tag.id, "Renamed", TagClass::Neutral, Some(color))
+                .is_err()
+        );
+    }
+    assert_eq!(
+        store
+            .tags()
+            .unwrap()
+            .into_iter()
+            .find(|t| t.id == tag.id)
+            .unwrap(),
+        changed
+    );
+    let no_color = store
+        .update_tag(tag.id, "Renamed", TagClass::Leisure, None)
+        .unwrap();
+    assert_eq!(no_color.color, None);
+}
+
+#[test]
+fn category_filter_is_shared_by_stats_and_activity_ranges_without_changing_legacy() {
+    let (_directory, mut store) = database();
+    store.update_tag(1, "工作", TagClass::Legacy, None).unwrap();
+    let positive = store
+        .create_tag_with_details("Positive", TagKind::Focus, TagClass::Positive, None)
+        .unwrap();
+    let negative = store
+        .create_tag_with_details("Negative", TagKind::Focus, TagClass::Negative, None)
+        .unwrap();
+    let neutral = store
+        .create_tag_with_details("Neutral", TagKind::Focus, TagClass::Neutral, None)
+        .unwrap();
+    let leisure = store
+        .create_tag_with_details("Leisure", TagKind::Focus, TagClass::Leisure, None)
+        .unwrap();
+    for (tag, start, end) in [
+        (1, 0, 60),
+        (positive.id, 40, 100),
+        (negative.id, 90, 160),
+        (neutral.id, 0, 180),
+        (leisure.id, 0, 180),
+        (4, 0, 100),
+    ] {
+        let session = store.start("Example", tag, start).unwrap();
+        store.finish(session.id, end).unwrap();
+    }
+    let stats = store.stats(0, 200, 200).unwrap();
+    assert_eq!(stats.focus_seconds, 160);
+    assert_eq!(stats.task_seconds, 650);
+    assert_eq!(
+        store
+            .focus_totals_for_ranges(&[(0, 80), (80, 200)], 200)
+            .unwrap(),
+        vec![80, 80]
+    );
+}
+
+#[test]
+fn new_focus_tags_default_to_positive_and_fresh_rest_tags_are_leisure() {
+    let (_directory, mut store) = database();
+    assert_eq!(store.tags().unwrap()[0].class, TagClass::Positive);
+    assert_eq!(store.tags().unwrap()[3].class, TagClass::Leisure);
+    assert_eq!(
+        store.create_tag("New work", TagKind::Focus).unwrap().class,
+        TagClass::Positive
+    );
+    assert_eq!(
+        store.create_tag("New rest", TagKind::Rest).unwrap().class,
+        TagClass::Leisure
+    );
+}
+
+#[test]
+fn v5_upgrade_keeps_old_records_unclassified_and_existing_focus_totals() {
+    let (directory, mut store) = database();
+    let session = store.start("Existing", 1, 100).unwrap();
+    store.finish(session.id, 160).unwrap();
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE imported_sessions;
+       ALTER TABLE tags DROP COLUMN class; ALTER TABLE tags DROP COLUMN color;
+       ALTER TABLE sessions DROP COLUMN tag_class; ALTER TABLE sessions DROP COLUMN tag_color;
+       PRAGMA user_version = 5;",
+        )
+        .unwrap();
+    drop(store);
+    let path = directory.path().join("data/force.sqlite3");
+    let store = Store::open(path).unwrap();
+    assert_eq!(store.tags().unwrap()[0].class, TagClass::Legacy);
+    let record = &store.sessions().unwrap()[0];
+    assert_eq!(record.tag_class, TagClass::Legacy);
+    assert_eq!(record.tag_color, None);
+    assert!(!record.timing_estimated);
+    assert_eq!(store.stats(0, 200, 200).unwrap().focus_seconds, 60);
+    assert_eq!(
+        store.focus_totals_for_ranges(&[(0, 200)], 200).unwrap(),
+        vec![60]
+    );
+}
+
+#[test]
+fn import_source_is_unique_and_estimated_timing_is_visible_in_session() {
+    let (_directory, mut store) = database();
+    let session = store.start("Imported", 1, 100).unwrap();
+    store.finish(session.id, 130).unwrap();
+    store.connection.execute("INSERT INTO imported_sessions (source, source_id, session_id, source_start, source_end, source_duration_seconds, source_note, timing_estimated, timing_precision) VALUES ('test', 'example', ?1, 'start', 'end', 30, 'note', 1, 'estimated_from_start')", [session.id]).unwrap();
+    assert!(store.sessions().unwrap()[0].timing_estimated);
+    assert!(store.sessions().unwrap()[0].timing_adjusted);
+    assert!(
+        store
+            .csv_export(200)
+            .unwrap()
+            .contains("\"positive\",\"\",\"true\",\"true\"")
+    );
+    assert!(store.connection.execute("INSERT INTO imported_sessions (source, source_id, session_id, source_start, source_end, source_duration_seconds) VALUES ('test', 'example', ?1, 'start', 'end', 30)", [session.id]).is_err());
+    let rounded = store.start("Rounded", 1, 140).unwrap();
+    store.finish(rounded.id, 170).unwrap();
+    store.connection.execute("INSERT INTO imported_sessions (source, source_id, session_id, source_start, source_end, source_duration_seconds, timing_precision) VALUES ('test', 'rounded', ?1, 'start', 'end', 30, 'terminal_second_adjusted')", [rounded.id]).unwrap();
+    let records = store.sessions().unwrap();
+    let record = records.iter().find(|s| s.id == rounded.id).unwrap();
+    assert!(record.timing_adjusted);
+    assert!(!record.timing_estimated);
+}
+
+#[test]
+fn failed_v5_migration_keeps_existing_data_and_version() {
+    let (directory, mut store) = database();
+    let existing = store.start("Existing", 1, 100).unwrap();
+    store.finish(existing.id, 160).unwrap();
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE imported_sessions;
+       ALTER TABLE tags DROP COLUMN class; ALTER TABLE tags DROP COLUMN color;
+       ALTER TABLE sessions DROP COLUMN tag_class; ALTER TABLE sessions DROP COLUMN tag_color;
+       CREATE TABLE imported_sessions (conflict INTEGER);
+       PRAGMA user_version = 5;",
+        )
+        .unwrap();
+    drop(store);
+    let path = directory.path().join("data/force.sqlite3");
+    assert!(Store::open(&path).is_err());
+    let connection = Connection::open(path).unwrap();
+    assert_eq!(
+        connection
+            .pragma_query_value(None, "user_version", |r| r.get::<_, i64>(0))
+            .unwrap(),
+        5
+    );
+    assert!(connection.prepare("SELECT class FROM tags").is_err());
+    assert_eq!(
+        connection
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        1
+    );
+}
+
+#[test]
+fn concurrent_v5_upgrade_is_safe() {
+    let (directory, store) = database();
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE imported_sessions;
+       ALTER TABLE tags DROP COLUMN class; ALTER TABLE tags DROP COLUMN color;
+       ALTER TABLE sessions DROP COLUMN tag_class; ALTER TABLE sessions DROP COLUMN tag_color;
+       PRAGMA user_version = 5;",
+        )
+        .unwrap();
+    drop(store);
+    let path = directory.path().join("data/force.sqlite3");
+    let barrier = std::sync::Arc::new(std::sync::Barrier::new(2));
+    let threads: Vec<_> = (0..2)
+        .map(|_| {
+            let path = path.clone();
+            let barrier = barrier.clone();
+            std::thread::spawn(move || {
+                barrier.wait();
+                Store::open(path).map(|s| s.tags().map(|t| t.len()))
+            })
+        })
+        .collect();
+    for thread in threads {
+        assert_eq!(thread.join().unwrap().unwrap().unwrap(), 4);
+    }
 }

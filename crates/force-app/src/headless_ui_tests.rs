@@ -834,6 +834,45 @@ fn headless_ui_record_details_show_the_full_saved_tag(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn headless_ui_estimated_records_do_not_claim_an_unknown_pause(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Records);
+    manager.view.update(&mut manager.cx, |view, cx| {
+        view.record_date = Local::now().date_naive().pred_opt().unwrap();
+        let now = day_bounds(view.record_date).0 + 3600;
+        let store = view.store.as_mut().unwrap();
+        for title in ["Estimated", "Known pause", "Rounded"] {
+            let session = store.start(title, 1, now - 120).unwrap();
+            store.pause(session.id, now - 100).unwrap();
+            store.resume(session.id, now - 70).unwrap();
+            store.finish(session.id, now - 30).unwrap();
+        }
+        view.refresh(cx);
+        view.history
+            .iter_mut()
+            .find(|session| session.id == 1)
+            .unwrap()
+            .timing_estimated = true;
+        view.history
+            .iter_mut()
+            .find(|session| session.id == 3)
+            .unwrap()
+            .timing_adjusted = true;
+        cx.notify();
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.scroll("records-content", -500.);
+    manager.click("record-details-1");
+    assert!(manager.cx.debug_bounds("record-estimated-1").is_some());
+    assert!(manager.cx.debug_bounds("record-detail-pause-1").is_none());
+    manager.click("record-details-2");
+    assert!(manager.cx.debug_bounds("record-detail-pause-2").is_some());
+    manager.click("record-details-3");
+    assert!(manager.cx.debug_bounds("record-rounded-3").is_some());
+    assert!(manager.cx.debug_bounds("record-detail-pause-3").is_none());
+}
+
+#[gpui::test]
 fn headless_ui_global_new_task_is_available_without_scheduling_and_preserves_its_draft(
     cx: &mut TestAppContext,
 ) {
@@ -1645,6 +1684,36 @@ fn headless_ui_tag_menu_is_anchored_to_its_visible_control(cx: &mut TestAppConte
 }
 
 #[gpui::test]
+fn headless_ui_tag_picker_shows_selected_and_menu_colors(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update(&mut manager.cx, |view, cx| {
+        let tag = view
+            .tags
+            .iter()
+            .find(|tag| tag.id == view.selected_tag)
+            .unwrap()
+            .clone();
+        view.store
+            .as_mut()
+            .unwrap()
+            .update_tag(tag.id, &tag.name, tag.class, Some("#6C9079"))
+            .unwrap();
+        view.refresh(cx);
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    assert!(
+        manager
+            .cx
+            .debug_bounds("focus-tag-selected-color")
+            .is_some()
+    );
+    manager.click("focus-tag-picker");
+    assert!(manager.cx.debug_bounds("focus-tag-color-1").is_some());
+    assert!(manager.cx.debug_bounds("focus-tag-color-2").is_none());
+}
+
+#[gpui::test]
 fn headless_ui_records_reconcile_cross_day_and_live_rows(cx: &mut TestAppContext) {
     let date = Local::now().date_naive().pred_opt().unwrap();
     let midnight = day_bounds(date).0;
@@ -1686,6 +1755,104 @@ fn headless_ui_records_reconcile_cross_day_and_live_rows(cx: &mut TestAppContext
             assert_eq!(view.history.len(), 1);
             assert_eq!(view.history[0].title, "Cross-day focus");
             assert_eq!(view.record_stats.focus_seconds, 10_705);
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_record_class_filter_changes_only_the_list(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new(cx, width, height);
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.record_date = Local::now().date_naive().pred_opt().unwrap();
+            let now = day_bounds(view.record_date).0 + 3600;
+            let store = view.store.as_mut().unwrap();
+            let positive = store
+                .create_tag_with_details(
+                    "Positive test",
+                    force_core::TagKind::Focus,
+                    force_core::TagClass::Positive,
+                    None,
+                )
+                .unwrap();
+            let leisure = store
+                .create_tag_with_details(
+                    "Leisure test",
+                    force_core::TagKind::Focus,
+                    force_core::TagClass::Leisure,
+                    None,
+                )
+                .unwrap();
+            let a = store
+                .start("Positive record", positive.id, now - 120)
+                .unwrap();
+            store.finish(a.id, now - 60).unwrap();
+            let b = store.start("Leisure record", leisure.id, now - 60).unwrap();
+            store.finish(b.id, now - 30).unwrap();
+            view.refresh(cx);
+        });
+        manager.click("records-tab");
+        manager.scroll("records-content", -500.);
+        assert!(manager.cx.debug_bounds("record-visible-all-1").is_some());
+        assert!(manager.cx.debug_bounds("record-visible-all-2").is_some());
+        let total_before = manager
+            .view
+            .read_with(&manager.cx, |view, _| view.record_stats.focus_seconds);
+        manager.click("record-filter-positive");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(
+                view.record_class_filter,
+                Some(force_core::TagClass::Positive)
+            );
+            assert_eq!(
+                view.history.iter().find(|s| s.id == 1).unwrap().tag_class,
+                force_core::TagClass::Positive
+            );
+            assert_eq!(
+                view.history.iter().find(|s| s.id == 2).unwrap().tag_class,
+                force_core::TagClass::Leisure
+            );
+        });
+        assert!(
+            manager
+                .cx
+                .debug_bounds("record-visible-positive-1")
+                .is_some()
+        );
+        assert!(
+            manager
+                .cx
+                .debug_bounds("record-visible-positive-2")
+                .is_none()
+        );
+        assert_eq!(
+            manager
+                .view
+                .read_with(&manager.cx, |view, _| view.record_stats.focus_seconds),
+            total_before
+        );
+        manager.click("record-filter-all");
+        assert!(manager.cx.debug_bounds("record-visible-all-2").is_some());
+        manager.click("record-filter-negative");
+        assert!(manager.cx.debug_bounds("record-empty-state").is_some());
+        let previous_date = manager
+            .view
+            .read_with(&manager.cx, |view, _| view.record_date.pred_opt().unwrap());
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.select_record_date(previous_date, cx)
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(
+                view.record_class_filter,
+                Some(force_core::TagClass::Negative)
+            )
+        });
+        assert!(manager.cx.debug_bounds("record-empty-state").is_some());
+        manager.click("clear-empty-record-search");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.record_class_filter, None)
         });
     }
 }
@@ -2778,6 +2945,74 @@ fn headless_ui_reopening_the_same_tag_preserves_its_draft(cx: &mut TestAppContex
 }
 
 #[gpui::test]
+fn headless_ui_new_tag_is_positive_and_counts_focus_by_default(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.navigate(Page::Settings, window, cx);
+        assert_eq!(view.new_tag_class, force_core::TagClass::Positive);
+        view.tag_input
+            .update(cx, |input, cx| input.set_value("Default focus", window, cx));
+        view.save_tag(window, cx);
+        let tag = view
+            .tags
+            .iter()
+            .find(|tag| tag.name == "Default focus")
+            .unwrap();
+        assert_eq!(tag.class, force_core::TagClass::Positive);
+        let tag_id = tag.id;
+        let now = view.now;
+        let store = view.store.as_mut().unwrap();
+        let session = store
+            .start("Default focus record", tag_id, now - 120)
+            .unwrap();
+        store.finish(session.id, now - 60).unwrap();
+        assert_eq!(store.stats(now - 120, now, now).unwrap().focus_seconds, 60);
+        assert_eq!(view.new_tag_class, force_core::TagClass::Positive);
+    });
+}
+
+#[gpui::test]
+fn headless_ui_tag_class_and_color_are_saved_and_drafts_are_protected(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.navigate(Page::Settings, window, cx);
+        view.begin_edit_tag(1, window, cx);
+        view.new_tag_class = force_core::TagClass::Negative;
+        view.tag_color_input
+            .update(cx, |input, cx| input.set_value("#6c9079", window, cx));
+        assert!(view.can_save_tag(cx));
+        view.begin_edit_tag(2, window, cx);
+    });
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("取消");
+    manager.cx.run_until_parked();
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.save_tag(window, cx)
+    });
+    manager.view.read_with(&manager.cx, |view, _| {
+        let tag = view.tags.iter().find(|tag| tag.id == 1).unwrap();
+        assert_eq!(tag.class, force_core::TagClass::Negative);
+        assert_eq!(tag.color.as_deref(), Some("#6C9079"));
+    });
+}
+
+#[gpui::test]
+fn headless_ui_rejects_invalid_tag_color_without_losing_the_draft(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.navigate(Page::Settings, window, cx);
+        view.begin_edit_tag(1, window, cx);
+        view.tag_color_input
+            .update(cx, |input, cx| input.set_value("#bad", window, cx));
+        assert!(view.tag_draft_error(cx).is_some());
+        assert!(!view.can_save_tag(cx));
+        view.save_tag(window, cx);
+        assert_eq!(view.tag_color_input.read(cx).value(), "#bad");
+        assert_eq!(view.editing_tag, Some(1));
+    });
+}
+
+#[gpui::test]
 fn headless_ui_tag_drafts_require_a_choice_before_switching_edit_targets(cx: &mut TestAppContext) {
     for new_draft in [false, true] {
         for choice in ["取消", "不保存", "保存"] {
@@ -2833,6 +3068,8 @@ fn headless_ui_adding_a_tag_does_not_retag_a_saved_task(cx: &mut TestAppContext)
     });
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
+    // The extended tag form continues below the visible settings viewport.
+    manager.scroll("manager-content", -500.);
     manager.click("save-tag");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert!(view.tags.iter().any(|tag| tag.name == "Additional tag"));
