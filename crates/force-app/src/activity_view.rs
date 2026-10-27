@@ -1,8 +1,9 @@
-use chrono::{Datelike, Local, TimeZone};
+use chrono::{Datelike, Duration, Local, TimeZone};
 use gpui::{prelude::*, *};
 use gpui_component::{
     Disableable,
     button::{ButtonCustomVariant, ButtonVariants},
+    tooltip::Tooltip,
 };
 
 use crate::{
@@ -15,7 +16,7 @@ const LEVELS: [u32; 4] = [0xc9c9c9, 0x989898, 0x626262, 0x242424];
 const FUTURE: u32 = 0xf8f8f8;
 
 impl ForceView {
-    pub(crate) fn activity_calendar(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn activity_calendar(&self, window: &Window, cx: &mut Context<Self>) -> Div {
         let today = Local
             .timestamp_opt(self.now, 0)
             .single()
@@ -25,6 +26,13 @@ impl ForceView {
             .activity_days
             .iter()
             .any(|day| day.date == self.record_date && day.date <= today);
+        let focus_date = if selected_visible {
+            self.record_date
+        } else {
+            today
+        };
+        let grid_focused = self.activity_focus.is_focused(window);
+        let activity_bounds = self.activity_bounds.clone();
 
         div()
             .debug_selector(|| "activity-calendar".into())
@@ -83,9 +91,57 @@ impl ForceView {
                     .child(
                         div()
                             .debug_selector(|| "activity-grid".into())
+                            .track_focus(&self.activity_focus)
+                            .on_key_down(cx.listener(
+                                move |this, event: &KeyDownEvent, window, cx| {
+                                    if event.keystroke.modifiers.modified() {
+                                        return;
+                                    }
+                                    let days = match event.keystroke.key.as_str() {
+                                        "left" => -7,
+                                        "right" => 7,
+                                        "up" => -1,
+                                        "down" => 1,
+                                        "enter" | "space" => 0,
+                                        _ => return,
+                                    };
+                                    window.prevent_default();
+                                    cx.stop_propagation();
+                                    if let Some(date) = this.activity_hovered_day {
+                                        this.activity_invalidated_tooltip_day = Some(date);
+                                        this.activity_tooltip_generation =
+                                            this.activity_tooltip_generation.wrapping_add(1);
+                                    }
+                                    this.reveal_activity_grid(cx);
+                                    let today = Local::now().date_naive();
+                                    let anchor = if this.activity_days.iter().any(|day| {
+                                        day.date == this.record_date && day.date <= today
+                                    }) {
+                                        this.record_date
+                                    } else {
+                                        today
+                                    };
+                                    if let Some(date) =
+                                        anchor.checked_add_signed(Duration::days(days))
+                                        && date <= today
+                                        && this.activity_days.iter().any(|day| day.date == date)
+                                    {
+                                        this.select_record_date(date, cx);
+                                    }
+                                },
+                            ))
                             .w_full()
+                            .relative()
                             .flex()
                             .gap(px(2.))
+                            .child(
+                                canvas(
+                                    move |bounds, _, _| activity_bounds.set(bounds),
+                                    |_, _, _, _| {},
+                                )
+                                .absolute()
+                                .size_full(),
+                            )
                             .children(self.activity_days.chunks(7).enumerate().map(
                                 |(week_index, week)| {
                                     div()
@@ -121,6 +177,32 @@ impl ForceView {
                                                     activity_duration(day.seconds)
                                                 )
                                             };
+                                            let generation = if self
+                                                .activity_invalidated_tooltip_day
+                                                == Some(date)
+                                            {
+                                                self.activity_tooltip_generation
+                                            } else {
+                                                0
+                                            };
+                                            #[cfg(all(test, feature = "ui-test-support"))]
+                                            let tooltip_probe = self.activity_tooltip_probe.clone();
+                                            let tooltip =
+                                                move |window: &mut Window, cx: &mut App| {
+                                                    let text = label.clone();
+                                                    #[cfg(all(test, feature = "ui-test-support"))]
+                                                    let tooltip_probe = tooltip_probe.clone();
+                                                    Tooltip::element(move |_, _| {
+                                                        #[cfg(all(
+                                                            test,
+                                                            feature = "ui-test-support"
+                                                        ))]
+                                                        tooltip_probe
+                                                            .replace(Some((date, text.clone())));
+                                                        div().child(text.clone())
+                                                    })
+                                                    .build(window, cx)
+                                                };
                                             div()
                                                 .w_full()
                                                 .max_w(px(12.))
@@ -139,10 +221,13 @@ impl ForceView {
                                                         })
                                                     },
                                                 )
-                                                .child(
-                                                    button(SharedString::from(format!(
-                                                        "activity-day-{date}"
-                                                    )))
+                                                .child({
+                                                    let mut cell = button(ElementId::NamedInteger(
+                                                        SharedString::from(format!(
+                                                            "activity-day-{date}"
+                                                        )),
+                                                        generation,
+                                                    ))
                                                     .debug_selector(move || {
                                                         format!("activity-day-{date}")
                                                     })
@@ -166,10 +251,7 @@ impl ForceView {
                                                     .min_w_0()
                                                     .p_0()
                                                     .rounded(px(2.))
-                                                    .tab_stop(
-                                                        selected
-                                                            || (!selected_visible && date == today),
-                                                    )
+                                                    .tab_stop(false)
                                                     .disabled(future)
                                                     .when(future, |button| {
                                                         button
@@ -177,19 +259,46 @@ impl ForceView {
                                                             .border_color(rgb(0xeeeeee))
                                                             .cursor_default()
                                                     })
-                                                    .when(selected, |button| {
-                                                        button.shadow(vec![BoxShadow {
-                                                            color: rgb(INK).into(),
-                                                            offset: point(px(0.), px(0.)),
-                                                            blur_radius: px(0.),
-                                                            spread_radius: px(1.),
-                                                        }])
-                                                    })
-                                                    .tooltip(label)
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.select_record_date(date, cx);
-                                                    })),
-                                                )
+                                                    .when(
+                                                        selected
+                                                            || (grid_focused && date == focus_date),
+                                                        |button| {
+                                                            button.shadow(vec![BoxShadow {
+                                                                color: rgb(INK).into(),
+                                                                offset: point(px(0.), px(0.)),
+                                                                blur_radius: px(0.),
+                                                                spread_radius: px(
+                                                                    if grid_focused
+                                                                        && date == focus_date
+                                                                    {
+                                                                        2.
+                                                                    } else {
+                                                                        1.
+                                                                    },
+                                                                ),
+                                                            }])
+                                                        },
+                                                    )
+                                                    .on_mouse_move(cx.listener(
+                                                        move |this, _: &MouseMoveEvent, _, _| {
+                                                            this.activity_hovered_day = Some(date);
+                                                        },
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        move |this, _, window, cx| {
+                                                            if !this
+                                                                .activity_focus
+                                                                .is_focused(window)
+                                                            {
+                                                                this.activity_pointer_focus = true;
+                                                                window.focus(&this.activity_focus);
+                                                            }
+                                                            this.select_record_date(date, cx);
+                                                        },
+                                                    ));
+                                                    cell.interactivity().tooltip(tooltip);
+                                                    cell
+                                                })
                                         }))
                                 },
                             )),

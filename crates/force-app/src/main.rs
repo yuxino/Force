@@ -20,6 +20,8 @@ mod updates;
 mod view;
 
 #[cfg(all(test, feature = "ui-test-support"))]
+mod activity_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
 mod agenda_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod headless_ui_tests;

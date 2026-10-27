@@ -86,7 +86,11 @@ impl ForceView {
         });
     }
 
-    pub(crate) fn records_panel(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    pub(crate) fn records_panel(
+        &self,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let query = self.record_search.read(cx).value().trim().to_lowercase();
         let records: Vec<_> = self
             .history
@@ -105,7 +109,7 @@ impl ForceView {
             .flex_col()
             .gap(px(20.))
             .when_some(self.timer_context(cx), |body, context| body.child(context))
-            .child(self.activity_calendar(cx))
+            .child(self.activity_calendar(window, cx))
             .child(
                 div()
                     .debug_selector(|| "record-day-summary".into())
