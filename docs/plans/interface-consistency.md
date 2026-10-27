@@ -22,7 +22,7 @@ actions dispatch to that window after the current window borrow ends.
 The clock prioritizes the running session. Browsing a paused task in management
 must not replace that timer or retarget its controls. Without a running session,
 the clock may show the selected paused session or completion state. Keep the
-compact readout inside the black cat. Its expanded black panel contains the
+compact readout inside the cream-colored Siamese cat. Its expanded black panel contains the
 task title, status and one primary action: 开始, 暂停, 继续, 查看本轮,
 查看任务 or 打开 Force as appropriate. Show 结束 only when the active or
 paused session can be modified. Clicking the task title opens its management

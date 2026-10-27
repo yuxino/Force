@@ -108,11 +108,9 @@ impl ForceView {
                     .flex()
                     .items_center()
                     .child(
-                        Icon::default()
-                            .path("force-wordmark.svg")
+                        img(crate::embedded_image_source("force-wordmark.png"))
                             .w(px(96.))
-                            .h(px(20.))
-                            .text_color(rgb(INK)),
+                            .h(px(20.)),
                     )
                     .child(
                         div()

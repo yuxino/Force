@@ -2,16 +2,20 @@
 import AppKit
 import Foundation
 
-// Render the vector master directly so every platform uses the same artwork.
+// Compose every platform icon from the source portrait, never a traced copy.
 let output = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "assets", isDirectory: true)
-let vectorURL = URL(fileURLWithPath: "assets/icon.svg")
-guard let vector = NSImage(contentsOf: vectorURL), vector.size.width > 0, vector.size.height > 0 else {
-    throw NSError(domain: "ForceIcons", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot load assets/icon.svg. Run from the repository root."])
+let portraitURL = URL(fileURLWithPath: "assets/siamese-portrait.png")
+guard let rep = NSBitmapImageRep(data: try Data(contentsOf: portraitURL)), let pixels = rep.cgImage else {
+    throw NSError(domain: "ForceIcons", code: 4, userInfo: [NSLocalizedDescriptionKey: "Cannot load assets/siamese-portrait.png. Run from the repository root."])
 }
+let portrait = NSImage(cgImage: pixels, size: NSSize(width: pixels.width, height: pixels.height))
 let manager = FileManager.default
 try manager.createDirectory(at: output, withIntermediateDirectories: true)
 let iconset = output.appendingPathComponent("Force.iconset", isDirectory: true)
-try manager.createDirectory(at: iconset, withIntermediateDirectories: true)
+guard !manager.fileExists(atPath: iconset.path) else {
+    throw NSError(domain: "ForceIcons", code: 5, userInfo: [NSLocalizedDescriptionKey: "\(iconset.path) already exists; refusing to remove an existing iconset."])
+}
+try manager.createDirectory(at: iconset, withIntermediateDirectories: false)
 defer { try? manager.removeItem(at: iconset) }
 
 func iconPNG(size: Int) throws -> Data {
@@ -27,8 +31,22 @@ func iconPNG(size: Int) throws -> Data {
     defer { NSGraphicsContext.restoreGraphicsState() }
     let bounds = NSRect(x: 0, y: 0, width: size, height: size)
     graphics.cgContext.clear(bounds)
-    vector.draw(in: bounds, from: .zero, operation: .copy, fraction: 1,
-                respectFlipped: false, hints: [.interpolation: NSImageInterpolation.high])
+    graphics.imageInterpolation = .high
+    let scale = CGFloat(size) / 1024
+    graphics.cgContext.scaleBy(x: scale, y: scale)
+
+    // Retain the existing 896-point white tile, its 64-point inset and radius.
+    NSColor.white.setFill()
+    NSBezierPath(roundedRect: NSRect(x: 64, y: 64, width: 896, height: 896),
+                 xRadius: 192, yRadius: 192).fill()
+    let portraitBounds = NSRect(x: 96, y: 96, width: 832, height: 832)
+    let factor = min(portraitBounds.width / portrait.size.width, portraitBounds.height / portrait.size.height)
+    let portraitSize = NSSize(width: portrait.size.width * factor, height: portrait.size.height * factor)
+    let destination = NSRect(x: portraitBounds.midX - portraitSize.width / 2,
+                             y: portraitBounds.midY - portraitSize.height / 2,
+                             width: portraitSize.width, height: portraitSize.height)
+    portrait.draw(in: destination, from: .zero, operation: .sourceOver, fraction: 1,
+                  respectFlipped: false, hints: [.interpolation: NSImageInterpolation.high])
     guard let data = bitmap.representation(using: .png, properties: [:]) else {
         throw NSError(domain: "ForceIcons", code: 2)
     }
@@ -74,4 +92,4 @@ for image in windowsImages {
 }
 for image in windowsImages { ico.append(image.png) }
 try ico.write(to: output.appendingPathComponent("Force.ico"))
-print("Generated icon.png, Force.icns and Force.ico (16/32/48/256 px)")
+print("Generated portrait-based icon.png, Force.icns and Force.ico (16/32/48/256 px)")

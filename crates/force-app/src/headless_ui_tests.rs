@@ -1257,17 +1257,17 @@ fn headless_ui_cat_long_times_fit_and_keep_pause_controls_usable(cx: &mut TestAp
             let face = strip.debug_bounds("strip-face").unwrap();
             let time = strip.debug_bounds("strip-time-text").unwrap();
             let detail = strip.debug_bounds("strip-detail-text").unwrap();
-            assert!(time.left() >= face.left() + px(23.));
-            assert!(time.right() <= face.left() + px(70.));
+            assert!(time.left() >= face.left() + px(9.));
+            assert!(time.right() <= face.left() + px(53.));
             if hours >= 9_999 {
                 // Long hour labels need margin from the side-cat outline,
                 // not merely an un-clipped outer text box.
-                assert!(time.right() <= face.left() + px(66.5), "{time:?}");
+                assert!(time.right() <= face.left() + px(53.), "{time:?}");
             }
-            assert!(detail.left() >= face.left() + px(23.));
-            assert!(detail.right() <= face.left() + px(70.));
+            assert!(detail.left() >= face.left() + px(9.));
+            assert!(detail.right() <= face.left() + px(53.));
             assert!(time.bottom() <= detail.top());
-            assert!(detail.bottom() <= face.top() + px(90.));
+            assert!(detail.bottom() <= face.top() + px(76.));
             if paused {
                 let marker = strip.debug_bounds("strip-paused-mark").unwrap();
                 assert!(marker.right() < detail.left());

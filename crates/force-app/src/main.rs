@@ -53,25 +53,31 @@ struct ManagerWindow(WindowHandle<Root>);
 
 impl Global for ManagerWindow {}
 
+// Bare strings can be parsed as relative URIs by GPUI. Explicitly select
+// the embedded asset source so brand artwork never goes through HTTP.
+fn embedded_image_source(path: &'static str) -> ImageSource {
+    ImageSource::Resource(Resource::Embedded(path.into()))
+}
+
 struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> anyhow::Result<Option<Cow<'static, [u8]>>> {
-        if path == "force-logo.svg" {
+        if path == "force-logo.png" {
             return Ok(Some(Cow::Borrowed(include_bytes!(
-                "../../../assets/logo.svg"
+                "../../../assets/logo.png"
             ))));
         }
         let custom: Option<&'static [u8]> = match path {
-            "force-cat-side-eyes.svg" => Some(include_bytes!("../../../assets/cat-eyes.svg")),
-            "force-cat-side-clock.svg" => Some(include_bytes!("../../../assets/cat-clock.svg")),
+            "force-cat-blink.png" => Some(include_bytes!("../../../assets/cat-blink.png")),
+            "force-cat-clock.png" => Some(include_bytes!("../../../assets/cat-clock.png")),
             "force-cat-side-expanded-clock.svg" => Some(include_bytes!(
                 "../../../assets/cat-side-expanded-clock.svg"
             )),
             "force-cat-side-expanded-clock-outline.svg" => Some(include_bytes!(
                 "../../../assets/cat-side-expanded-clock-outline.svg"
             )),
-            "force-wordmark.svg" => Some(include_bytes!("../../../assets/wordmark.svg")),
+            "force-wordmark.png" => Some(include_bytes!("../../../assets/wordmark.png")),
             "force-icons/trash.svg" => Some(include_bytes!("../../../assets/icons/trash.svg")),
             "force-icons/pencil.svg" => Some(include_bytes!("../../../assets/icons/pencil.svg")),
             "force-icons/pin.svg" => Some(include_bytes!("../../../assets/icons/pin.svg")),
@@ -383,4 +389,30 @@ fn with_force(
             }
         });
     });
+}
+
+#[cfg(test)]
+mod asset_tests {
+    use super::{Assets, embedded_image_source};
+    use gpui::{AssetSource, ImageSource, Resource};
+
+    #[test]
+    fn brand_images_resolve_from_embedded_assets() {
+        for name in [
+            "force-logo.png",
+            "force-wordmark.png",
+            "force-cat-clock.png",
+            "force-cat-blink.png",
+        ] {
+            let ImageSource::Resource(Resource::Embedded(path)) = embedded_image_source(name)
+            else {
+                panic!("brand image must use an embedded resource: {name}");
+            };
+            assert_eq!(path.as_ref(), name);
+            assert!(
+                Assets.load(&path).unwrap().is_some(),
+                "missing asset: {name}"
+            );
+        }
+    }
 }

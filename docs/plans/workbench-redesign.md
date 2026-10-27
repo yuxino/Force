@@ -3,7 +3,7 @@
 ## Direction
 
 Rebuild the visual composition around the task, the time and the next action.
-Use the existing black cat brand mark. Neutral surfaces, strong type
+Use the Siamese cat brand mark. Neutral surfaces, strong type
 contrast, aligned numbers, restrained rules and open lists give the small local
 application a coherent identity. Do not add dashboards, account features,
 illustrations, textures, gradients, marketing slogans or decorative cards.
@@ -57,7 +57,7 @@ creation in the header rather than duplicating it in the sidebar; 保存任务 i
 secondary action that saves without starting a timer. Calendar 添加安排 remains
 secondary and separate from task creation.
 
-The clock shows time inside the black cat. Clicking the cat expands a single
+The clock shows time inside the cream-colored Siamese cat. Clicking the cat expands a single
 black panel with its task title, status and primary action. Show 结束 only for an
 active or paused session; do not reserve an empty action slot. Clicking the task
 title opens the corresponding task detail or completion receipt, preserving

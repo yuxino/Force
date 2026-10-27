@@ -1,13 +1,23 @@
 # Force 品牌资产
 
-黑猫坐姿标志，使用 `#141414` 与纯白 `#FFFFFF`。应用图标为白底黑猫；README 字标根据明暗主题切换。
+自然、略显呆萌的海豹重点色暹罗猫。奶油色短毛、深褐色重点色与灰蓝眼睛；正常的猫咪比例和安静神态。毛色仅用于角色，应用界面继续使用黑、白和中性灰。
 
-- `logo.svg`：透明矢量标记，64 × 64 坐标，无字体依赖。
-- `wordmark.svg` / `wordmark-dark.svg`：黑猫与 FORCE 字标，浅色和深色版本共用相同路径。
-- `icon.svg`：1024 × 1024 应用图标母版，圆角白底之外透明。
-- `icon.png` / `Force.icns` / `Force.ico`：从 `icon.svg` 导出的平台资源。PNG 为 1024 × 1024；ICO 包含 16、32、48、256 px。
-- `readme-cover.png` / `readme-cover-dark.png`：1774 × 887 的 README 封面插画。薄纸逐渐累积成台阶，黑猫安坐高处；采用黑白版画质感，以现有猫咪图标作为生图参考。两版均为透明背景；浅色版为白纸黑线，深色版为灰色纸页和带细轮廓的黑猫。文案独立排在图片下方，便于阅读与复制。
+- `siamese-cat.png`：坐姿角色画稿。`siamese-blink.png` 是同一构图的闭眼画稿；动画只显示闭眼图的眼部局部，身体保持固定。
+- `siamese-portrait.png`：同角色的头部画稿，用于小标志与应用图标。
+- `cat-clock.png` / `cat-blink.png`：按相同取景框导出的 304 × 448 图像，在猫钟中按 76 × 112 点显示。使用保色图像渲染，不能当作单色图标蒙版。
+- `logo.png`：方形头像。`wordmark.png` / `wordmark-dark.png`：头像与原有 FORCE 几何字形；明暗版只切换字色。
+- `wordmark-lettering.svg`：原有 FORCE 字形路径，不依赖字体。
+- `icon.png` / `Force.icns` / `Force.ico`：头像配白色圆角底的应用图标；ICO 包含 16、32、48、256 px。
+- `cat-side-expanded-clock.svg` / `cat-side-expanded-clock-outline.svg`：独立的中性深色控制面板及轮廓，展开时不拉伸猫的身体。
+- `readme-cover.png` / `readme-cover-dark.png`：书封式插画，句子和读书的暹罗猫在同一画面中。README 不额外重复 Logo 或句子。
 
-修改轮廓时，同步 `logo.svg`、两个字标和 `icon.svg` 中的猫形路径。在仓库根目录运行 `swift scripts/generate-icons.swift`，即可通过系统矢量渲染重新生成 PNG、ICNS 和 ICO，不再另存一套绘制坐标。
+角色和封面画稿由图像生成工具制作。修改角色时更新源画稿，再运行以下命令导出应用资源：
 
-README 的明暗图片通过链接上的 `#gh-light-mode-only` / `#gh-dark-mode-only` 跟随 GitHub 页面主题。验收需覆盖系统主题与 GitHub 主题相反的组合；仅检查本地 `prefers-color-scheme` 不能证明 GitHub 显示正确。
+```sh
+swift scripts/generate-brand-assets.swift
+swift scripts/generate-icons.swift
+```
+
+第一步统一取景与尺寸并生成字标，第二步导出平台图标；不手工重画派生图。眨眼画稿需与坐姿画稿保持相同尺寸和位置，检查眼部覆盖与计时文字在真实猫钟里的效果。封面使用同一角色特征，按插画场景单独绘制。
+
+README 明暗图片通过链接上的 `#gh-light-mode-only` / `#gh-dark-mode-only` 跟随 GitHub 页面主题。验收需覆盖系统主题与 GitHub 主题相反的组合；仅检查本地 `prefers-color-scheme` 不能证明 GitHub 显示正确。
