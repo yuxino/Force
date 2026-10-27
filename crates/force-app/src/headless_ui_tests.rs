@@ -1014,6 +1014,9 @@ fn click_test_strip(
 fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     let root = strip.debug_bounds("strip-root").unwrap();
     let face = strip.debug_bounds("strip-face").unwrap();
+    let drawer = strip.debug_bounds("strip-drawer").unwrap();
+    let silhouette = strip.debug_bounds("strip-expanded-silhouette").unwrap();
+    assert_same_bounds(silhouette, root);
     let text = strip.debug_bounds("strip-title-text").unwrap();
     let time = strip.debug_bounds("strip-time").unwrap();
     let status = strip.debug_bounds("strip-status").unwrap();
@@ -1022,7 +1025,7 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     let primary_icon = strip.debug_bounds("strip-primary-icon").unwrap();
     let primary_label = strip.debug_bounds("strip-primary-label").unwrap();
     let open = strip.debug_bounds("strip-open").unwrap();
-    for child in [face, text, time, status, controls, primary, open] {
+    for child in [face, drawer, text, time, status, controls, primary, open] {
         assert_horizontally_inside(child, root);
         assert!(child.top() >= root.top() - px(1.));
         assert!(child.bottom() <= root.bottom() + px(1.));
@@ -1035,6 +1038,18 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     assert!(text.bottom() < status.top());
     assert!(status.bottom() < controls.top());
     assert_horizontally_inside(time, face);
+    // The drawer joins behind the cat while its content stays clickable.
+    assert!(drawer.left() < face.right() - px(8.));
+    let cat_body_center = face.top() + px(76.);
+    assert!((drawer.center().y - cat_body_center).abs() <= px(8.));
+    for child in [open, status, controls] {
+        assert_horizontally_inside(child, drawer);
+        assert!(child.top() >= drawer.top());
+        assert!(child.bottom() <= drawer.bottom());
+    }
+    // The title and actions must not enter the cat's clickable hitbox.
+    assert!(face.right() <= open.left());
+    assert!(face.right() <= controls.left());
     assert!(primary.size.width >= px(28.) && primary.size.height >= px(24.));
     assert_horizontally_inside(text, open);
     assert!(open.bottom() < status.top());
@@ -1045,6 +1060,7 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     assert!(primary_icon.size.width >= px(10.) && primary_label.size.width > px(0.));
     assert!(primary.top() >= controls.top() - px(1.));
     assert!(primary.bottom() <= controls.bottom() + px(1.));
+    assert!(drawer.bottom() - controls.bottom() >= px(8.));
     [primary, open]
 }
 
@@ -1074,6 +1090,15 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
     click_test_strip(&strip_view, &mut strip, "strip-face");
     strip_view.read_with(&strip, |view, _| assert!(view.expanded));
     let controls = strip_control_bounds(&mut strip);
+    let finish = strip.debug_bounds("strip-finish").unwrap();
+    let finish_label = strip.debug_bounds("strip-finish-label").unwrap();
+    let action_row = strip.debug_bounds("strip-controls").unwrap();
+    assert_horizontally_inside(finish, action_row);
+    assert_horizontally_inside(finish_label, finish);
+    assert!(finish_label.top() >= finish.top() && finish_label.bottom() <= finish.bottom());
+    assert!(finish_label.size.width > px(0.));
+    assert!(finish.left() >= controls[0].right());
+    assert!(finish.top() >= action_row.top() && finish.bottom() <= action_row.bottom());
     manager.view.read_with(&manager.cx, |view, _| {
         assert!(
             view.compact,
@@ -1163,6 +1188,67 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
     }
     strip.update(|window, _| window.remove_window());
     strip.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_cat_long_times_fit_and_keep_pause_controls_usable(cx: &mut TestAppContext) {
+    for hours in [1_i64, 99, 100, 9_999, 10_000] {
+        for paused in [false, true] {
+            let mut manager = ManagerHarness::new(cx, 1040., 780.);
+            let id = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                let session = view
+                    .store
+                    .as_mut()
+                    .unwrap()
+                    .start("Long timer", 1, view.now - hours * 3_600 - 3_599)
+                    .unwrap();
+                if paused {
+                    view.store
+                        .as_mut()
+                        .unwrap()
+                        .pause(session.id, view.now)
+                        .unwrap();
+                }
+                view.refresh(cx);
+                view.select_session(session.id, window, cx);
+                view.hide_manager(window, cx);
+                session.id
+            });
+            let (cat, mut strip) = open_test_strip(&mut manager);
+            let face = strip.debug_bounds("strip-face").unwrap();
+            let time = strip.debug_bounds("strip-time-text").unwrap();
+            let detail = strip.debug_bounds("strip-detail-text").unwrap();
+            assert!(time.left() >= face.left() + px(23.));
+            assert!(time.right() <= face.left() + px(70.));
+            if hours >= 9_999 {
+                // Long hour labels need margin from the side-cat outline,
+                // not merely an un-clipped outer text box.
+                assert!(time.right() <= face.left() + px(66.5), "{time:?}");
+            }
+            assert!(detail.left() >= face.left() + px(23.));
+            assert!(detail.right() <= face.left() + px(70.));
+            assert!(time.bottom() <= detail.top());
+            assert!(detail.bottom() <= face.top() + px(90.));
+            if paused {
+                let marker = strip.debug_bounds("strip-paused-mark").unwrap();
+                assert!(marker.right() < detail.left());
+                assert!(time.bottom() <= marker.top() + px(1.));
+            } else {
+                assert!(strip.debug_bounds("strip-paused-mark").is_none());
+            }
+            // The separate title and control area remain reachable with a
+            // long readout; a click pauses or resumes the same session.
+            click_test_strip(&cat, &mut strip, "strip-face");
+            strip_control_bounds(&mut strip);
+            click_test_strip(&cat, &mut strip, "strip-primary");
+            manager.view.read_with(&manager.cx, |view, _| {
+                let session = view.active.iter().find(|session| session.id == id).unwrap();
+                assert_eq!(session.is_running(), paused);
+            });
+            strip.update(|window, _| window.remove_window());
+            strip.run_until_parked();
+        }
+    }
 }
 
 #[gpui::test]
@@ -1406,9 +1492,7 @@ fn headless_ui_cat_invalid_task_action_returns_to_unchanged_draft(cx: &mut TestA
 }
 
 #[gpui::test]
-fn headless_ui_cat_drag_cancels_old_rebound_and_the_next_click_restarts_it(
-    cx: &mut TestAppContext,
-) {
+fn headless_ui_cat_drag_cancels_old_blink_and_the_next_click_restarts_it(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.new_task(window, cx);
@@ -2979,6 +3063,130 @@ fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut Te
         );
     });
     assert_eq!(manager.bounds("tag-row-1").size.height, height);
+}
+
+#[gpui::test]
+fn headless_ui_cat_controls_wait_until_reversed_disclosure_finishes(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let session = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let session = view
+            .store
+            .as_mut()
+            .unwrap()
+            .start("Running", 1, view.now - 60)
+            .unwrap();
+        view.refresh(cx);
+        view.select_session(session.id, window, cx);
+        view.hide_manager(window, cx);
+        session.id
+    });
+    let (cat, mut strip) = open_test_strip(&mut manager);
+    let face = strip.debug_bounds("strip-face").unwrap().center();
+    // Start opening without the helper's automatic 200ms advance.
+    strip.simulate_click(face, Modifiers::default());
+    strip.simulate_resize(size(
+        px(crate::floating_view::EXPANDED_WIDTH),
+        px(crate::floating_view::EXPANDED_HEIGHT),
+    ));
+    strip.update(|window, _| window.refresh());
+    strip.run_until_parked();
+    let primary = strip.debug_bounds("strip-primary").unwrap().center();
+    let finish = strip.debug_bounds("strip-finish").unwrap().center();
+    let open = strip.debug_bounds("strip-open").unwrap().center();
+    cat.read_with(&strip, |cat, _| {
+        assert!(cat.expanded && cat.disclosure_task.is_some())
+    });
+
+    // All three controls must ignore real dispatched clicks during opening.
+    for position in [open, primary, finish] {
+        strip.simulate_click(position, Modifiers::default());
+        strip.run_until_parked();
+    }
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.compact);
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == session)
+                .unwrap()
+                .is_running()
+        );
+        assert!(view.completed.is_none());
+    });
+
+    // Reverse twice. Reaching the first opening's old deadline must not make
+    // controls active before the final opening finishes.
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(50));
+    strip.run_until_parked();
+    strip.simulate_click(face, Modifiers::default());
+    strip.run_until_parked();
+    cat.read_with(&strip, |cat, _| {
+        assert!(!cat.expanded && cat.disclosure_task.is_some())
+    });
+    for position in [open, primary, finish] {
+        strip.simulate_click(position, Modifiers::default());
+        strip.run_until_parked();
+    }
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(50));
+    strip.run_until_parked();
+    strip.simulate_click(face, Modifiers::default());
+    strip.run_until_parked();
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(60));
+    strip.run_until_parked();
+    cat.read_with(&strip, |cat, _| {
+        assert!(cat.expanded && cat.disclosure_task.is_some())
+    });
+    for position in [open, primary, finish] {
+        strip.simulate_click(position, Modifiers::default());
+        strip.run_until_parked();
+    }
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.compact);
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == session)
+                .unwrap()
+                .is_running()
+        );
+        assert!(view.completed.is_none());
+    });
+
+    strip
+        .executor()
+        .advance_clock(std::time::Duration::from_millis(101));
+    strip.run_until_parked();
+    // TestPlatform paints the fully open frame as the timer settles.
+    cat.read_with(&strip, |cat, _| {
+        assert!(cat.expanded && cat.disclosure_task.is_none());
+        assert_eq!(cat.drawer_painted_serial, Some(cat.disclosure_serial));
+    });
+    strip.update(|window, _| window.refresh());
+    strip.run_until_parked();
+    cat.read_with(&strip, |cat, _| {
+        assert!(cat.expanded && cat.disclosure_task.is_none())
+    });
+    // Once fully open, the same primary control really pauses the timer.
+    let primary = strip.debug_bounds("strip-primary").unwrap().center();
+    strip.simulate_click(primary, Modifiers::default());
+    strip.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(
+            view.active
+                .iter()
+                .find(|s| s.id == session)
+                .unwrap()
+                .is_paused()
+        );
+    });
+    strip.update(|window, _| window.remove_window());
+    strip.run_until_parked();
 }
 
 #[gpui::test]

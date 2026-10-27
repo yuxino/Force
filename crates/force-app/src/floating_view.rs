@@ -18,7 +18,8 @@ pub(crate) const EXPANDED_WIDTH: f32 = platform::STRIP_EXPANDED_WIDTH;
 pub(crate) const EXPANDED_HEIGHT: f32 = platform::STRIP_EXPANDED_HEIGHT;
 pub(crate) const DOCK_WIDTH: f32 = platform::STRIP_DOCKED_WIDTH;
 pub(crate) const DOCK_HEIGHT: f32 = platform::STRIP_DOCKED_HEIGHT;
-const CAT_CLICK_DURATION: Duration = Duration::from_millis(200);
+const CAT_CLICK_DURATION: Duration = Duration::from_millis(480);
+const DISCLOSURE_DURATION: Duration = Duration::from_millis(160);
 
 struct TimerFace {
     title: String,
@@ -36,6 +37,10 @@ struct TimerFace {
 }
 
 impl TimerFace {
+    fn show_paused_mark(&self) -> bool {
+        self.paused && !self.failed
+    }
+
     fn compact_display(&self) -> (String, String) {
         if self.failed {
             ("!".to_owned(), "重试".to_owned())
@@ -44,15 +49,14 @@ impl TimerFace {
         } else if self.invalid_duration {
             ("—".to_owned(), "检查时长".to_owned())
         } else if self.idle {
-            ("+".to_owned(), "新任务".to_owned())
+            ("+".to_owned(), String::new())
         } else {
-            let (minutes, detail) = compact_time(self.seconds);
             (
-                minutes,
-                if self.paused {
-                    "暂停".to_owned()
+                compact_clock(self.seconds),
+                if self.seconds >= 3_600 {
+                    format!("{:02}:{:02}", self.seconds / 60 % 60, self.seconds % 60)
                 } else {
-                    detail
+                    String::new()
                 },
             )
         }
@@ -185,11 +189,22 @@ impl FloatingStrip {
         }
     }
 
+    fn drawer_controls_ready(&self) -> bool {
+        self.expanded
+            && self.drawer_visible
+            && self.disclosure_task.is_none()
+            && self.drawer_painted_serial == Some(self.disclosure_serial)
+    }
+
     pub(crate) fn toggle_expanded(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let old_target = if self.expanded { 1. } else { 0. };
         let current = if self.disclosure_task.is_some() {
-            let elapsed = (self.disclosure_started.elapsed().as_secs_f32() / 0.16).min(1.);
-            self.disclosure_from + (old_target - self.disclosure_from) * ease_in_out(elapsed)
+            disclosure_reveal(
+                self.disclosure_from,
+                old_target,
+                self.disclosure_started,
+                Instant::now(),
+            )
         } else {
             old_target
         };
@@ -206,9 +221,7 @@ impl FloatingStrip {
             self.reshape(window, cx);
         }
         self.disclosure_task = Some(cx.spawn_in(window, async move |this, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(160))
-                .await;
+            cx.background_executor().timer(DISCLOSURE_DURATION).await;
             let _ = cx.update(|window, cx| {
                 let _ = this.update(cx, |this, cx| {
                     if this.disclosure_serial == serial {
@@ -256,7 +269,7 @@ impl FloatingStrip {
         self.drag_task = None;
         self.drag_serial = self.drag_serial.wrapping_add(1);
         self.clear_face_press();
-        // A new gesture interrupts the old rebound; a drag cannot replay it.
+        // A new gesture interrupts the old blink; a drag cannot replay it.
         self.face_click_started = None;
         self.drag_start = Some(event.position);
         self.suppress_click = false;
@@ -370,8 +383,56 @@ impl FloatingStrip {
     }
 
     fn cat_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
-        let (minutes, detail) = face.compact_display();
-        // Only the drawing moves; the click and drag hitbox stays in place.
+        let (readout, detail) = face.compact_display();
+        let cat_color = if self.drawer_visible {
+            // Keep one continuous surface with the expanded silhouette.
+            INK
+        } else if self.drag_start.is_some() {
+            0x353535
+        } else if self.face_hovered {
+            0x242424
+        } else {
+            INK
+        };
+        let eyes = Icon::default()
+            .path("force-cat-side-eyes.svg")
+            .absolute()
+            .left_0()
+            .top_0()
+            .w(px(76.))
+            .h(px(112.))
+            .text_color(rgb(0xf5f5f5));
+        // Only the eyes blink. The body, readout, and click target stay still.
+        let eyes = if cat_click_active(self.face_click_started, Instant::now()) {
+            eyes.with_animation(
+                ElementId::NamedInteger("cat-blink".into(), self.face_click_serial),
+                Animation::new(CAT_CLICK_DURATION),
+                |eyes, progress| {
+                    let (height, vertical, horizontal) = cat_eye_motion(progress);
+                    eyes.transform(
+                        Transformation::scale(size(1., height))
+                            .with_translation(point(px(horizontal), px(vertical))),
+                    )
+                },
+            )
+            .into_any_element()
+        } else {
+            eyes.into_any_element()
+        };
+        let readout_size = if face.idle || face.failed || face.completed || face.invalid_duration {
+            18.
+        } else if face.seconds >= 3_600 && readout.chars().count() >= 6 {
+            10.
+        } else if face.seconds >= 3_600 && readout.chars().count() == 5 {
+            12.5
+        } else {
+            match readout.chars().count() {
+                0..=5 => 14.,
+                6..=7 => 11.,
+                8 => 9.5,
+                _ => 8.,
+            }
+        };
         let artwork = div()
             .absolute()
             .left_0()
@@ -384,11 +445,11 @@ impl FloatingStrip {
                     .left(px(-0.5))
                     .top(px(-0.5))
                     .w(px(77.))
-                    .h(px(if self.drawer_visible { 54. } else { 113. }))
+                    .h(px(if self.drawer_visible { 38. } else { 113. }))
                     .overflow_hidden()
                     .child(
                         Icon::default()
-                            .path("force-cat-clock.svg")
+                            .path("force-cat-side-clock.svg")
                             .absolute()
                             .left_0()
                             .top(px(-0.5))
@@ -399,111 +460,96 @@ impl FloatingStrip {
             )
             .child(
                 Icon::default()
-                    .path("force-cat-clock.svg")
+                    .path("force-cat-side-clock.svg")
                     .absolute()
                     .left_0()
                     .top_0()
                     .w(px(76.))
                     .h(px(112.))
-                    .text_color(rgb(if self.drag_start.is_some() {
-                        0x353535
-                    } else if self.face_hovered {
-                        0x242424
-                    } else {
-                        INK
-                    })),
+                    .text_color(rgb(cat_color)),
+            )
+            // The original brand silhouette has transparent eye cutouts.
+            // Cover them with fur so a blink never exposes the desktop.
+            .child(
+                div()
+                    .absolute()
+                    .left(px(13.5))
+                    .top(px(22.))
+                    .w(px(6.5))
+                    .h(px(7.5))
+                    .bg(rgb(cat_color)),
             )
             .child(
-                Icon::default()
-                    .path("force-cat-eyes.svg")
+                div()
                     .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(76.))
-                    .h(px(112.))
-                    .text_color(rgb(0xf5f5f5)),
+                    .left(px(25.5))
+                    .top(px(26.5))
+                    .w(px(9.))
+                    .h(px(7.5))
+                    .bg(rgb(cat_color)),
             )
+            .child(eyes)
             .child(
                 div()
                     .debug_selector(|| "strip-time".into())
                     .absolute()
-                    .top(px(if face.invalid_duration { 56. } else { 66. }))
-                    .left(px(if face.invalid_duration { 25.5 } else { 19. }))
-                    .w(px(43.))
-                    .h(px(if face.invalid_duration { 22. } else { 32. }))
+                    .left(px(23.5))
+                    .top(px(58.))
+                    .w(px(48.))
+                    .h(px(18.))
                     .flex()
                     .items_center()
                     .justify_center()
                     .font(timer_font(cx))
-                    .text_size(px(if face.invalid_duration {
-                        23.
-                    } else if minutes.chars().count() > 3 {
-                        16.
-                    } else if minutes.chars().count() > 2 {
-                        18.
-                    } else {
-                        27.
-                    }))
+                    .text_size(px(readout_size))
+                    .line_height(px(18.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(if face.paused { 0xb3b3b3 } else { 0xf5f5f5 }))
-                    .child(minutes),
-            )
-            .child(if face.invalid_duration {
-                // Keep the four-character hint inside the narrow lower
-                // body, above the tail and away from the timer dash.
-                div()
-                    .debug_selector(|| "strip-invalid-detail".into())
-                    .absolute()
-                    .top(px(80.))
-                    .left(px(30.))
-                    .w(px(34.))
-                    .h(px(12.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_size(px(8.))
-                    .text_color(rgb(0xcccccc))
+                    .text_color(rgb(0xf5f5f5))
                     .child(
                         div()
-                            .debug_selector(|| "strip-invalid-detail-text".into())
+                            .debug_selector(|| "strip-time-text".into())
                             .flex_none()
-                            .child(detail),
-                    )
-                    .into_any_element()
-            } else {
-                div()
-                    .absolute()
-                    .top(px(96.))
-                    .left(px(20.5))
-                    .w(px(43.))
-                    .h(px(14.))
-                    .text_center()
-                    .text_size(px(10.))
-                    .text_color(rgb(0xcccccc))
-                    .child(detail)
-                    .into_any_element()
-            });
-        let pressed = self.drag_start.is_some();
-        let artwork = if cat_click_active(self.face_click_started, Instant::now()) {
-            artwork
-                .with_animation(
-                    ElementId::NamedInteger("cat-click".into(), self.face_click_serial),
-                    Animation::new(CAT_CLICK_DURATION),
-                    move |artwork, progress| {
-                        let offset = if pressed {
-                            2.
-                        } else {
-                            cat_click_offset(progress)
-                        };
-                        artwork.top(px(offset))
-                    },
+                            .child(readout),
+                    ),
+            )
+            .when(face.show_paused_mark(), |artwork| {
+                artwork.child(
+                    div()
+                        .debug_selector(|| "strip-paused-mark".into())
+                        .absolute()
+                        .left(px(if detail.is_empty() { 44. } else { 26. }))
+                        .top(px(79.))
+                        .w(px(6.8))
+                        .h(px(6.))
+                        .flex()
+                        .justify_between()
+                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0xc6c6c6)))
+                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0xc6c6c6))),
                 )
-                .into_any_element()
-        } else {
-            artwork
-                .top(px(if pressed { 2. } else { 0. }))
-                .into_any_element()
-        };
+            })
+            .when(!detail.is_empty(), |artwork| {
+                artwork.child(
+                    div()
+                        .debug_selector(|| "strip-detail".into())
+                        .absolute()
+                        .left(px(if face.show_paused_mark() { 35. } else { 26. }))
+                        .top(px(78.))
+                        .w(px(if face.show_paused_mark() { 36. } else { 42. }))
+                        .h(px(11.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(8.))
+                        .line_height(px(10.))
+                        .text_color(rgb(0xcccccc))
+                        .child(
+                            div()
+                                .debug_selector(|| "strip-detail-text".into())
+                                .flex_none()
+                                .child(detail),
+                        ),
+                )
+            });
         div()
             .id("cat-clock-face")
             .debug_selector(|| "strip-face".into())
@@ -545,21 +591,19 @@ impl FloatingStrip {
             action_icon(if face.running { "pause" } else { "play" })
         };
         let session_id = if face.failed { None } else { face.session };
+        let has_finish = session_id.is_some();
         let opens_task = face.failed || (!face.completed && face.session.is_none() && !face.ready);
         div()
+            .debug_selector(|| "strip-drawer".into())
             .absolute()
-            .left(px(14.))
-            .top(px(58.))
-            .w(px(222.))
-            .h(px(86.))
-            .rounded(px(20.))
-            .bg(rgb(INK))
-            .border_1()
-            .border_color(rgb(0x383838))
+            .left(px(64.))
+            .top(px(42.))
+            .w(px(172.))
+            .h(px(88.))
             .child(
                 div()
                     .absolute()
-                    .left(px(80.))
+                    .left(px(20.))
                     .top(px(12.))
                     .w(px(136.))
                     .h(px(20.))
@@ -572,7 +616,7 @@ impl FloatingStrip {
                     .debug_selector(|| "strip-open".into())
                     .cursor_pointer()
                     .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.expanded {
+                        if !this.drawer_controls_ready() {
                             return;
                         }
                         this.dispatch(cx, move |model, window, cx| {
@@ -597,7 +641,7 @@ impl FloatingStrip {
             .child(
                 div()
                     .absolute()
-                    .left(px(80.))
+                    .left(px(20.))
                     .top(px(35.))
                     .w(px(122.))
                     .h(px(15.))
@@ -611,7 +655,7 @@ impl FloatingStrip {
                 div()
                     .debug_selector(|| "strip-controls".into())
                     .absolute()
-                    .left(px(80.))
+                    .left(px(20.))
                     .top(px(54.))
                     .h(px(26.))
                     .w(px(128.))
@@ -622,7 +666,7 @@ impl FloatingStrip {
                         button("bar-primary")
                             .debug_selector(|| "strip-primary".into())
                             .small()
-                            .w(px(82.))
+                            .w(px(if has_finish { 66. } else { 82. }))
                             .h(px(26.))
                             .px(px(6.))
                             .rounded(px(8.))
@@ -656,7 +700,7 @@ impl FloatingStrip {
                                     ),
                             )
                             .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                                if this.expanded && event.click_count() == 1 {
+                                if this.drawer_controls_ready() && event.click_count() == 1 {
                                     this.dispatch(cx, move |model, window, cx| {
                                         if opens_task {
                                             model.show_strip_task(window, cx);
@@ -671,19 +715,20 @@ impl FloatingStrip {
                         button("bar-finish")
                             .debug_selector(|| "strip-finish".into())
                             .small()
-                            .w(px(36.))
+                            .w(px(56.))
                             .h(px(26.))
                             .px(px(4.))
                             .rounded(px(7.))
                             .custom(cat_secondary_variant(cx))
                             .child(
                                 div()
+                                    .debug_selector(|| "strip-finish-label".into())
                                     .text_size(px(11.))
                                     .text_color(rgb(0xd2d2d2))
-                                    .child("结束"),
+                                    .child("结束计时"),
                             )
                             .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.expanded {
+                                if this.drawer_controls_ready() {
                                     this.dispatch(cx, move |model, _, cx| model.finish(id, cx))
                                 }
                             }))
@@ -692,7 +737,17 @@ impl FloatingStrip {
     }
 
     fn dock_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
-        let (minutes, _) = face.compact_display();
+        let minutes = if face.failed {
+            "!".to_owned()
+        } else if face.completed {
+            "✓".to_owned()
+        } else if face.invalid_duration {
+            "—".to_owned()
+        } else if face.idle {
+            "+".to_owned()
+        } else {
+            compact_time(face.seconds).0
+        };
         div()
             .id("cat-clock-dock")
             .debug_selector(|| "strip-dock".into())
@@ -720,10 +775,11 @@ impl FloatingStrip {
                     }))
                     .child(minutes),
             )
-            .child(if face.paused {
-                Icon::default()
-                    .path("force-icons/pause.svg")
+            .child(if face.show_paused_mark() {
+                div()
+                    .debug_selector(|| "strip-dock-paused-mark".into())
                     .size(px(10.))
+                    .child(Icon::default().path("force-icons/pause.svg").size(px(10.)))
                     .into_any_element()
             } else {
                 div()
@@ -733,13 +789,12 @@ impl FloatingStrip {
                     .child(
                         div()
                             .w_full()
-                            .h(relative(
-                                face.progress.unwrap_or(if face.invalid_duration {
-                                    0.
-                                } else {
-                                    1.
-                                }),
-                            ))
+                            .h(relative(if face.failed {
+                                0.
+                            } else {
+                                face.progress
+                                    .unwrap_or(if face.invalid_duration { 0. } else { 1. })
+                            }))
                             .bg(rgb(0xf5f5f5)),
                     )
                     .into_any_element()
@@ -771,17 +826,96 @@ impl Render for FloatingStrip {
                     .when(self.drawer_visible, |body| {
                         let from = self.disclosure_from;
                         let target = if self.expanded { 1. } else { 0. };
-                        body.child(self.drawer(&face, cx).with_animation(
-                            ElementId::NamedInteger(
-                                "cat-disclosure".into(),
-                                self.disclosure_serial,
-                            ),
-                            Animation::new(Duration::from_millis(160)).with_easing(ease_in_out),
-                            move |panel, delta| {
-                                let reveal = from + (target - from) * delta;
-                                panel.opacity(reveal).left(px(14. - 12. * (1. - reveal)))
-                            },
-                        ))
+                        let silhouette = div()
+                            .debug_selector(|| "strip-expanded-silhouette".into())
+                            .absolute()
+                            .left_0()
+                            .top_0()
+                            .size_full()
+                            .child(
+                                Icon::default()
+                                    .path("force-cat-side-expanded-clock-outline.svg")
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .w(px(EXPANDED_WIDTH))
+                                    .h(px(EXPANDED_HEIGHT))
+                                    .text_color(rgb(0x858585)),
+                            )
+                            .child(
+                                Icon::default()
+                                    .path("force-cat-side-expanded-clock.svg")
+                                    .absolute()
+                                    .left_0()
+                                    .top_0()
+                                    .w(px(EXPANDED_WIDTH))
+                                    .h(px(EXPANDED_HEIGHT))
+                                    .text_color(rgb(INK)),
+                            );
+                        let drawer = self.drawer(&face, cx);
+                        if self.disclosure_task.is_some() {
+                            let started = self.disclosure_started;
+                            body.child(silhouette.with_animation(
+                                ElementId::NamedInteger(
+                                    "cat-disclosure-silhouette".into(),
+                                    self.disclosure_serial,
+                                ),
+                                Animation::new(DISCLOSURE_DURATION),
+                                move |surface, _| {
+                                    surface.opacity(disclosure_reveal(
+                                        from,
+                                        target,
+                                        started,
+                                        Instant::now(),
+                                    ))
+                                },
+                            ))
+                            .child(drawer.with_animation(
+                                ElementId::NamedInteger(
+                                    "cat-disclosure".into(),
+                                    self.disclosure_serial,
+                                ),
+                                Animation::new(DISCLOSURE_DURATION),
+                                move |panel, _| {
+                                    let reveal =
+                                        disclosure_reveal(from, target, started, Instant::now());
+                                    panel.opacity(reveal).left(px(64. - 8. * (1. - reveal)))
+                                },
+                            ))
+                        } else {
+                            // The timer and rendering share the same start time.
+                            // A delayed first frame jumps directly to fully open,
+                            // rather than leaving a newly enabled faded control.
+                            let serial = self.disclosure_serial;
+                            let weak = cx.weak_entity();
+                            body.child(silhouette).child(drawer).when(
+                                self.expanded && self.drawer_painted_serial != Some(serial),
+                                |body| {
+                                    body.child(
+                                        canvas(
+                                            |_, _, _| (),
+                                            move |_, _, _, cx| {
+                                                let weak = weak.clone();
+                                                cx.defer(move |cx| {
+                                                    let _ = weak.update(cx, |this, _| {
+                                                        if this.expanded
+                                                            && this.drawer_visible
+                                                            && this.disclosure_task.is_none()
+                                                            && this.disclosure_serial == serial
+                                                        {
+                                                            this.drawer_painted_serial =
+                                                                Some(serial);
+                                                        }
+                                                    });
+                                                });
+                                            },
+                                        )
+                                        .absolute()
+                                        .size_full(),
+                                    )
+                                },
+                            )
+                        }
                     })
                     .child(self.cat_face(&face, cx))
                     .into_any_element()
@@ -820,14 +954,38 @@ fn cat_secondary_variant(cx: &App) -> ButtonCustomVariant {
         .active(rgb(0x454545).into())
 }
 
+fn disclosure_reveal(from: f32, target: f32, started: Instant, now: Instant) -> f32 {
+    let elapsed = (now.saturating_duration_since(started).as_secs_f32()
+        / DISCLOSURE_DURATION.as_secs_f32())
+    .min(1.);
+    from + (target - from) * ease_in_out(elapsed)
+}
+
 fn cat_click_active(started: Option<Instant>, now: Instant) -> bool {
     started.is_some_and(|started| now.saturating_duration_since(started) < CAT_CLICK_DURATION)
 }
 
-// A short press settles upward before returning to rest, without shifting the hitbox.
-fn cat_click_offset(progress: f32) -> f32 {
+// Blink, then glance briefly to the side without moving the body or hitbox.
+// The icon is centered at y=56; the eyes' shared center is approximately y=27.
+fn cat_eye_motion(progress: f32) -> (f32, f32, f32) {
     let t = progress.clamp(0., 1.);
-    2. * (1. - t) * (std::f32::consts::PI * 2. * t).cos()
+    let blink = (t / 0.48).min(1.);
+    let height = 1. - 0.88 * (std::f32::consts::PI * blink).sin().powi(2);
+    let glance = ((t - 0.4) / 0.6).clamp(0., 1.);
+    let horizontal = 1.5 * (std::f32::consts::PI * glance).sin();
+    (height, -29. * (1. - height), horizontal)
+}
+
+fn compact_clock(seconds: i64) -> String {
+    let seconds = seconds.max(0);
+    let hours = seconds / 3_600;
+    if hours >= 10_000 {
+        "9999h+".to_owned()
+    } else if hours > 0 {
+        format!("{hours}h")
+    } else {
+        clock(seconds)
+    }
 }
 
 fn compact_time(seconds: i64) -> (String, String) {
@@ -852,8 +1010,283 @@ fn compact_time(seconds: i64) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::{CAT_CLICK_DURATION, cat_click_active, compact_time};
+    #[cfg(feature = "ui-test-support")]
+    use super::compact_clock;
+    use super::{
+        CAT_CLICK_DURATION, DISCLOSURE_DURATION, TimerFace, cat_click_active, cat_eye_motion,
+        compact_time, disclosure_reveal,
+    };
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn disclosure_opacity_uses_the_transition_start_even_if_the_first_frame_is_late() {
+        let start = Instant::now();
+        assert_eq!(disclosure_reveal(0., 1., start, start), 0.);
+        let halfway = disclosure_reveal(0., 1., start, start + DISCLOSURE_DURATION / 2);
+        assert!((halfway - 0.5).abs() < 0.001);
+        assert_eq!(
+            disclosure_reveal(0., 1., start, start + DISCLOSURE_DURATION),
+            1.
+        );
+        assert_eq!(
+            disclosure_reveal(0.4, 0., start, start + DISCLOSURE_DURATION),
+            0.
+        );
+        assert_eq!(
+            disclosure_reveal(0.4, 1., start, start + DISCLOSURE_DURATION * 2),
+            1.
+        );
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn drawer_controls_require_the_current_fully_painted_frame(cx: &mut gpui::TestAppContext) {
+        use crate::headless_ui_tests::ManagerHarness;
+        use gpui::AppContext as _;
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        let model = manager.view.clone();
+        let handle = manager.handle;
+        let cat = manager
+            .cx
+            .update(|window, cx| cx.new(|cx| super::FloatingStrip::new(model, handle, window, cx)));
+        cat.update(&mut manager.cx, |cat, _| {
+            cat.expanded = true;
+            cat.drawer_visible = true;
+            cat.disclosure_serial = 5;
+            cat.drawer_painted_serial = None;
+            assert!(!cat.drawer_controls_ready());
+            cat.drawer_painted_serial = Some(4); // previous transition's late frame
+            assert!(!cat.drawer_controls_ready());
+            cat.drawer_painted_serial = Some(5);
+            assert!(cat.drawer_controls_ready());
+            cat.expanded = false;
+            assert!(!cat.drawer_controls_ready());
+        });
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn compact_cat_keeps_idle_and_timer_text_in_the_body(cx: &mut gpui::TestAppContext) {
+        use crate::headless_ui_tests::ManagerHarness;
+        use gpui::{
+            AppContext as _, Bounds, Point, VisualTestContext, WindowBounds, WindowOptions, px,
+            size,
+        };
+        use gpui_component::Root;
+
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        let model = manager.view.clone();
+        let manager_window = manager.handle;
+        let strip = manager.cx.cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Point::default(),
+                        size(px(88.), px(128.)),
+                    ))),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let cat =
+                        cx.new(|cx| super::FloatingStrip::new(model, manager_window, window, cx));
+                    cx.new(|cx| Root::new(cat, window, cx))
+                },
+            )
+            .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
+        visual.simulate_resize(size(px(88.), px(128.)));
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+
+        // The idle action is a single mark; the text label must not return at
+        // the silhouette's lower edge.
+        let face = visual.debug_bounds("strip-face").unwrap();
+        let mark = visual.debug_bounds("strip-time-text").unwrap();
+        assert!(visual.debug_bounds("strip-detail").is_none());
+        assert!(mark.left() >= face.left() + px(25.));
+        assert!(mark.right() <= face.left() + px(69.));
+        assert!(mark.top() >= face.top() + px(56.));
+        assert!(mark.bottom() <= face.top() + px(96.));
+
+        // Render prepared, long-running, paused, completed and failed
+        // states with real text boxes rather than only the outer layout.
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.new_task(window, cx);
+            view.task_input
+                .update(cx, |input, cx| input.set_value("Example", window, cx));
+        });
+        for state in 0..6 {
+            if state == 1 {
+                manager.view.update_in(&mut manager.cx, |view, _, cx| {
+                    view.store
+                        .as_mut()
+                        .unwrap()
+                        .start("Long running task", 1, view.now - 100 * 3600 - 135)
+                        .unwrap();
+                    view.refresh(cx);
+                });
+            } else if state == 2 {
+                manager.view.update_in(&mut manager.cx, |view, _, cx| {
+                    let id = view.strip_session().unwrap().id;
+                    view.store.as_mut().unwrap().pause(id, view.now).unwrap();
+                    view.refresh(cx);
+                });
+            } else if state == 3 {
+                manager.view.update(&mut manager.cx, |view, cx| {
+                    view.active[0].intervals[0].start = view.now - 10_000 * 3600 - 135;
+                    cx.notify();
+                });
+            } else if state == 4 {
+                manager.view.update(&mut manager.cx, |view, cx| {
+                    view.completed = view.strip_session().cloned();
+                    view.active.clear();
+                    cx.notify();
+                });
+            } else if state == 5 {
+                manager.view.update(&mut manager.cx, |view, cx| {
+                    view.storage_failed = true;
+                    cx.notify();
+                });
+            }
+            visual.update(|window, _| window.refresh());
+            visual.run_until_parked();
+            let face = visual.debug_bounds("strip-face").unwrap();
+            let time = visual.debug_bounds("strip-time").unwrap();
+            let time_text = visual.debug_bounds("strip-time-text").unwrap();
+            assert!(time.left() >= face.left() + px(23.));
+            assert!(time.right() <= face.left() + px(72.));
+            assert!(time_text.left() >= face.left() + px(23.));
+            assert!(time_text.right() <= face.left() + px(70.));
+            {
+                let (text, container) = (time_text, time);
+                assert!(
+                    text.left() >= container.left() - px(1.),
+                    "{text:?} outside {container:?}"
+                );
+                assert!(
+                    text.right() <= container.right() + px(1.),
+                    "{text:?} outside {container:?}"
+                );
+                assert!(
+                    text.top() >= container.top() - px(1.),
+                    "{text:?} outside {container:?}"
+                );
+                assert!(
+                    text.bottom() <= container.bottom() + px(1.),
+                    "{text:?} outside {container:?}"
+                );
+                assert!(text.size.width > px(0.) && text.size.height > px(0.));
+            }
+            if (1..=3).contains(&state) {
+                let detail = visual.debug_bounds("strip-detail-text").unwrap();
+                assert!(time_text.bottom() <= detail.top());
+                assert!(detail.left() >= face.left() + px(23.));
+                assert!(detail.right() <= face.left() + px(70.));
+                if state >= 2 {
+                    let pause = visual.debug_bounds("strip-paused-mark").unwrap();
+                    assert!(time_text.bottom() <= pause.top() + px(1.));
+                    assert!(pause.bottom() <= face.top() + px(90.));
+                    assert!(pause.right() < detail.left());
+                }
+            } else if state >= 4 {
+                let detail = visual.debug_bounds("strip-detail").unwrap();
+                let detail_text = visual.debug_bounds("strip-detail-text").unwrap();
+                assert!(time_text.bottom() <= detail_text.top());
+                assert!(detail_text.left() >= detail.left() - px(1.));
+                assert!(detail_text.right() <= detail.right() + px(1.));
+                assert!(detail_text.top() >= detail.top() - px(1.));
+                assert!(detail_text.bottom() <= detail.bottom() + px(1.));
+            }
+        }
+        visual.update(|window, _| window.remove_window());
+        visual.run_until_parked();
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn storage_error_hides_paused_marks_in_both_cat_and_dock(cx: &mut gpui::TestAppContext) {
+        use crate::{headless_ui_tests::ManagerHarness, platform::DockEdge};
+        use gpui::{
+            AppContext as _, Bounds, Point, VisualTestContext, WindowBounds, WindowOptions, px,
+            size,
+        };
+        use gpui_component::Root;
+
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.view.update(&mut manager.cx, |view, cx| {
+            let session = view
+                .store
+                .as_mut()
+                .unwrap()
+                .start("Paused task", 1, view.now - 120)
+                .unwrap();
+            view.store
+                .as_mut()
+                .unwrap()
+                .pause(session.id, view.now)
+                .unwrap();
+            view.refresh(cx);
+            assert!(view.strip_session().unwrap().is_paused());
+            view.storage_failed = true;
+            cx.notify();
+        });
+        for docked in [false, true] {
+            let model = manager.view.clone();
+            let manager_window = manager.handle;
+            let dimensions = if docked {
+                size(px(28.), px(80.))
+            } else {
+                size(px(88.), px(128.))
+            };
+            let (strip, cat) = manager.cx.cx.update(|cx| {
+                let mut cat = None;
+                let window = cx
+                    .open_window(
+                        WindowOptions {
+                            window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                Point::default(),
+                                dimensions,
+                            ))),
+                            ..Default::default()
+                        },
+                        |window, cx| {
+                            let entity = cx.new(|cx| {
+                                let mut cat =
+                                    super::FloatingStrip::new(model, manager_window, window, cx);
+                                if docked {
+                                    cat.docked = Some(DockEdge::Left);
+                                }
+                                cat
+                            });
+                            cat = Some(entity.clone());
+                            cx.new(|cx| Root::new(entity, window, cx))
+                        },
+                    )
+                    .unwrap();
+                (window, cat.unwrap())
+            });
+            let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
+            visual.simulate_resize(dimensions);
+            visual.update(|window, _| window.refresh());
+            visual.run_until_parked();
+            cat.read_with(&visual, |cat, cx| {
+                let face = cat.timer_face(cx);
+                assert!(face.failed && face.paused);
+                assert_eq!(face.compact_display(), ("!".into(), "重试".into()));
+                assert!(!face.show_paused_mark());
+            });
+            if docked {
+                assert!(visual.debug_bounds("strip-dock").is_some());
+                assert!(visual.debug_bounds("strip-dock-paused-mark").is_none());
+            } else {
+                assert!(visual.debug_bounds("strip-detail-text").is_some());
+                assert!(visual.debug_bounds("strip-paused-mark").is_none());
+            }
+            visual.update(|window, _| window.remove_window());
+            visual.run_until_parked();
+        }
+    }
 
     #[cfg(feature = "ui-test-support")]
     #[gpui::test]
@@ -901,7 +1334,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(!face.invalid_duration && face.ready);
-            assert_eq!(face.compact_display(), ("37".into(), "00".into()));
+            assert_eq!(face.compact_display(), ("37:00".into(), String::new()));
         });
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.timer_input
@@ -912,7 +1345,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(!face.invalid_duration && face.ready);
-            assert_eq!(face.compact_display(), ("00".into(), "00".into()));
+            assert_eq!(face.compact_display(), ("00:00".into(), String::new()));
             assert_eq!(face.status, "正计时 · 随时开始");
         });
         manager.view.update_in(&mut manager.cx, |view, _, cx| {
@@ -936,7 +1369,10 @@ mod tests {
             let remaining =
                 (session.target_seconds.unwrap() - session.elapsed_at(model.now)).max(0);
             assert_eq!(face.seconds, remaining);
-            assert_eq!(face.compact_display(), compact_time(remaining));
+            assert_eq!(
+                face.compact_display(),
+                (compact_clock(remaining), String::new())
+            );
         });
     }
 
@@ -983,11 +1419,22 @@ mod tests {
         visual.run_until_parked();
         let face = visual.debug_bounds("strip-face").unwrap();
         let dash = visual.debug_bounds("strip-time").unwrap();
-        let detail = visual.debug_bounds("strip-invalid-detail").unwrap();
-        let text = visual.debug_bounds("strip-invalid-detail-text").unwrap();
+        let dash_text = visual.debug_bounds("strip-time-text").unwrap();
+        let detail = visual.debug_bounds("strip-detail").unwrap();
+        let text = visual.debug_bounds("strip-detail-text").unwrap();
         assert!(
             dash.bottom() + px(1.) <= detail.top(),
             "dash {dash:?} overlaps hint {detail:?}"
+        );
+        assert!(
+            dash_text.left() >= dash.left() - px(1.) && dash_text.right() <= dash.right() + px(1.)
+        );
+        assert!(
+            dash_text.top() >= dash.top() - px(1.) && dash_text.bottom() <= dash.bottom() + px(1.)
+        );
+        assert!(
+            dash_text.bottom() + px(1.) <= text.top(),
+            "dash text {dash_text:?} overlaps hint text {text:?}"
         );
         assert!(detail.left() >= face.left() && detail.right() <= face.right());
         assert!(detail.top() >= face.top() && detail.bottom() <= face.bottom());
@@ -995,6 +1442,8 @@ mod tests {
             text.left() >= detail.left() - px(1.) && text.right() <= detail.right() + px(1.),
             "hint text {text:?} exceeds {detail:?}"
         );
+        assert!(text.top() >= detail.top() - px(1.));
+        assert!(text.bottom() <= detail.bottom() + px(1.));
         assert!(text.size.width > px(0.) && text.size.height > px(0.));
         visual.update(|window, _| window.remove_window());
         visual.run_until_parked();
@@ -1013,6 +1462,57 @@ mod tests {
             Some(start),
             start + Duration::from_secs(10)
         ));
+    }
+
+    #[test]
+    fn cat_eyes_blink_glance_and_return_without_moving_the_body() {
+        for progress in [0., 0.24, 0.48, 0.7, 1.] {
+            let (height, offset, horizontal) = cat_eye_motion(progress);
+            assert!((0.11..=1.).contains(&height));
+            // The SVG transform is centered at y=56; this translation keeps
+            // the visual eye center at y=27 while the eyes close.
+            let eye_center = 56. + (27. - 56.) * height + offset;
+            assert!((eye_center - 27.).abs() < 0.001);
+            assert!((-0.001..=1.501).contains(&horizontal));
+        }
+        assert!((cat_eye_motion(0.).0 - 1.).abs() < 0.001);
+        assert!(cat_eye_motion(0.24).0 < 0.15);
+        assert!(cat_eye_motion(0.7).2 > 1.4);
+        assert!((cat_eye_motion(1.).0 - 1.).abs() < 0.001);
+        assert!(cat_eye_motion(1.).2.abs() < 0.001);
+    }
+
+    #[test]
+    fn paused_readout_keeps_seconds_for_long_sessions() {
+        let mut face = TimerFace {
+            title: String::new(),
+            status: String::new(),
+            seconds: 100 * 3600 + 135,
+            running: false,
+            paused: true,
+            completed: false,
+            failed: false,
+            invalid_duration: false,
+            session: Some(1),
+            progress: None,
+            ready: false,
+            idle: false,
+        };
+        for paused in [false, true] {
+            face.paused = paused;
+            for (hours, expected) in [
+                (1, "1h"),
+                (99, "99h"),
+                (100, "100h"),
+                (9_999, "9999h"),
+                (10_000, "9999h+"),
+            ] {
+                face.seconds = hours * 3_600 + 3_599;
+                assert_eq!(face.compact_display(), (expected.into(), "59:59".into()));
+            }
+            face.seconds = 3_599;
+            assert_eq!(face.compact_display(), ("59:59".into(), String::new()));
+        }
     }
 
     #[test]
