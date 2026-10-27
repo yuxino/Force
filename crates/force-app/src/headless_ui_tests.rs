@@ -7,8 +7,8 @@
 use crate::model::{FloatingStrip, ForceView, Page, day_bounds};
 use chrono::{Local, TimeZone};
 use gpui::{
-    AppContext as _, Bounds, Entity, Focusable as _, KeyUpEvent, Keystroke, Modifiers, Pixels,
-    Point, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext,
+    AppContext as _, Bounds, Entity, Focusable as _, KeyUpEvent, Keystroke, Modifiers, MouseButton,
+    Pixels, Point, ScrollDelta, ScrollWheelEvent, TestAppContext, TouchPhase, VisualTestContext,
     WindowBounds, WindowHandle, WindowOptions, point, px, size,
 };
 use gpui_component::{Root, Theme, ThemeMode};
@@ -990,6 +990,8 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     let status = strip.debug_bounds("strip-status").unwrap();
     let controls = strip.debug_bounds("strip-controls").unwrap();
     let primary = strip.debug_bounds("strip-primary").unwrap();
+    let primary_icon = strip.debug_bounds("strip-primary-icon").unwrap();
+    let primary_label = strip.debug_bounds("strip-primary-label").unwrap();
     let open = strip.debug_bounds("strip-open").unwrap();
     for child in [face, text, time, status, controls, primary, open] {
         assert_horizontally_inside(child, root);
@@ -1008,6 +1010,10 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     assert_horizontally_inside(text, open);
     assert!(open.bottom() < status.top());
     assert_horizontally_inside(primary, controls);
+    assert_horizontally_inside(primary_icon, primary);
+    assert_horizontally_inside(primary_label, primary);
+    assert!(primary_icon.right() <= primary_label.left() + px(1.));
+    assert!(primary_icon.size.width >= px(10.) && primary_label.size.width > px(0.));
     assert!(primary.top() >= controls.top() - px(1.));
     assert!(primary.bottom() <= controls.bottom() + px(1.));
     [primary, open]
@@ -1212,6 +1218,17 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         assert_eq!(view.completed.as_ref().unwrap().id, started);
     });
     strip_control_bounds(&mut strip);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.navigate(Page::Records, window, cx);
+        view.hide_manager(window, cx);
+    });
+    click_test_strip(&strip_view, &mut strip, "strip-open");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(matches!(view.page, Page::Focus));
+        assert!(!view.compact);
+        assert_eq!(view.completed.as_ref().unwrap().id, started);
+        assert!(view.active[0].is_paused());
+    });
     // Viewing the receipt must not resume the other paused timer concealed by
     // that receipt, even after the finish control has disappeared.
     click_test_strip(&strip_view, &mut strip, "strip-primary");
@@ -1252,6 +1269,248 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
     });
     refresh_test_strip(&strip_view, &mut strip);
     strip_control_bounds(&mut strip);
+    click_test_strip(&strip_view, &mut strip, "strip-primary");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.compact && view.storage_failed);
+        assert!(matches!(view.page, Page::Focus));
+        assert_eq!(view.strip_session().unwrap().id, long_session);
+        assert!(view.strip_session().unwrap().is_paused());
+    });
+    strip.update(|window, _| window.remove_window());
+    strip.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_cat_title_opens_selected_saved_task_without_replacing_it(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let task_id = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let task = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_task("Saved task to revisit", view.selected_tag, view.now)
+            .unwrap();
+        view.refresh(cx);
+        view.select_task(task.id, window, cx);
+        view.navigate(Page::Records, window, cx);
+        view.hide_manager(window, cx);
+        task.id
+    });
+    let (cat, mut strip) = open_test_strip(&mut manager);
+    let before = cat.read_with(&strip, |cat, _| cat.face_click_serial);
+    click_test_strip(&cat, &mut strip, "strip-face");
+    cat.read_with(&strip, |cat, _| {
+        assert_eq!(cat.face_click_serial, before + 1)
+    });
+    click_test_strip(&cat, &mut strip, "strip-open");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(matches!(view.page, Page::Focus));
+        assert!(!view.compact && view.preparing);
+        assert_eq!(view.selected_task, Some(task_id));
+        assert_eq!(view.task_input.read(cx).value(), "Saved task to revisit");
+        assert!(view.active.is_empty());
+    });
+    strip.update(|window, _| window.remove_window());
+    strip.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_cat_invalid_task_action_returns_to_unchanged_draft(cx: &mut TestAppContext) {
+    // Invalid duration on a new draft, and unsaved edits on an existing task.
+    for existing in [false, true] {
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        let selected = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let selected = if existing {
+                let task = view
+                    .store
+                    .as_mut()
+                    .unwrap()
+                    .create_task("Saved original", view.selected_tag, view.now)
+                    .unwrap();
+                view.refresh(cx);
+                view.select_task(task.id, window, cx);
+                Some(task.id)
+            } else {
+                view.new_task(window, cx);
+                None
+            };
+            view.task_input
+                .update(cx, |input, cx| input.set_value("Draft to keep", window, cx));
+            if !existing {
+                view.timer_input
+                    .update(cx, |input, cx| input.set_value("0", window, cx));
+            }
+            assert!(!view.can_start_task(cx));
+            view.navigate(Page::Records, window, cx);
+            view.hide_manager(window, cx);
+            selected
+        });
+        let (cat, mut strip) = open_test_strip(&mut manager);
+        click_test_strip(&cat, &mut strip, "strip-face");
+        strip_control_bounds(&mut strip);
+        click_test_strip(&cat, &mut strip, "strip-primary");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(matches!(view.page, Page::Focus));
+            assert!(!view.compact && view.preparing);
+            assert_eq!(view.selected_task, selected);
+            assert_eq!(view.task_input.read(cx).value(), "Draft to keep");
+            if !existing {
+                assert_eq!(view.timer_input.read(cx).value(), "0");
+            }
+            assert!(view.active.is_empty());
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            if existing {
+                assert!(view.task_input.read(cx).focus_handle(cx).is_focused(window));
+            } else {
+                assert!(
+                    view.timer_input
+                        .read(cx)
+                        .focus_handle(cx)
+                        .is_focused(window)
+                );
+            }
+        });
+        strip.update(|window, _| window.remove_window());
+        strip.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn headless_ui_cat_drag_cancels_old_rebound_and_the_next_click_restarts_it(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.new_task(window, cx);
+        view.task_input
+            .update(cx, |input, cx| input.set_value("Timer draft", window, cx));
+        view.hide_manager(window, cx);
+    });
+    let (cat, mut strip) = open_test_strip(&mut manager);
+    click_test_strip(&cat, &mut strip, "strip-face");
+    let serial = cat.read_with(&strip, |cat, _| {
+        assert!(cat.face_click_started.is_some());
+        cat.face_click_serial
+    });
+    let start = strip.debug_bounds("strip-face").unwrap().center();
+    strip.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cat.read_with(&strip, |cat, _| assert!(cat.face_click_started.is_none()));
+    let moved = point(start.x + px(10.), start.y);
+    strip.simulate_mouse_move(moved, Some(MouseButton::Left), Modifiers::default());
+    strip.simulate_mouse_up(moved, MouseButton::Left, Modifiers::default());
+    strip.run_until_parked();
+    cat.read_with(&strip, |cat, _| {
+        assert!(cat.face_click_started.is_none());
+        assert_eq!(cat.face_click_serial, serial);
+    });
+    refresh_test_strip(&cat, &mut strip);
+    click_test_strip(&cat, &mut strip, "strip-face");
+    cat.read_with(&strip, |cat, _| {
+        assert!(cat.face_click_started.is_some());
+        assert_eq!(cat.face_click_serial, serial + 1);
+    });
+    strip.update(|window, _| window.remove_window());
+    strip.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_cat_keeps_an_existing_task_whose_draft_title_was_cleared(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let task_id = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let task = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_task("Original saved title", view.selected_tag, view.now)
+            .unwrap();
+        view.refresh(cx);
+        view.select_task(task.id, window, cx);
+        view.task_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        view.navigate(Page::Records, window, cx);
+        view.hide_manager(window, cx);
+        task.id
+    });
+    let (cat, mut strip) = open_test_strip(&mut manager);
+    click_test_strip(&cat, &mut strip, "strip-face");
+    cat.read_with(&strip, |cat, _| assert!(cat.expanded));
+    click_test_strip(&cat, &mut strip, "strip-primary");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(matches!(view.page, Page::Focus));
+        assert!(!view.compact && view.preparing);
+        assert_eq!(view.selected_task, Some(task_id));
+        assert_eq!(view.task_input.read(cx).value(), "");
+        assert!(view.task_has_unsaved_changes(cx));
+        assert!(view.active.is_empty());
+        assert_eq!(
+            view.tasks
+                .iter()
+                .find(|task| task.id == task_id)
+                .unwrap()
+                .title,
+            "Original saved title"
+        );
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(view.task_input.read(cx).focus_handle(cx).is_focused(window));
+    });
+    strip.update(|window, _| window.remove_window());
+    strip.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_cat_preserves_a_blank_new_task_with_changed_timing(cx: &mut TestAppContext) {
+    for (countdown, minutes) in [(true, "37"), (true, ""), (false, "25")] {
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.new_task(window, cx);
+            view.timer_input
+                .update(cx, |input, cx| input.set_value(minutes, window, cx));
+            view.countdown = countdown;
+            view.navigate(Page::Records, window, cx);
+            view.hide_manager(window, cx);
+        });
+        let (cat, mut strip) = open_test_strip(&mut manager);
+        click_test_strip(&cat, &mut strip, "strip-face");
+        cat.read_with(&strip, |cat, _| assert!(cat.expanded));
+        click_test_strip(&cat, &mut strip, "strip-primary");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(matches!(view.page, Page::Focus));
+            assert!(!view.compact && view.preparing);
+            assert_eq!(view.selected_task, None);
+            assert_eq!(view.task_input.read(cx).value(), "");
+            assert_eq!(view.timer_input.read(cx).value(), minutes);
+            assert_eq!(view.countdown, countdown);
+            assert!(view.active.is_empty());
+            assert!(view.tasks.is_empty());
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert!(view.task_input.read(cx).focus_handle(cx).is_focused(window));
+        });
+        strip.update(|window, _| window.remove_window());
+        strip.run_until_parked();
+    }
+}
+
+#[gpui::test]
+fn headless_ui_cat_idle_blank_default_task_opens_new_task_directly(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.new_task(window, cx);
+        view.hide_manager(window, cx);
+    });
+    let (cat, mut strip) = open_test_strip(&mut manager);
+    click_test_strip(&cat, &mut strip, "strip-face");
+    cat.read_with(&strip, |cat, _| assert!(!cat.expanded));
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(matches!(view.page, Page::Focus));
+        assert!(!view.compact && view.preparing);
+        assert!(view.selected_task.is_none());
+        assert_eq!(view.task_input.read(cx).value(), "");
+        assert_eq!(view.timer_input.read(cx).value(), "25");
+        assert!(view.countdown && view.active.is_empty());
+    });
     strip.update(|window, _| window.remove_window());
     strip.run_until_parked();
 }

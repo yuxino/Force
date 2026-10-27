@@ -1204,6 +1204,26 @@ impl ForceView {
         preferred_strip_session(&self.active, self.selected_session, self.now)
     }
 
+    /// Open the task already represented by the cat, preserving its draft.
+    pub(crate) fn show_strip_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.page == Page::Agenda {
+            self.suspend_agenda_popup(window, cx);
+        }
+        self.page = Page::Focus;
+        self.show_manager(window, cx);
+        if self.preparing && !self.storage_failed {
+            let title_invalid = self.task_input.read(cx).value().trim().is_empty()
+                || self.task_title_error(cx).is_some();
+            if !title_invalid && self.timer_duration_error(cx).is_some() {
+                self.timer_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            } else {
+                self.task_input
+                    .update(cx, |input, cx| input.focus(window, cx));
+            }
+        }
+    }
+
     pub(crate) fn strip_primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.storage_failed {
             self.page = Page::Focus;
@@ -2030,6 +2050,8 @@ pub(crate) struct FloatingStrip {
     pub(crate) disclosure_started: Instant,
     pub(crate) disclosure_task: Option<gpui::Task<()>>,
     pub(crate) face_hovered: bool,
+    pub(crate) face_click_serial: u64,
+    pub(crate) face_click_started: Option<Instant>,
     pub(crate) docked: Option<crate::platform::DockEdge>,
     pub(crate) drag_start: Option<gpui::Point<gpui::Pixels>>,
     #[cfg(target_os = "macos")]
@@ -2076,6 +2098,8 @@ impl FloatingStrip {
             disclosure_started: Instant::now(),
             disclosure_task: None,
             face_hovered: false,
+            face_click_serial: 0,
+            face_click_started: None,
             docked: None,
             drag_start: None,
             #[cfg(target_os = "macos")]

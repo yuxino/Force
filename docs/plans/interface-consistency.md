@@ -23,10 +23,12 @@ The clock prioritizes the running session. Browsing a paused task in management
 must not replace that timer or retarget its controls. Without a running session,
 the clock may show the selected paused session or completion state. Keep the
 compact readout inside the black cat. Its expanded black panel contains the
-task title, status and one primary action: 开始, 暂停, 继续, 查看本轮 or
-重试 as appropriate. Show 结束 only for an active or paused session, without a
-reserved empty slot. Clicking the task title opens its management detail with
-the existing draft protection. Click the cat again to collapse it; do not add a duplicate collapse button.
+task title, status and one primary action: 开始, 暂停, 继续, 查看本轮,
+查看任务 or 打开 Force as appropriate. Show 结束 only when the active or
+paused session can be modified. Clicking the task title opens its management
+detail without replacing the selected task or its draft. A short click animates
+the drawing while its hitbox remains still; dragging does not trigger that
+feedback. Click the cat again to collapse it; do not add a duplicate collapse button.
 Do not add a separate open button or hover tooltips to the clock.
 
 ## Stable focus workspace
@@ -293,6 +295,12 @@ on white, while duration presets use an underline. Neither resembles disabled
 Start. The task sidebar heading is subordinate at 14 points.
 
 Calendar editors reserve two lines for validation so bottom-snapped title and
-time fields do not jump when typing clears an error. The fields scroll within
-the popup and Save/Cancel remain reachable. A fixed error slot is functional
+time fields do not jump when typing clears an error. Fields scroll within the
+popup, while validation and Save/Cancel remain visible outside the scroll area.
+Expanding notes reveals and focuses the note field; validation reveals its first
+invalid field, including after resuming a draft. A fixed error slot is functional
 space, not an invitation to add helper prose to pristine forms.
+
+In the day timeline, pending tasks are separated by horizontal rules rather than
+individual boxes. Hide an hour label only while the current-time label overlaps
+it; retain the hour grid line and its click target.

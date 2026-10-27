@@ -1989,3 +1989,255 @@ fn agenda_ui_bottom_editor_fields_do_not_jump_when_validation_changes(cx: &mut T
         );
     }
 }
+
+#[gpui::test]
+fn agenda_ui_error_remains_visible_above_actions_with_expanded_notes(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let date = NaiveDate::from_ymd_opt(2026, 10, 30).unwrap();
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            view.agenda.month = date.with_day(1).unwrap();
+            view.agenda.date = date;
+            cx.notify();
+        });
+        settle(&mut manager);
+        manager.click("agenda-overview-add");
+        manager.click("agenda-note-toggle");
+        let fields = manager.bounds("agenda-editor-fields");
+        assert_inside(manager.bounds("agenda-note-toggle"), fields);
+        manager.click("agenda-save");
+        let title = manager.bounds("agenda-title-input");
+        assert_inside(title, manager.bounds("agenda-editor-fields"));
+        let error = manager.bounds("agenda-error");
+        let slot = manager.bounds("agenda-validation-slot");
+        let actions = manager.bounds("agenda-editor-actions");
+        assert_inside(error, slot);
+        assert_inside(slot, manager.bounds("agenda-popover"));
+        assert!(
+            slot.top() >= fields.bottom(),
+            "the error must not be clipped by the scrolling fields: fields={fields:?}, slot={slot:?}"
+        );
+        assert!(
+            slot.bottom() <= actions.top(),
+            "the error must not overlap the actions"
+        );
+        assert_same_bounds(manager.bounds("agenda-title-input"), title);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(view.agenda.note_expanded);
+            assert!(view.agenda.error.is_some());
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.agenda
+                .title_input
+                .update(cx, |input, cx| input.set_value("a", window, cx));
+        });
+        settle(&mut manager);
+        manager
+            .view
+            .read_with(&manager.cx, |view, _| assert!(view.agenda.error.is_none()));
+        assert_same_bounds(manager.bounds("agenda-title-input"), title);
+        assert_same_bounds(manager.bounds("agenda-validation-slot"), slot);
+        assert_same_bounds(manager.bounds("agenda-editor-actions"), actions);
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_expanding_notes_reveals_input_and_retains_validation_on_scroll(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        manager.click("agenda-overview-add");
+        manager.click("agenda-note-toggle");
+        let fields = manager.bounds("agenda-editor-fields");
+        assert_inside(manager.bounds("agenda-note-input"), fields);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert!(
+                view.agenda
+                    .note_input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        });
+        manager.click("agenda-save");
+        assert_inside(
+            manager.bounds("agenda-title-input"),
+            manager.bounds("agenda-editor-fields"),
+        );
+        assert_inside(
+            manager.bounds("agenda-error"),
+            manager.bounds("agenda-validation-slot"),
+        );
+        manager.scroll("agenda-editor-fields", -240.);
+        manager
+            .view
+            .read_with(&manager.cx, |view, _| assert!(view.agenda.error.is_some()));
+        assert_inside(
+            manager.bounds("agenda-error"),
+            manager.bounds("agenda-validation-slot"),
+        );
+        assert_inside(
+            manager.bounds("agenda-validation-slot"),
+            manager.bounds("agenda-popover"),
+        );
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_collapsing_notes_restores_scroll_and_prior_input_without_losing_text(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        manager.click("agenda-overview-add");
+        manager.cx.simulate_input("A title to keep");
+        settle(&mut manager);
+        let before_scroll = manager
+            .view
+            .read_with(&manager.cx, |view, _| view.agenda.editor_scroll.offset());
+        manager.click("agenda-note-toggle");
+        manager.cx.simulate_input("A note to keep");
+        settle(&mut manager);
+        assert_inside(
+            manager.bounds("agenda-note-input"),
+            manager.bounds("agenda-editor-fields"),
+        );
+        manager.click("agenda-note-toggle");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert!(!view.agenda.note_expanded);
+            assert_eq!(view.agenda.editor_scroll.offset(), before_scroll);
+            assert_eq!(view.agenda.title_input.read(cx).value(), "A title to keep");
+            assert_eq!(view.agenda.note_input.read(cx).value(), "A note to keep");
+            assert!(
+                view.agenda
+                    .title_input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        });
+        assert_inside(
+            manager.bounds("agenda-title-input"),
+            manager.bounds("agenda-editor-fields"),
+        );
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_invalid_field_is_revealed_above_fixed_error_after_note_scroll(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        for field in ["title", "date", "date_before_time", "start", "end", "note"] {
+            let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+            manager.click("agenda-overview-add");
+            manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                for (input, value) in [
+                    (
+                        &view.agenda.title_input,
+                        if field == "title" { "" } else { "A title" },
+                    ),
+                    (
+                        &view.agenda.date_input,
+                        if field == "date" || field == "date_before_time" {
+                            "bad date"
+                        } else {
+                            "2026-10-27"
+                        },
+                    ),
+                    (
+                        &view.agenda.start_input,
+                        if field == "start" || field == "date_before_time" {
+                            "bad start"
+                        } else {
+                            "09:00"
+                        },
+                    ),
+                    (
+                        &view.agenda.end_input,
+                        if field == "end" { "bad end" } else { "09:30" },
+                    ),
+                ] {
+                    input.update(cx, |input, cx| input.set_value(value, window, cx));
+                }
+                if field == "note" {
+                    view.agenda.note_input.update(cx, |input, cx| {
+                        input.set_value("x".repeat(2001), window, cx)
+                    });
+                }
+            });
+            settle(&mut manager);
+            if field != "note" {
+                manager.click("agenda-note-toggle");
+            }
+            manager.click("agenda-save");
+            let selector = match field {
+                "title" => "agenda-title-input",
+                "date" | "date_before_time" => "agenda-date-input",
+                "start" => "agenda-start-input",
+                "end" => "agenda-end-input",
+                _ => "agenda-note-input",
+            };
+            assert_inside(
+                manager.bounds(selector),
+                manager.bounds("agenda-editor-fields"),
+            );
+            assert_inside(
+                manager.bounds("agenda-error"),
+                manager.bounds("agenda-validation-slot"),
+            );
+            assert_inside(
+                manager.bounds("agenda-validation-slot"),
+                manager.bounds("agenda-popover"),
+            );
+            manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                let input = match field {
+                    "title" => &view.agenda.title_input,
+                    "date" | "date_before_time" => &view.agenda.date_input,
+                    "start" => &view.agenda.start_input,
+                    "end" => &view.agenda.end_input,
+                    _ => &view.agenda.note_input,
+                };
+                assert!(
+                    input.read(cx).focus_handle(cx).is_focused(window),
+                    "incorrect focus for {field}"
+                );
+                assert!(view.agenda.error.is_some());
+                if field == "note" {
+                    assert!(view.agenda.note_expanded);
+                }
+            });
+        }
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_resumed_note_draft_reveals_the_focused_editor_field(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        manager.click("agenda-overview-add");
+        manager.cx.simulate_input("A title to keep");
+        settle(&mut manager);
+        manager.click("agenda-note-toggle");
+        manager.cx.simulate_input("A note to keep");
+        settle(&mut manager);
+        manager.click("agenda-popover-close");
+        manager.click("agenda-resume-draft");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert_eq!(view.agenda.title_input.read(cx).value(), "A title to keep");
+            assert_eq!(view.agenda.note_input.read(cx).value(), "A note to keep");
+            assert!(
+                view.agenda
+                    .note_input
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+        });
+        assert_inside(
+            manager.bounds("agenda-note-input"),
+            manager.bounds("agenda-editor-fields"),
+        );
+    }
+}

@@ -361,7 +361,11 @@ impl ForceView {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(field_label("本轮时长"))
+                    .child(field_label(if self.countdown {
+                        "本轮时长"
+                    } else {
+                        "计时起点"
+                    }))
                     .child(
                         div()
                             .h(px(44.))
@@ -415,7 +419,6 @@ impl ForceView {
                                 row.child(
                                     div().font(timer_font(cx)).text_size(px(28.)).child("00:00"),
                                 )
-                                .child(control_label("开始累计", MUTED))
                             }),
                     )
                     .when_some(self.timer_duration_error(cx), |body, message| {

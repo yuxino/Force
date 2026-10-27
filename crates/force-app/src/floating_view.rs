@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use force_core::{Session, TagKind};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Icon, IconName,
+    Icon, IconName, Sizable,
     button::{ButtonCustomVariant, ButtonVariants},
 };
 
@@ -18,6 +18,7 @@ pub(crate) const EXPANDED_WIDTH: f32 = platform::STRIP_EXPANDED_WIDTH;
 pub(crate) const EXPANDED_HEIGHT: f32 = platform::STRIP_EXPANDED_HEIGHT;
 pub(crate) const DOCK_WIDTH: f32 = platform::STRIP_DOCKED_WIDTH;
 pub(crate) const DOCK_HEIGHT: f32 = platform::STRIP_DOCKED_HEIGHT;
+const CAT_CLICK_DURATION: Duration = Duration::from_millis(200);
 
 struct TimerFace {
     title: String,
@@ -43,6 +44,10 @@ impl FloatingStrip {
             model.strip_session()
         };
         let completed = current.is_none() && model.completed.is_some();
+        let title_empty = model.task_input.read(cx).value().trim().is_empty();
+        let timing_draft = model.preparing
+            && (!model.countdown || model.timer_input.read(cx).value().trim() != "25");
+        let has_task_draft = model.selected_task.is_some() || !title_empty || timing_draft;
         let seconds = current.map_or_else(
             || {
                 model.completed.as_ref().map_or(
@@ -67,8 +72,21 @@ impl FloatingStrip {
             session.title.clone()
         } else {
             let input = model.task_input.read(cx).value();
-            if input.trim().is_empty() {
-                "做一件事".to_owned()
+            if title_empty {
+                model
+                    .selected_task
+                    .and_then(|id| model.tasks.iter().find(|task| task.id == id))
+                    .map_or_else(
+                        || {
+                            if timing_draft {
+                                "新任务"
+                            } else {
+                                "做一件事"
+                            }
+                            .to_owned()
+                        },
+                        |task| task.title.clone(),
+                    )
             } else {
                 input.to_string()
             }
@@ -103,6 +121,8 @@ impl FloatingStrip {
                     } else {
                         "正计时".to_owned()
                     }
+                } else if title_empty && has_task_draft {
+                    "填写任务名称".to_owned()
                 } else if model.countdown {
                     "倒计时 · 未开始".to_owned()
                 } else {
@@ -112,10 +132,7 @@ impl FloatingStrip {
             |(message, _)| message.clone(),
         );
         TimerFace {
-            idle: current.is_none()
-                && !completed
-                && !model.storage_failed
-                && model.task_input.read(cx).value().trim().is_empty(),
+            idle: current.is_none() && !completed && !model.storage_failed && !has_task_draft,
             ready: model.can_start_task(cx),
             title,
             status,
@@ -204,6 +221,8 @@ impl FloatingStrip {
         self.drag_task = None;
         self.drag_serial = self.drag_serial.wrapping_add(1);
         self.clear_face_press();
+        // A new gesture interrupts the old rebound; a drag cannot replay it.
+        self.face_click_started = None;
         self.drag_start = Some(event.position);
         self.suppress_click = false;
         #[cfg(target_os = "macos")]
@@ -230,6 +249,9 @@ impl FloatingStrip {
         if std::mem::take(&mut self.suppress_click) {
             return;
         }
+        self.face_click_serial = self.face_click_serial.wrapping_add(1);
+        self.face_click_started = Some(Instant::now());
+        cx.notify();
         if self.timer_face(cx).idle {
             self.dispatch(cx, |model, window, cx| model.new_task(window, cx));
         } else {
@@ -314,21 +336,13 @@ impl FloatingStrip {
 
     fn cat_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
         let (minutes, detail) = compact_time(face.seconds);
-        div()
-            .id("cat-clock-face")
-            .debug_selector(|| "strip-face".into())
+        // Only the drawing moves; the click and drag hitbox stays in place.
+        let artwork = div()
             .absolute()
-            .left(px(6.))
-            .top(px(if self.drag_start.is_some() { 6. } else { 4. }))
+            .left_0()
+            .top_0()
             .w(px(76.))
             .h(px(116.))
-            .cursor_pointer()
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                this.face_hovered = *hovered;
-                cx.notify();
-            }))
-            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_face_press))
-            .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
             .child(
                 div()
                     .absolute()
@@ -426,12 +440,49 @@ impl FloatingStrip {
                     } else {
                         detail
                     }),
-            )
+            );
+        let pressed = self.drag_start.is_some();
+        let artwork = if cat_click_active(self.face_click_started, Instant::now()) {
+            artwork
+                .with_animation(
+                    ElementId::NamedInteger("cat-click".into(), self.face_click_serial),
+                    Animation::new(CAT_CLICK_DURATION),
+                    move |artwork, progress| {
+                        let offset = if pressed {
+                            2.
+                        } else {
+                            cat_click_offset(progress)
+                        };
+                        artwork.top(px(offset))
+                    },
+                )
+                .into_any_element()
+        } else {
+            artwork
+                .top(px(if pressed { 2. } else { 0. }))
+                .into_any_element()
+        };
+        div()
+            .id("cat-clock-face")
+            .debug_selector(|| "strip-face".into())
+            .absolute()
+            .left(px(6.))
+            .top(px(4.))
+            .w(px(76.))
+            .h(px(116.))
+            .cursor_pointer()
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
+                this.face_hovered = *hovered;
+                cx.notify();
+            }))
+            .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_face_press))
+            .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
+            .child(artwork)
     }
 
     fn drawer(&self, face: &TimerFace, cx: &mut Context<Self>) -> Div {
         let primary_label = if face.failed {
-            "重试"
+            "打开 Force"
         } else if face.completed {
             "查看本轮"
         } else if face.running {
@@ -441,18 +492,18 @@ impl FloatingStrip {
         } else if face.ready {
             "开始"
         } else {
-            "新任务"
+            "查看任务"
         };
-        let primary_icon = if face.failed {
-            Icon::new(IconName::Redo)
-        } else if face.completed {
+        let primary_icon = if face.failed
+            || face.completed
+            || (!face.running && face.session.is_none() && !face.ready)
+        {
             Icon::new(IconName::ArrowRight)
-        } else if !face.running && face.session.is_none() && !face.ready {
-            Icon::new(IconName::Plus)
         } else {
             action_icon(if face.running { "pause" } else { "play" })
         };
-        let session_id = face.session;
+        let session_id = if face.failed { None } else { face.session };
+        let opens_task = face.failed || (!face.completed && face.session.is_none() && !face.ready);
         div()
             .absolute()
             .left(px(14.))
@@ -468,8 +519,13 @@ impl FloatingStrip {
                     .absolute()
                     .left(px(80.))
                     .top(px(12.))
-                    .w(px(122.))
+                    .w(px(136.))
                     .h(px(20.))
+                    .rounded(px(4.))
+                    .flex()
+                    .items_center()
+                    .gap(px(4.))
+                    .hover(|title| title.bg(rgb(0x292929)))
                     .id("cat-task-details")
                     .debug_selector(|| "strip-open".into())
                     .cursor_pointer()
@@ -481,19 +537,20 @@ impl FloatingStrip {
                             if let Some(id) = session_id {
                                 model.show_manager(window, cx);
                                 model.select_session(id, window, cx);
-                            } else if model.completed.is_some() || model.storage_failed {
-                                model.strip_primary_action(window, cx);
                             } else {
-                                model.new_task(window, cx);
+                                model.show_strip_task(window, cx);
                             }
                         });
                     }))
                     .child(
-                        single_line(face.title.clone(), 13.)
-                            .debug_selector(|| "strip-title-text".into())
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(rgb(0xf5f5f5)),
-                    ),
+                        div().w(px(122.)).child(
+                            single_line(face.title.clone(), 13.)
+                                .debug_selector(|| "strip-title-text".into())
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(rgb(0xf5f5f5)),
+                        ),
+                    )
+                    .child(control_icon(IconName::ChevronRight, 0xa6a6a6).size(px(10.))),
             )
             .child(
                 div()
@@ -522,8 +579,10 @@ impl FloatingStrip {
                     .child(
                         button("bar-primary")
                             .debug_selector(|| "strip-primary".into())
+                            .small()
                             .w(px(82.))
                             .h(px(26.))
+                            .px(px(6.))
                             .rounded(px(8.))
                             .custom(
                                 ButtonCustomVariant::new(cx)
@@ -533,26 +592,46 @@ impl FloatingStrip {
                                     .hover(rgb(0xffffff).into())
                                     .active(rgb(0xd8d8d8).into()),
                             )
-                            .icon(control_icon(primary_icon.size(px(11.)), INK))
                             .child(
                                 div()
-                                    .text_size(px(11.))
-                                    .text_color(rgb(INK))
-                                    .child(primary_label),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .child(
+                                        div()
+                                            .debug_selector(|| "strip-primary-icon".into())
+                                            .size(px(12.))
+                                            .flex_none()
+                                            .child(control_icon(primary_icon, INK).size(px(12.))),
+                                    )
+                                    .child(
+                                        div()
+                                            .debug_selector(|| "strip-primary-label".into())
+                                            .flex_none()
+                                            .text_size(px(11.))
+                                            .text_color(rgb(INK))
+                                            .child(primary_label),
+                                    ),
                             )
-                            .on_click(cx.listener(|this, event: &ClickEvent, _, cx| {
+                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
                                 if this.expanded && event.click_count() == 1 {
-                                    this.dispatch(cx, |model, window, cx| {
-                                        model.strip_primary_action(window, cx)
+                                    this.dispatch(cx, move |model, window, cx| {
+                                        if opens_task {
+                                            model.show_strip_task(window, cx);
+                                        } else {
+                                            model.strip_primary_action(window, cx);
+                                        }
                                     });
                                 }
                             })),
                     )
-                    .children(face.session.map(|id| {
+                    .children(face.session.filter(|_| !face.failed).map(|id| {
                         button("bar-finish")
                             .debug_selector(|| "strip-finish".into())
+                            .small()
                             .w(px(36.))
                             .h(px(26.))
+                            .px(px(4.))
                             .rounded(px(7.))
                             .custom(cat_secondary_variant(cx))
                             .child(
@@ -697,6 +776,16 @@ fn cat_secondary_variant(cx: &App) -> ButtonCustomVariant {
         .active(rgb(0x454545).into())
 }
 
+fn cat_click_active(started: Option<Instant>, now: Instant) -> bool {
+    started.is_some_and(|started| now.saturating_duration_since(started) < CAT_CLICK_DURATION)
+}
+
+// A short press settles upward before returning to rest, without shifting the hitbox.
+fn cat_click_offset(progress: f32) -> f32 {
+    let t = progress.clamp(0., 1.);
+    2. * (1. - t) * (std::f32::consts::PI * 2. * t).cos()
+}
+
 fn compact_time(seconds: i64) -> (String, String) {
     let seconds = seconds.max(0);
     if seconds < 3600 {
@@ -719,7 +808,23 @@ fn compact_time(seconds: i64) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::compact_time;
+    use super::{CAT_CLICK_DURATION, cat_click_active, compact_time};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn cat_click_animation_expires_before_it_can_be_remounted() {
+        let start = Instant::now();
+        assert!(!cat_click_active(None, start));
+        assert!(cat_click_active(
+            Some(start),
+            start + CAT_CLICK_DURATION - Duration::from_millis(1)
+        ));
+        assert!(!cat_click_active(Some(start), start + CAT_CLICK_DURATION));
+        assert!(!cat_click_active(
+            Some(start),
+            start + Duration::from_secs(10)
+        ));
+    }
 
     #[test]
     fn compact_clock_keeps_subhour_seconds_and_hour_meaning() {

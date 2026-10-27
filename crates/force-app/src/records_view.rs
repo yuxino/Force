@@ -49,7 +49,14 @@ impl ForceView {
                     .debug_selector(|| "next-day".into())
                     .custom(crate::view::quiet_variant(cx))
                     .size(px(32.))
-                    .icon(control_icon(IconName::ChevronRight, INK))
+                    .icon(control_icon(
+                        IconName::ChevronRight,
+                        if self.record_date >= Local::now().date_naive() {
+                            MUTED
+                        } else {
+                            INK
+                        },
+                    ))
                     .tooltip("后一天")
                     .unavailable(self.record_date >= Local::now().date_naive())
                     .on_click(cx.listener(|this, _, _, cx| {

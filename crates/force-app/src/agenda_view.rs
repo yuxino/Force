@@ -19,8 +19,23 @@ use crate::{
 const MONTH_WIDTH: f32 = 208.;
 const COLUMN_GAP: f32 = 24.;
 const HOUR_HEIGHT: f32 = 60.;
+const HOUR_LABEL_TOP: f32 = 3.;
+const HOUR_LABEL_HEIGHT: f32 = 16.;
+const CURRENT_TIME_LINE_TOP: f32 = 10.;
+const CURRENT_TIME_LABEL_OFFSET: f32 = -8.;
+const CURRENT_TIME_LABEL_HEIGHT: f32 = 16.;
 const TIME_GUTTER: f32 = 46.;
 const MIN_EVENT_HEIGHT: f32 = 28.;
+
+fn hour_label_overlaps_current_time(hour: u32, current_minute: Option<f32>) -> bool {
+    let Some(current_minute) = current_minute else {
+        return false;
+    };
+    let hour_top = hour as f32 * HOUR_HEIGHT + HOUR_LABEL_TOP;
+    let current_top =
+        current_minute / 60. * HOUR_HEIGHT + CURRENT_TIME_LINE_TOP + CURRENT_TIME_LABEL_OFFSET;
+    current_top < hour_top + HOUR_LABEL_HEIGHT && current_top + CURRENT_TIME_LABEL_HEIGHT > hour_top
+}
 
 #[derive(Clone, Copy)]
 enum CalendarTarget {
@@ -625,6 +640,7 @@ impl ForceView {
                             .h(px(40.))
                             .px(px(6.))
                             .rounded(px(0.))
+                            .border_0()
                             .border_b_1()
                             .border_color(rgb(LINE))
                             .tooltip(format!("安排：{}", task.title))
@@ -996,6 +1012,11 @@ impl ForceView {
             group_start = group_end;
         }
         let canvas_width = day_width.max(TIME_GUTTER + maximum_lanes as f32 * 140.);
+        let date = self.agenda.date;
+        let now = Local.timestamp_opt(self.now, 0).single();
+        let current_minute = now.filter(|time| time.date_naive() == date).map(|time| {
+            time.hour() as f32 * 60. + time.minute() as f32 + time.second() as f32 / 60.
+        });
         let mut hours = Vec::new();
         for hour in 0..24 {
             hours.push(
@@ -1012,16 +1033,24 @@ impl ForceView {
                     .left_0()
                     .right_0()
                     .h(px(HOUR_HEIGHT))
-                    .child(
-                        div()
-                            .absolute()
-                            .top(px(3.))
-                            .left_0()
-                            .w(px(TIME_GUTTER - 8.))
-                            .text_size(px(12.))
-                            .text_color(rgb(MUTED))
-                            .text_align(TextAlign::Right)
-                            .child(format!("{hour:02}:00")),
+                    .when(
+                        !hour_label_overlaps_current_time(hour, current_minute),
+                        |slot| {
+                            slot.child(
+                                div()
+                                    .debug_selector(move || format!("agenda-hour-label-{hour}"))
+                                    .absolute()
+                                    .top(px(HOUR_LABEL_TOP))
+                                    .left_0()
+                                    .w(px(TIME_GUTTER - 8.))
+                                    .h(px(HOUR_LABEL_HEIGHT))
+                                    .text_size(px(12.))
+                                    .line_height(px(HOUR_LABEL_HEIGHT))
+                                    .text_color(rgb(MUTED))
+                                    .text_align(TextAlign::Right)
+                                    .child(format!("{hour:02}:00")),
+                            )
+                        },
                     )
                     .child(
                         div()
@@ -1034,11 +1063,6 @@ impl ForceView {
                     ),
             );
         }
-        let date = self.agenda.date;
-        let now = Local.timestamp_opt(self.now, 0).single();
-        let current_minute = now.filter(|time| time.date_naive() == date).map(|time| {
-            time.hour() as f32 * 60. + time.minute() as f32 + time.second() as f32 / 60.
-        });
         div()
             .id("agenda-day-scroll")
             .debug_selector(|| "agenda-day-grid".into())
@@ -1073,7 +1097,7 @@ impl ForceView {
                         grid.child(
                             div()
                                 .absolute()
-                                .top(px(minute / 60. * HOUR_HEIGHT + 10.))
+                                .top(px(minute / 60. * HOUR_HEIGHT + CURRENT_TIME_LINE_TOP))
                                 .left_0()
                                 .right_0()
                                 .h(px(1.))
@@ -1082,12 +1106,14 @@ impl ForceView {
                                     div()
                                         .absolute()
                                         .left_0()
-                                        .top(px(-8.))
+                                        .top(px(CURRENT_TIME_LABEL_OFFSET))
                                         .w(px(TIME_GUTTER))
+                                        .h(px(CURRENT_TIME_LABEL_HEIGHT))
                                         .py(px(2.))
                                         .rounded(px(3.))
                                         .text_center()
                                         .text_size(px(10.))
+                                        .line_height(px(12.))
                                         .bg(rgb(INK))
                                         .text_color(rgb(0xffffff))
                                         .child(minute_label(minute as u16)),
@@ -1644,4 +1670,28 @@ fn clock_minute(date: NaiveDate, timestamp: i64) -> f32 {
         .map_or(0., |time| {
             time.hour() as f32 * 60. + time.minute() as f32 + time.second() as f32 / 60.
         })
+}
+
+#[cfg(test)]
+mod time_label_tests {
+    use super::hour_label_overlaps_current_time;
+
+    #[test]
+    fn hides_only_hour_labels_overlapped_by_the_current_time_label() {
+        assert!(!hour_label_overlaps_current_time(12, None));
+        assert!(!hour_label_overlaps_current_time(12, Some(11. * 60. + 45.)));
+        assert!(hour_label_overlaps_current_time(
+            12,
+            Some(11. * 60. + 45. + 1. / 60.)
+        ));
+        assert!(hour_label_overlaps_current_time(12, Some(11. * 60. + 52.)));
+        assert!(!hour_label_overlaps_current_time(11, Some(11. * 60. + 52.)));
+        assert!(hour_label_overlaps_current_time(
+            12,
+            Some(12. * 60. + 16. + 59. / 60.)
+        ));
+        assert!(!hour_label_overlaps_current_time(12, Some(12. * 60. + 17.)));
+        assert!(hour_label_overlaps_current_time(0, Some(0.)));
+        assert!(hour_label_overlaps_current_time(23, Some(23. * 60.)));
+    }
 }

@@ -187,7 +187,9 @@ impl ForceView {
                     .when(self.goal_draft(cx).is_none(), |body| {
                         body.child(
                             div()
+                                .debug_selector(|| "goal-error".into())
                                 .pb(px(8.))
+                                .text_right()
                                 .text_size(px(14.))
                                 .text_color(rgb(DESTRUCTIVE))
                                 .child("请输入 1–1440 之间的整数分钟数。"),
