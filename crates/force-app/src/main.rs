@@ -23,6 +23,8 @@ mod view;
 mod agenda_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod headless_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
+mod task_draft_ui_tests;
 
 use gpui::{prelude::*, *};
 use gpui_component::{Root, Theme, ThemeMode};

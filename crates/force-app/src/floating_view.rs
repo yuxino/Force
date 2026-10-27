@@ -28,10 +28,35 @@ struct TimerFace {
     paused: bool,
     completed: bool,
     failed: bool,
+    invalid_duration: bool,
     session: Option<i64>,
     progress: Option<f32>,
     ready: bool,
     idle: bool,
+}
+
+impl TimerFace {
+    fn compact_display(&self) -> (String, String) {
+        if self.failed {
+            ("!".to_owned(), "重试".to_owned())
+        } else if self.completed {
+            ("✓".to_owned(), "完成".to_owned())
+        } else if self.invalid_duration {
+            ("—".to_owned(), "检查时长".to_owned())
+        } else if self.idle {
+            ("+".to_owned(), "新任务".to_owned())
+        } else {
+            let (minutes, detail) = compact_time(self.seconds);
+            (
+                minutes,
+                if self.paused {
+                    "暂停".to_owned()
+                } else {
+                    detail
+                },
+            )
+        }
+    }
 }
 
 impl FloatingStrip {
@@ -48,6 +73,11 @@ impl FloatingStrip {
         let timing_draft = model.preparing
             && (!model.countdown || model.timer_input.read(cx).value().trim() != "25");
         let has_task_draft = model.selected_task.is_some() || !title_empty || timing_draft;
+        let invalid_duration = !model.storage_failed
+            && current.is_none()
+            && !completed
+            && has_task_draft
+            && model.timer_duration_error(cx).is_some();
         let seconds = current.map_or_else(
             || {
                 model.completed.as_ref().map_or(
@@ -107,30 +137,34 @@ impl FloatingStrip {
         } else {
             "未开始"
         };
-        let status = model.toast.as_ref().filter(|_| model.compact).map_or_else(
-            || {
-                if model.storage_failed || paused {
-                    state.to_owned()
-                } else if completed {
-                    format!("本轮投入 {}", clock(seconds))
-                } else if let Some(session) = current {
-                    if session.tag_kind == TagKind::Rest {
-                        "休息中".to_owned()
-                    } else if session.target_seconds.is_some() {
-                        "剩余时间".to_owned()
+        let status = if invalid_duration {
+            "检查时长".to_owned()
+        } else {
+            model.toast.as_ref().filter(|_| model.compact).map_or_else(
+                || {
+                    if model.storage_failed || paused {
+                        state.to_owned()
+                    } else if completed {
+                        format!("本轮投入 {}", clock(seconds))
+                    } else if let Some(session) = current {
+                        if session.tag_kind == TagKind::Rest {
+                            "休息中".to_owned()
+                        } else if session.target_seconds.is_some() {
+                            "剩余时间".to_owned()
+                        } else {
+                            "正计时".to_owned()
+                        }
+                    } else if title_empty && has_task_draft {
+                        "填写任务名称".to_owned()
+                    } else if model.countdown {
+                        "倒计时 · 未开始".to_owned()
                     } else {
-                        "正计时".to_owned()
+                        "正计时 · 随时开始".to_owned()
                     }
-                } else if title_empty && has_task_draft {
-                    "填写任务名称".to_owned()
-                } else if model.countdown {
-                    "倒计时 · 未开始".to_owned()
-                } else {
-                    "正计时 · 随时开始".to_owned()
-                }
-            },
-            |(message, _)| message.clone(),
-        );
+                },
+                |(message, _)| message.clone(),
+            )
+        };
         TimerFace {
             idle: current.is_none() && !completed && !model.storage_failed && !has_task_draft,
             ready: model.can_start_task(cx),
@@ -141,6 +175,7 @@ impl FloatingStrip {
             paused,
             completed,
             failed: model.storage_failed,
+            invalid_duration,
             session: current.map(|s| s.id),
             progress: current.and_then(|s| {
                 s.target_seconds.map(|target| {
@@ -335,7 +370,7 @@ impl FloatingStrip {
     }
 
     fn cat_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
-        let (minutes, detail) = compact_time(face.seconds);
+        let (minutes, detail) = face.compact_display();
         // Only the drawing moves; the click and drag hitbox stays in place.
         let artwork = div()
             .absolute()
@@ -392,55 +427,62 @@ impl FloatingStrip {
                 div()
                     .debug_selector(|| "strip-time".into())
                     .absolute()
-                    .top(px(66.))
-                    .left(px(19.))
+                    .top(px(if face.invalid_duration { 56. } else { 66. }))
+                    .left(px(if face.invalid_duration { 25.5 } else { 19. }))
                     .w(px(43.))
-                    .h(px(32.))
+                    .h(px(if face.invalid_duration { 22. } else { 32. }))
                     .flex()
                     .items_center()
                     .justify_center()
                     .font(timer_font(cx))
-                    .text_size(px(if minutes.len() > 3 {
+                    .text_size(px(if face.invalid_duration {
+                        23.
+                    } else if minutes.chars().count() > 3 {
                         16.
-                    } else if minutes.len() > 2 {
+                    } else if minutes.chars().count() > 2 {
                         18.
                     } else {
                         27.
                     }))
                     .font_weight(FontWeight::MEDIUM)
                     .text_color(rgb(if face.paused { 0xb3b3b3 } else { 0xf5f5f5 }))
-                    .child(if face.failed {
-                        "!".to_owned()
-                    } else if face.completed {
-                        "✓".to_owned()
-                    } else if face.idle {
-                        "+".to_owned()
-                    } else {
-                        minutes
-                    }),
+                    .child(minutes),
             )
-            .child(
+            .child(if face.invalid_duration {
+                // Keep the four-character hint inside the narrow lower
+                // body, above the tail and away from the timer dash.
+                div()
+                    .debug_selector(|| "strip-invalid-detail".into())
+                    .absolute()
+                    .top(px(80.))
+                    .left(px(30.))
+                    .w(px(34.))
+                    .h(px(12.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_size(px(8.))
+                    .text_color(rgb(0xcccccc))
+                    .child(
+                        div()
+                            .debug_selector(|| "strip-invalid-detail-text".into())
+                            .flex_none()
+                            .child(detail),
+                    )
+                    .into_any_element()
+            } else {
                 div()
                     .absolute()
                     .top(px(96.))
-                    .left(px(23.))
-                    .w(px(38.))
+                    .left(px(20.5))
+                    .w(px(43.))
                     .h(px(14.))
                     .text_center()
                     .text_size(px(10.))
                     .text_color(rgb(0xcccccc))
-                    .child(if face.failed {
-                        "重试".to_owned()
-                    } else if face.completed {
-                        "完成".to_owned()
-                    } else if face.paused {
-                        "暂停".to_owned()
-                    } else if face.idle {
-                        "新任务".to_owned()
-                    } else {
-                        detail
-                    }),
-            );
+                    .child(detail)
+                    .into_any_element()
+            });
         let pressed = self.drag_start.is_some();
         let artwork = if cat_click_active(self.face_click_started, Instant::now()) {
             artwork
@@ -650,7 +692,7 @@ impl FloatingStrip {
     }
 
     fn dock_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
-        let (minutes, _) = compact_time(face.seconds);
+        let (minutes, _) = face.compact_display();
         div()
             .id("cat-clock-dock")
             .debug_selector(|| "strip-dock".into())
@@ -671,16 +713,12 @@ impl FloatingStrip {
             .child(
                 div()
                     .font(timer_font(cx))
-                    .text_size(px(if minutes.len() > 2 { 10. } else { 15. }))
-                    .child(if face.failed {
-                        "!".to_owned()
-                    } else if face.completed {
-                        "✓".to_owned()
-                    } else if face.idle {
-                        "+".to_owned()
+                    .text_size(px(if minutes.chars().count() > 2 {
+                        10.
                     } else {
-                        minutes
-                    }),
+                        15.
+                    }))
+                    .child(minutes),
             )
             .child(if face.paused {
                 Icon::default()
@@ -695,7 +733,13 @@ impl FloatingStrip {
                     .child(
                         div()
                             .w_full()
-                            .h(relative(face.progress.unwrap_or(1.)))
+                            .h(relative(
+                                face.progress.unwrap_or(if face.invalid_duration {
+                                    0.
+                                } else {
+                                    1.
+                                }),
+                            ))
                             .bg(rgb(0xf5f5f5)),
                     )
                     .into_any_element()
@@ -810,6 +854,151 @@ fn compact_time(seconds: i64) -> (String, String) {
 mod tests {
     use super::{CAT_CLICK_DURATION, cat_click_active, compact_time};
     use std::time::{Duration, Instant};
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn invalid_draft_time_never_shows_a_stale_value_or_overrides_a_running_timer(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::headless_ui_tests::ManagerHarness;
+        use gpui::AppContext as _;
+
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.new_task(window, cx);
+            view.task_input
+                .update(cx, |input, cx| input.set_value("Prepare", window, cx));
+            view.hide_manager(window, cx);
+        });
+        let model = manager.view.clone();
+        let handle = manager.handle;
+        let cat = manager
+            .cx
+            .update(|window, cx| cx.new(|cx| super::FloatingStrip::new(model, handle, window, cx)));
+        for invalid in ["0", "", "1441"] {
+            manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                view.countdown = true;
+                view.timer_input
+                    .update(cx, |input, cx| input.set_value(invalid, window, cx));
+            });
+            manager.cx.run_until_parked();
+            cat.read_with(&manager.cx, |cat, cx| {
+                let face = cat.timer_face(cx);
+                assert!(face.invalid_duration && !face.ready);
+                assert_eq!(face.status, "检查时长");
+                assert_eq!(face.compact_display(), ("—".into(), "检查时长".into()));
+            });
+            manager.view.read_with(&manager.cx, |view, cx| {
+                assert_eq!(view.timer_input.read(cx).value(), invalid);
+                assert_eq!(view.task_input.read(cx).value(), "Prepare");
+            });
+        }
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.timer_input
+                .update(cx, |input, cx| input.set_value("37", window, cx));
+        });
+        manager.cx.run_until_parked();
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(!face.invalid_duration && face.ready);
+            assert_eq!(face.compact_display(), ("37".into(), "00".into()));
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.timer_input
+                .update(cx, |input, cx| input.set_value("0", window, cx));
+            view.countdown = false;
+        });
+        manager.cx.run_until_parked();
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(!face.invalid_duration && face.ready);
+            assert_eq!(face.compact_display(), ("00".into(), "00".into()));
+            assert_eq!(face.status, "正计时 · 随时开始");
+        });
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            view.countdown = true;
+            view.store
+                .as_mut()
+                .unwrap()
+                .create_and_start_task("Running", view.selected_tag, view.now - 60, Some(1500))
+                .unwrap();
+            view.refresh(cx);
+        });
+        manager.cx.run_until_parked();
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(!face.invalid_duration && face.running);
+            assert_eq!(face.title, "Running");
+            let model = cat.model.read(cx);
+            let session = model.strip_session().unwrap();
+            assert_eq!(face.session, Some(session.id));
+            assert_eq!(model.timer_input.read(cx).value(), "0");
+            let remaining =
+                (session.target_seconds.unwrap() - session.elapsed_at(model.now)).max(0);
+            assert_eq!(face.seconds, remaining);
+            assert_eq!(face.compact_display(), compact_time(remaining));
+        });
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn invalid_cat_hint_fits_with_a_gap_below_the_dash(cx: &mut gpui::TestAppContext) {
+        use crate::headless_ui_tests::ManagerHarness;
+        use gpui::{
+            AppContext as _, Bounds, Point, VisualTestContext, WindowBounds, WindowOptions, px,
+            size,
+        };
+        use gpui_component::Root;
+
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.new_task(window, cx);
+            view.task_input
+                .update(cx, |input, cx| input.set_value("Test", window, cx));
+            view.timer_input
+                .update(cx, |input, cx| input.set_value("0", window, cx));
+        });
+        let model = manager.view.clone();
+        let manager_window = manager.handle;
+        let strip = manager.cx.cx.update(|cx| {
+            cx.open_window(
+                WindowOptions {
+                    window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                        Point::default(),
+                        size(px(88.), px(128.)),
+                    ))),
+                    ..Default::default()
+                },
+                |window, cx| {
+                    let cat =
+                        cx.new(|cx| super::FloatingStrip::new(model, manager_window, window, cx));
+                    cx.new(|cx| Root::new(cat, window, cx))
+                },
+            )
+            .unwrap()
+        });
+        let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
+        visual.simulate_resize(size(px(88.), px(128.)));
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        let face = visual.debug_bounds("strip-face").unwrap();
+        let dash = visual.debug_bounds("strip-time").unwrap();
+        let detail = visual.debug_bounds("strip-invalid-detail").unwrap();
+        let text = visual.debug_bounds("strip-invalid-detail-text").unwrap();
+        assert!(
+            dash.bottom() + px(1.) <= detail.top(),
+            "dash {dash:?} overlaps hint {detail:?}"
+        );
+        assert!(detail.left() >= face.left() && detail.right() <= face.right());
+        assert!(detail.top() >= face.top() && detail.bottom() <= face.bottom());
+        assert!(
+            text.left() >= detail.left() - px(1.) && text.right() <= detail.right() + px(1.),
+            "hint text {text:?} exceeds {detail:?}"
+        );
+        assert!(text.size.width > px(0.) && text.size.height > px(0.));
+        visual.update(|window, _| window.remove_window());
+        visual.run_until_parked();
+    }
 
     #[test]
     fn cat_click_animation_expires_before_it_can_be_remounted() {
