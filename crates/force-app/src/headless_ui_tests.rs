@@ -3264,6 +3264,34 @@ fn headless_ui_empty_record_search_clears_and_returns_keyboard_focus(cx: &mut Te
 
 #[gpui::test]
 fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut TestAppContext) {
+    fn scroll_outer(manager: &mut ManagerHarness, amount: Pixels) {
+        // The content center can hit the independently scrolling tag list.
+        let position = point(px(780. - 8.), px(400.));
+        manager
+            .cx
+            .simulate_mouse_move(position, None, Modifiers::default());
+        manager.cx.simulate_event(ScrollWheelEvent {
+            position,
+            delta: ScrollDelta::Pixels(point(px(0.), amount)),
+            modifiers: Modifiers::default(),
+            touch_phase: TouchPhase::Moved,
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+    }
+
+    fn reveal_actions(manager: &mut ManagerHarness) {
+        let bottom = manager.bounds("save-tag").bottom();
+        if bottom > px(600.) {
+            scroll_outer(manager, px(600.) - bottom);
+        }
+        for selector in ["cancel-tag-edit", "save-tag"] {
+            let bounds = manager.bounds(selector);
+            assert!(bounds.top() >= px(68.) && bounds.bottom() <= px(620.));
+            assert!(bounds.left() >= px(0.) && bounds.right() <= px(780.));
+        }
+    }
+
     let mut manager = ManagerHarness::new(cx, 780., 620.);
     manager.click("settings-tab");
     let height = manager.bounds("tag-row-1").size.height;
@@ -3272,19 +3300,14 @@ fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut Te
     assert_eq!(manager.bounds("editing-tag-row-1").size.height, height);
     // TestPlatform drops native frame callbacks, so ScrollAnchor's deferred
     // auto-reveal cannot run here. Exercise real wheel events for geometry.
-    manager.scroll("manager-content", -320.);
-    for selector in ["cancel-tag-edit", "save-tag"] {
-        let bounds = manager.bounds(selector);
-        assert!(bounds.top() >= px(68.) && bounds.bottom() <= px(620.));
-        assert!(bounds.left() >= px(0.) && bounds.right() <= px(780.));
-    }
+    reveal_actions(&mut manager);
     manager.click("cancel-tag-edit");
     manager
         .view
         .read_with(&manager.cx, |view, _| assert!(view.editing_tag.is_none()));
-    manager.scroll("manager-content", 500.);
+    scroll_outer(&mut manager, px(1000.));
     manager.click("edit-tag-1");
-    manager.scroll("manager-content", -320.);
+    reveal_actions(&mut manager);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.tag_input
             .update(cx, |input, cx| input.set_value("Renamed", window, cx));
@@ -3518,4 +3541,89 @@ fn headless_ui_export_cancel_restores_input_focus_and_keeps_the_record_filter(
         assert!(matches!(view.page, Page::Records));
         assert_eq!(view.record_search.read(cx).value(), "Keep typing");
     });
+}
+
+#[gpui::test]
+fn headless_ui_settings_use_available_width_without_height_based_stacking(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.), (1040., 620.), (1512., 865.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Settings);
+        let column = manager.bounds("settings-column");
+        let general = manager.bounds("settings-general");
+        let labels = manager.bounds("settings-labels");
+        let about = manager.bounds("settings-about");
+        let expected_width: f32 = if width < 976. { width - 80. } else { 896. };
+        assert!((column.size.width - px(expected_width)).abs() <= px(1.));
+        assert_horizontally_inside(general, column);
+        assert_horizontally_inside(labels, column);
+        assert_horizontally_inside(about, column);
+        assert!((general.left() - column.left()).abs() <= px(1.));
+        assert!((labels.right() - column.right()).abs() <= px(1.));
+        if width >= 920. {
+            assert!((general.size.width - px(280.)).abs() <= px(1.));
+            assert!((labels.left() - general.right() - px(32.)).abs() <= px(1.));
+            assert!((labels.top() - general.top()).abs() <= px(1.));
+            assert_horizontally_inside(about, general);
+            assert!(about.top() >= manager.bounds("settings-timing").bottom() - px(1.));
+        } else {
+            assert!((general.size.width - column.size.width).abs() <= px(1.));
+            assert!((labels.size.width - column.size.width).abs() <= px(1.));
+            assert!(labels.top() >= general.bottom() - px(1.));
+            assert!(about.top() >= labels.bottom() - px(1.));
+        }
+        for selector in ["settings-tags", "settings-form", "tag-input", "save-tag"] {
+            assert_horizontally_inside(manager.bounds(selector), labels);
+        }
+        assert_horizontally_inside(manager.bounds("goal-input"), general);
+    }
+}
+
+#[gpui::test]
+fn headless_ui_settings_app_actions_and_update_results_stay_grouped(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.), (1040., 620.), (1512., 865.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Settings);
+        for state in [
+            crate::updates::UpdateState::Current,
+            crate::updates::UpdateState::Failed,
+            crate::updates::UpdateState::Available {
+                version: "100.100.100".into(),
+                download: Some("https://github.com/yuxino/Force/releases/latest".into()),
+            },
+            crate::updates::UpdateState::Available {
+                version: "100.100.100".into(),
+                download: None,
+            },
+        ] {
+            manager.view.update_in(&mut manager.cx, |view, _, cx| {
+                view.update_state = state;
+                cx.notify();
+            });
+            manager.cx.update(|window, _| window.refresh());
+            manager.cx.run_until_parked();
+            let about = manager.bounds("settings-about");
+            let version = manager.bounds("settings-version");
+            let update = manager.bounds("settings-update");
+            let status = manager.bounds("settings-update-status");
+            let data_folder = manager.bounds("settings-data-folder");
+            let quit = manager.bounds("settings-quit");
+            for bounds in [version, update, status, data_folder, quit] {
+                assert_horizontally_inside(bounds, about);
+                assert!(bounds.top() >= about.top() - px(1.));
+                assert!(bounds.bottom() <= about.bottom() + px(1.));
+                assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+            }
+            for (previous, next) in [
+                (version, update),
+                (update, status),
+                (status, data_folder),
+                (data_folder, quit),
+            ] {
+                assert!(
+                    next.top() >= previous.bottom() - px(1.),
+                    "settings actions overlap at {width}×{height}: {previous:?}, {next:?}"
+                );
+            }
+            assert!((update.left() - data_folder.left()).abs() <= px(1.));
+            assert!((update.right() - data_folder.right()).abs() <= px(1.));
+        }
+    }
 }

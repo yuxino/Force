@@ -295,7 +295,9 @@ impl ForceView {
                             Page::Agenda => self.agenda_panel(window, cx).into_any_element(),
                             Page::Focus => self.focus_panel(compact, cx).into_any_element(),
                             Page::Records => self.records_panel(window, cx).into_any_element(),
-                            Page::Settings => self.settings_panel(cx).into_any_element(),
+                            Page::Settings => self
+                                .settings_panel(window.viewport_size().width >= px(920.), cx)
+                                .into_any_element(),
                         })
                     }),
             )
