@@ -384,40 +384,34 @@ impl FloatingStrip {
 
     fn cat_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
         let (readout, detail) = face.compact_display();
-        let cat_color = if self.drawer_visible {
-            // Keep one continuous surface with the expanded silhouette.
-            INK
-        } else if self.drag_start.is_some() {
-            0x353535
-        } else if self.face_hovered {
-            0x242424
-        } else {
-            INK
-        };
-        let eyes = Icon::default()
-            .path("force-cat-side-eyes.svg")
+        // Keep the open-eye image in place. Only the cropped eye region of
+        // the aligned closed-eye image fades in, so the body never shifts.
+        // Mount the transparent patch even at rest to preload its image.
+        let blink = div()
             .absolute()
-            .left_0()
-            .top_0()
-            .w(px(76.))
-            .h(px(112.))
-            .text_color(rgb(0xf5f5f5));
-        // Only the eyes blink. The body, readout, and click target stay still.
-        let eyes = if cat_click_active(self.face_click_started, Instant::now()) {
-            eyes.with_animation(
-                ElementId::NamedInteger("cat-blink".into(), self.face_click_serial),
-                Animation::new(CAT_CLICK_DURATION),
-                |eyes, progress| {
-                    let (height, vertical, horizontal) = cat_eye_motion(progress);
-                    eyes.transform(
-                        Transformation::scale(size(1., height))
-                            .with_translation(point(px(horizontal), px(vertical))),
-                    )
-                },
-            )
-            .into_any_element()
+            .left(px(13.))
+            .top(px(24.))
+            .w(px(34.))
+            .h(px(16.))
+            .overflow_hidden()
+            .child(
+                img(crate::embedded_image_source("force-cat-blink.png"))
+                    .absolute()
+                    .left(px(-13.))
+                    .top(px(-24.))
+                    .w(px(76.))
+                    .h(px(112.)),
+            );
+        let blink = if cat_click_active(self.face_click_started, Instant::now()) {
+            blink
+                .with_animation(
+                    ElementId::NamedInteger("cat-blink".into(), self.face_click_serial),
+                    Animation::new(CAT_CLICK_DURATION),
+                    |patch, progress| patch.opacity(cat_blink_opacity(progress)),
+                )
+                .into_any_element()
         } else {
-            eyes.into_any_element()
+            blink.opacity(0.).into_any_element()
         };
         let readout_size = if face.idle || face.failed || face.completed || face.invalid_duration {
             18.
@@ -440,62 +434,21 @@ impl FloatingStrip {
             .w(px(76.))
             .h(px(116.))
             .child(
-                div()
-                    .absolute()
-                    .left(px(-0.5))
-                    .top(px(-0.5))
-                    .w(px(77.))
-                    .h(px(if self.drawer_visible { 38. } else { 113. }))
-                    .overflow_hidden()
-                    .child(
-                        Icon::default()
-                            .path("force-cat-side-clock.svg")
-                            .absolute()
-                            .left_0()
-                            .top(px(-0.5))
-                            .w(px(77.))
-                            .h(px(113.))
-                            .text_color(rgb(0xb9b9b9)),
-                    ),
-            )
-            .child(
-                Icon::default()
-                    .path("force-cat-side-clock.svg")
+                img(crate::embedded_image_source("force-cat-clock.png"))
                     .absolute()
                     .left_0()
                     .top_0()
                     .w(px(76.))
-                    .h(px(112.))
-                    .text_color(rgb(cat_color)),
+                    .h(px(112.)),
             )
-            // The original brand silhouette has transparent eye cutouts.
-            // Cover them with fur so a blink never exposes the desktop.
-            .child(
-                div()
-                    .absolute()
-                    .left(px(13.5))
-                    .top(px(22.))
-                    .w(px(6.5))
-                    .h(px(7.5))
-                    .bg(rgb(cat_color)),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(25.5))
-                    .top(px(26.5))
-                    .w(px(9.))
-                    .h(px(7.5))
-                    .bg(rgb(cat_color)),
-            )
-            .child(eyes)
+            .child(blink)
             .child(
                 div()
                     .debug_selector(|| "strip-time".into())
                     .absolute()
-                    .left(px(23.5))
-                    .top(px(58.))
-                    .w(px(48.))
+                    .left(px(9.))
+                    .top(px(46.))
+                    .w(px(44.))
                     .h(px(18.))
                     .flex()
                     .items_center()
@@ -504,7 +457,7 @@ impl FloatingStrip {
                     .text_size(px(readout_size))
                     .line_height(px(18.))
                     .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(0xf5f5f5))
+                    .text_color(rgb(INK))
                     .child(
                         div()
                             .debug_selector(|| "strip-time-text".into())
@@ -517,14 +470,14 @@ impl FloatingStrip {
                     div()
                         .debug_selector(|| "strip-paused-mark".into())
                         .absolute()
-                        .left(px(if detail.is_empty() { 44. } else { 26. }))
-                        .top(px(79.))
+                        .left(px(if detail.is_empty() { 28. } else { 9. }))
+                        .top(px(65.))
                         .w(px(6.8))
                         .h(px(6.))
                         .flex()
                         .justify_between()
-                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0xc6c6c6)))
-                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0xc6c6c6))),
+                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0x62544a)))
+                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0x62544a))),
                 )
             })
             .when(!detail.is_empty(), |artwork| {
@@ -532,16 +485,16 @@ impl FloatingStrip {
                     div()
                         .debug_selector(|| "strip-detail".into())
                         .absolute()
-                        .left(px(if face.show_paused_mark() { 35. } else { 26. }))
-                        .top(px(78.))
-                        .w(px(if face.show_paused_mark() { 36. } else { 42. }))
+                        .left(px(if face.show_paused_mark() { 18. } else { 11. }))
+                        .top(px(65.))
+                        .w(px(if face.show_paused_mark() { 35. } else { 40. }))
                         .h(px(11.))
                         .flex()
                         .items_center()
                         .justify_center()
                         .text_size(px(8.))
                         .line_height(px(10.))
-                        .text_color(rgb(0xcccccc))
+                        .text_color(rgb(0x62544a))
                         .child(
                             div()
                                 .debug_selector(|| "strip-detail-text".into())
@@ -559,10 +512,6 @@ impl FloatingStrip {
             .w(px(76.))
             .h(px(116.))
             .cursor_pointer()
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| {
-                this.face_hovered = *hovered;
-                cx.notify();
-            }))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_face_press))
             .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
             .child(artwork)
@@ -965,15 +914,10 @@ fn cat_click_active(started: Option<Instant>, now: Instant) -> bool {
     started.is_some_and(|started| now.saturating_duration_since(started) < CAT_CLICK_DURATION)
 }
 
-// Blink, then glance briefly to the side without moving the body or hitbox.
-// The icon is centered at y=56; the eyes' shared center is approximately y=27.
-fn cat_eye_motion(progress: f32) -> (f32, f32, f32) {
-    let t = progress.clamp(0., 1.);
-    let blink = (t / 0.48).min(1.);
-    let height = 1. - 0.88 * (std::f32::consts::PI * blink).sin().powi(2);
-    let glance = ((t - 0.4) / 0.6).clamp(0., 1.);
-    let horizontal = 1.5 * (std::f32::consts::PI * glance).sin();
-    (height, -29. * (1. - height), horizontal)
+// Fade only the eye patch in and out during the first half of the click.
+fn cat_blink_opacity(progress: f32) -> f32 {
+    let blink = (progress.clamp(0., 1.) / 0.48).min(1.);
+    (std::f32::consts::PI * blink).sin().powi(2)
 }
 
 fn compact_clock(seconds: i64) -> String {
@@ -1013,7 +957,7 @@ mod tests {
     #[cfg(feature = "ui-test-support")]
     use super::compact_clock;
     use super::{
-        CAT_CLICK_DURATION, DISCLOSURE_DURATION, TimerFace, cat_click_active, cat_eye_motion,
+        CAT_CLICK_DURATION, DISCLOSURE_DURATION, TimerFace, cat_blink_opacity, cat_click_active,
         compact_time, disclosure_reveal,
     };
     use std::time::{Duration, Instant};
@@ -1104,10 +1048,10 @@ mod tests {
         let face = visual.debug_bounds("strip-face").unwrap();
         let mark = visual.debug_bounds("strip-time-text").unwrap();
         assert!(visual.debug_bounds("strip-detail").is_none());
-        assert!(mark.left() >= face.left() + px(25.));
-        assert!(mark.right() <= face.left() + px(69.));
-        assert!(mark.top() >= face.top() + px(56.));
-        assert!(mark.bottom() <= face.top() + px(96.));
+        assert!(mark.left() >= face.left() + px(9.));
+        assert!(mark.right() <= face.left() + px(53.));
+        assert!(mark.top() >= face.top() + px(46.));
+        assert!(mark.bottom() <= face.top() + px(64.));
 
         // Render prepared, long-running, paused, completed and failed
         // states with real text boxes rather than only the outer layout.
@@ -1154,10 +1098,10 @@ mod tests {
             let face = visual.debug_bounds("strip-face").unwrap();
             let time = visual.debug_bounds("strip-time").unwrap();
             let time_text = visual.debug_bounds("strip-time-text").unwrap();
-            assert!(time.left() >= face.left() + px(23.));
-            assert!(time.right() <= face.left() + px(72.));
-            assert!(time_text.left() >= face.left() + px(23.));
-            assert!(time_text.right() <= face.left() + px(70.));
+            assert!(time.left() >= face.left() + px(9.));
+            assert!(time.right() <= face.left() + px(53.));
+            assert!(time_text.left() >= face.left() + px(9.));
+            assert!(time_text.right() <= face.left() + px(53.));
             {
                 let (text, container) = (time_text, time);
                 assert!(
@@ -1181,12 +1125,12 @@ mod tests {
             if (1..=3).contains(&state) {
                 let detail = visual.debug_bounds("strip-detail-text").unwrap();
                 assert!(time_text.bottom() <= detail.top());
-                assert!(detail.left() >= face.left() + px(23.));
-                assert!(detail.right() <= face.left() + px(70.));
+                assert!(detail.left() >= face.left() + px(9.));
+                assert!(detail.right() <= face.left() + px(53.));
                 if state >= 2 {
                     let pause = visual.debug_bounds("strip-paused-mark").unwrap();
                     assert!(time_text.bottom() <= pause.top() + px(1.));
-                    assert!(pause.bottom() <= face.top() + px(90.));
+                    assert!(pause.bottom() <= face.top() + px(71.));
                     assert!(pause.right() < detail.left());
                 }
             } else if state >= 4 {
@@ -1465,21 +1409,14 @@ mod tests {
     }
 
     #[test]
-    fn cat_eyes_blink_glance_and_return_without_moving_the_body() {
-        for progress in [0., 0.24, 0.48, 0.7, 1.] {
-            let (height, offset, horizontal) = cat_eye_motion(progress);
-            assert!((0.11..=1.).contains(&height));
-            // The SVG transform is centered at y=56; this translation keeps
-            // the visual eye center at y=27 while the eyes close.
-            let eye_center = 56. + (27. - 56.) * height + offset;
-            assert!((eye_center - 27.).abs() < 0.001);
-            assert!((-0.001..=1.501).contains(&horizontal));
+    fn cat_blink_fades_in_and_out_then_stays_open() {
+        for progress in [0., 0.12, 0.24, 0.36, 0.48, 0.7, 1.] {
+            assert!((0. ..=1.).contains(&cat_blink_opacity(progress)));
         }
-        assert!((cat_eye_motion(0.).0 - 1.).abs() < 0.001);
-        assert!(cat_eye_motion(0.24).0 < 0.15);
-        assert!(cat_eye_motion(0.7).2 > 1.4);
-        assert!((cat_eye_motion(1.).0 - 1.).abs() < 0.001);
-        assert!(cat_eye_motion(1.).2.abs() < 0.001);
+        assert!(cat_blink_opacity(0.) < 0.001);
+        assert!(cat_blink_opacity(0.24) > 0.999);
+        assert!(cat_blink_opacity(0.48) < 0.001);
+        assert!(cat_blink_opacity(1.) < 0.001);
     }
 
     #[test]

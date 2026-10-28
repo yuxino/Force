@@ -548,10 +548,8 @@ impl ForceView {
                                     .items_center()
                                     .gap(px(10.))
                                     .child(
-                                        Icon::default()
-                                            .path("force-logo.svg")
-                                            .size(px(20.))
-                                            .text_color(rgb(INK)),
+                                        img(crate::embedded_image_source("force-logo.png"))
+                                            .size(px(20.)),
                                     )
                                     .child(
                                         div()
