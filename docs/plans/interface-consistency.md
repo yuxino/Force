@@ -102,14 +102,17 @@ and control labels 14 points, and secondary metadata 13 points. Compact task/sum
 below one minute and omit zero minutes after whole hours. Keep necessary labels and errors visible;
 optional explanations use contextual help. Routine removal icons stay neutral.
 
-Settings use a readable column of at most 560 points, aligned to the main
-content left edge. Stack section titles above their rows, with 20 points between
-groups. Keep labels and their controls on the same row. Timing preferences contain clock
+Settings use the full content grid. At window widths of at least 920 points,
+place timing and application settings in a 280-point left column, with a
+32-point gap before the flexible tag column. Short windows retain this
+composition; only width selects the breakpoint. Narrower windows stack timing,
+tags and application sections at full content width. Section titles stay above
+their rows, with 24–32 points between groups. Keep labels and their controls on the same row. Timing preferences contain clock
 pinning, completion sound and daily goal. Pinning and sound each use a
 keyboard-accessible buttons with directly clickable switches. Knob and outer
 button actions must each toggle once. Timing rows use 48 points. Tags use 40-point
-rows and a list capped at 240 points. The tag input and 添加 / 保存
-stay on one row at the minimum width. New labels are focus tags; existing rest
+rows and a list capped at 240 points. The tag name, classification and color controls form one editor, with 添加 / 保存
+and 取消 together directly below the fields. New labels are focus tags; existing rest
 labels remain editable. Highlight the row currently being renamed with the
 existing neutral surface. Re-selecting it preserves its draft; switching edit
 targets protects changed text with Save, Discard or Cancel. Adding a label must
@@ -117,7 +120,12 @@ not change a saved task's label selection, including an archived label. Compare
 tag edits with their original input so external renames do not become apparent
 user changes or get overwritten by an untouched field. Daily-goal 保存 / 撤销
 appear below the goal row only while changed, so typing never moves the input.
-The footer places version/update on one row and folder/quit maintenance actions below.
+The application section separates identity/version from the update action and
+its inline result. Folder access follows on its own aligned action row; quit
+is separated by a fine rule. Saved tag names and classification labels use the
+tag color with sufficient text contrast; swatches retain the exact color.
+Choosing a draft color immediately previews it on the selected classification.
+The list changes only after Save, and Cancel retains the saved color.
 Local data exposes the folder; export is owned by records.
 
 Single-line inputs and settings controls are 40 points high; main start and
