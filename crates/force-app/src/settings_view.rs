@@ -223,116 +223,145 @@ impl ForceView {
                 .flex_col()
                 .gap(px(16.))
                 .child(
+                    // The scrollbar must stay outside the translated scroll content.
                     div()
-                        .id("settings-tags")
-                        .debug_selector(|| "settings-tags".into())
-                        .max_h(px(240.))
-                        .overflow_y_scroll()
-                        .track_scroll(&self.tag_scroll)
+                        .debug_selector(|| "settings-tag-viewport".into())
                         .relative()
-                        .when(self.tags.is_empty(), |list| {
-                            list.child(
-                                div()
-                                    .h(px(40.))
-                                    .flex()
-                                    .items_center()
-                                    .text_size(px(14.))
-                                    .text_color(rgb(MUTED))
-                                    .child("暂无标签"),
-                            )
-                        })
-                        .children(self.tags.iter().map(|tag| {
-                            let id = tag.id;
-                            let help_name = tag.name.clone();
-                            let editing = self.editing_tag == Some(id);
-                            let color = tag.color.as_deref().and_then(tag_text_color);
+                        .child(
                             div()
-                                .debug_selector(move || {
-                                    if editing {
-                                        format!("editing-tag-row-{id}")
-                                    } else {
-                                        format!("tag-row-{id}")
-                                    }
-                                })
-                                .h(px(40.))
-                                .flex_shrink_0()
-                                .when(editing, |row| row.bg(rgb(SURFACE)))
-                                .flex()
-                                .items_center()
-                                .gap(px(12.))
-                                .border_b_1()
-                                .border_color(rgb(LINE))
-                                .when_some(
-                                    tag.color.as_deref().and_then(tag_color_rgb),
-                                    |row, color| {
-                                        row.child(
-                                            div()
-                                                .size(px(8.))
-                                                .flex_shrink_0()
-                                                .rounded_full()
-                                                .bg(rgb(color)),
-                                        )
+                                .id("settings-tags")
+                                .debug_selector(|| "settings-tags".into())
+                                .max_h(px(240.))
+                                .overflow_hidden()
+                                .pr(px(20.))
+                                .track_scroll(&self.tag_scroll)
+                                // GPUI scroll containers otherwise also scroll their parents.
+                                .on_scroll_wheel(cx.listener(
+                                    |this, event: &ScrollWheelEvent, window, cx| {
+                                        let old = this.tag_scroll.offset();
+                                        let delta = event.delta.pixel_delta(window.line_height()).y;
+                                        let next = (old.y + delta)
+                                            .clamp(-this.tag_scroll.max_offset().height, px(0.));
+                                        if next != old.y {
+                                            this.tag_scroll.set_offset(point(old.x, next));
+                                            cx.notify();
+                                            cx.stop_propagation();
+                                        }
                                     },
-                                )
-                                .child(
-                                    single_line(tag.name.clone(), 14.)
-                                        .id(("tag-name", id as u64))
-                                        .text_color(rgb(color.unwrap_or(INK)))
-                                        .flex_1()
-                                        .min_w_0()
-                                        .tooltip(move |window, cx| {
-                                            Tooltip::new(help_name.clone()).build(window, cx)
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_size(px(13.))
-                                        .text_color(rgb(color.unwrap_or(MUTED)))
-                                        .flex_shrink_0()
-                                        .child(tag_class_label(tag.class)),
-                                )
-                                .when(tag.kind == TagKind::Rest && tag.name != "休息", |row| {
-                                    row.child(
+                                ))
+                                .when(self.tags.is_empty(), |list| {
+                                    list.child(
                                         div()
-                                            .w(px(32.))
-                                            .flex_shrink_0()
+                                            .h(px(40.))
+                                            .flex()
+                                            .items_center()
                                             .text_size(px(14.))
                                             .text_color(rgb(MUTED))
-                                            .child("休息"),
+                                            .child("暂无标签"),
                                     )
                                 })
-                                .child(
-                                    button(("edit-tag", id as u64))
-                                        .debug_selector(move || format!("edit-tag-{id}"))
-                                        .custom(crate::view::quiet_variant(cx))
-                                        .size(px(32.))
-                                        .icon(control_icon(
-                                            Icon::default()
-                                                .path("force-icons/pencil.svg")
-                                                .size(px(15.)),
-                                            if editing { INK } else { MUTED },
-                                        ))
-                                        .tooltip("编辑标签")
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.begin_edit_tag(id, window, cx)
-                                        })),
-                                )
-                                .child(
-                                    button(("remove-tag", id as u64))
-                                        .custom(crate::view::quiet_variant(cx))
-                                        .size(px(32.))
-                                        .icon(control_icon(
-                                            Icon::default()
-                                                .path("force-icons/trash.svg")
-                                                .size(px(15.)),
-                                            MUTED,
-                                        ))
-                                        .tooltip("移除标签")
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.delete_tag(id, window, cx)
-                                        })),
-                                )
-                        }))
+                                .children(self.tags.iter().map(|tag| {
+                                    let id = tag.id;
+                                    let help_name = tag.name.clone();
+                                    let editing = self.editing_tag == Some(id);
+                                    let color = tag.color.as_deref().and_then(tag_text_color);
+                                    div()
+                                        .debug_selector(move || {
+                                            if editing {
+                                                format!("editing-tag-row-{id}")
+                                            } else {
+                                                format!("tag-row-{id}")
+                                            }
+                                        })
+                                        .h(px(40.))
+                                        .flex_shrink_0()
+                                        .when(editing, |row| row.bg(rgb(SURFACE)))
+                                        .flex()
+                                        .items_center()
+                                        .gap(px(12.))
+                                        .border_b_1()
+                                        .border_color(rgb(LINE))
+                                        .when_some(
+                                            tag.color.as_deref().and_then(tag_color_rgb),
+                                            |row, color| {
+                                                row.child(
+                                                    div()
+                                                        .size(px(8.))
+                                                        .flex_shrink_0()
+                                                        .rounded_full()
+                                                        .bg(rgb(color)),
+                                                )
+                                            },
+                                        )
+                                        .child(
+                                            single_line(tag.name.clone(), 14.)
+                                                .id(("tag-name", id as u64))
+                                                .text_color(rgb(color.unwrap_or(INK)))
+                                                .flex_1()
+                                                .min_w_0()
+                                                .tooltip(move |window, cx| {
+                                                    Tooltip::new(help_name.clone())
+                                                        .build(window, cx)
+                                                }),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_size(px(13.))
+                                                .text_color(rgb(color.unwrap_or(MUTED)))
+                                                .flex_shrink_0()
+                                                .child(tag_class_label(tag.class)),
+                                        )
+                                        .when(
+                                            tag.kind == TagKind::Rest && tag.name != "休息",
+                                            |row| {
+                                                row.child(
+                                                    div()
+                                                        .w(px(32.))
+                                                        .flex_shrink_0()
+                                                        .text_size(px(14.))
+                                                        .text_color(rgb(MUTED))
+                                                        .child("休息"),
+                                                )
+                                            },
+                                        )
+                                        .child(
+                                            button(("edit-tag", id as u64))
+                                                .debug_selector(move || format!("edit-tag-{id}"))
+                                                .custom(crate::view::quiet_variant(cx))
+                                                .size(px(32.))
+                                                .icon(control_icon(
+                                                    Icon::default()
+                                                        .path("force-icons/pencil.svg")
+                                                        .size(px(15.)),
+                                                    if editing { INK } else { MUTED },
+                                                ))
+                                                .tooltip("编辑标签")
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.begin_edit_tag(id, window, cx)
+                                                    },
+                                                )),
+                                        )
+                                        .child(
+                                            button(("remove-tag", id as u64))
+                                                .debug_selector(move || format!("remove-tag-{id}"))
+                                                .custom(crate::view::quiet_variant(cx))
+                                                .size(px(32.))
+                                                .icon(control_icon(
+                                                    Icon::default()
+                                                        .path("force-icons/trash.svg")
+                                                        .size(px(15.)),
+                                                    MUTED,
+                                                ))
+                                                .tooltip("移除标签")
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.delete_tag(id, window, cx)
+                                                    },
+                                                )),
+                                        )
+                                })),
+                        )
                         .vertical_scrollbar(&self.tag_scroll),
                 )
                 .child(
