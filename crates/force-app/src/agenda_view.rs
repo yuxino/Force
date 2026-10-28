@@ -395,28 +395,21 @@ impl ForceView {
                     })
                     .when(!self.agenda.editor_visible, |header| {
                         header.child(
-                            button("agenda-overview-add")
-                                .debug_selector(|| "agenda-overview-add".into())
-                                .custom(crate::view::quiet_variant(cx))
-                                .h(px(36.))
-                                .px(px(12.))
-                                .unavailable(self.storage_failed)
-                                .icon(control_icon(
-                                    IconName::Plus,
-                                    if self.storage_failed { MUTED } else { INK },
-                                ))
-                                .child(control_label(
-                                    "添加安排",
-                                    if self.storage_failed { MUTED } else { INK },
-                                ))
-                                .on_click(cx.listener(|this, _, window, cx| {
+                            crate::control_style::plan_button(
+                                "agenda-overview-add",
+                                self.storage_failed,
+                            )
+                            .debug_selector(|| "agenda-overview-add".into())
+                            .on_click(cx.listener(
+                                |this, _, window, cx| {
                                     if this.agenda.date.month() != this.agenda.month.month()
                                         || this.agenda.date.year() != this.agenda.month.year()
                                     {
                                         this.select_agenda_date(this.agenda.month, window, cx);
                                     }
                                     this.begin_plan(None, window, cx);
-                                })),
+                                },
+                            )),
                         )
                     }),
             )
@@ -916,20 +909,8 @@ impl ForceView {
                     )
                     .child(div().flex_1())
                     .child(
-                        button("agenda-add")
+                        crate::control_style::plan_button("agenda-add", self.storage_failed)
                             .debug_selector(|| "agenda-add".into())
-                            .custom(crate::view::quiet_variant(cx))
-                            .h(px(36.))
-                            .px(px(12.))
-                            .unavailable(self.storage_failed)
-                            .icon(control_icon(
-                                IconName::Plus,
-                                if self.storage_failed { MUTED } else { INK },
-                            ))
-                            .child(control_label(
-                                "添加安排",
-                                if self.storage_failed { MUTED } else { INK },
-                            ))
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.begin_plan(None, window, cx)

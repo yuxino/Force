@@ -27,6 +27,7 @@ pub(crate) const HOVER: u32 = 0xf2f2f2;
 pub(crate) const PRESSED: u32 = 0xe7e7e7;
 pub(crate) const DESTRUCTIVE: u32 = 0x963f3f;
 
+pub(crate) const TASK_TAG_WIDTH: f32 = 168.;
 pub(crate) const TASK_SIDEBAR_WIDTH: f32 = 240.;
 pub(crate) const TASK_TEXT_WIDTH: f32 = TASK_SIDEBAR_WIDTH - 26.;
 
@@ -146,15 +147,14 @@ impl ForceView {
                     )
                     .child(div().flex_1())
                     .child(
-                        button("global-new-task")
-                            .custom(crate::view::quiet_variant(cx))
+                        primary_button("global-new-task")
                             .debug_selector(|| "global-new-task".into())
-                            .h(px(32.))
+                            .h(px(36.))
                             .px(px(12.))
                             .mr(px(12.))
                             .flex_shrink_0()
-                            .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), INK))
-                            .child(control_label("新任务", INK))
+                            .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), PAPER))
+                            .child(control_label("新任务", PAPER))
                             .tooltip(shortcut("新任务", "N", "N"))
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.new_task(window, cx);
@@ -309,11 +309,9 @@ impl Render for ForceView {
         self.sync_tag_picker(window, cx);
         self.sync_agenda_tag_picker(window, cx);
         let viewport = window.viewport_size();
-        // Match the two equal task-metadata columns, including the operation's
-        // scrollbar inset. The picker text is shaped to its real trigger width.
-        let task_width = f32::from(viewport.width).min(976.) - 80. - TASK_SIDEBAR_WIDTH - 32. - 4.;
+        // Shape tag labels to the same fixed width as the visible trigger.
         self.tag_picker.update(cx, |picker, cx| {
-            picker.set_trigger_width((task_width - 16.) / 2., cx);
+            picker.set_trigger_width(TASK_TAG_WIDTH, cx);
         });
         let compact = viewport.width < px(920.) || viewport.height < px(700.);
         div()
@@ -416,10 +414,10 @@ pub(crate) fn selection_button(id: impl Into<ElementId>, selected: bool, cx: &Ap
     button(id)
         .custom(
             ButtonCustomVariant::new(cx)
-                .color(rgb(PAPER).into())
+                .color(rgb(if selected { PAPER } else { SURFACE }).into())
                 .foreground(rgb(if selected { INK } else { MUTED }).into())
                 .border(if selected {
-                    rgb(INK).into()
+                    rgb(CONTROL_LINE).into()
                 } else {
                     rgba(0x00000000).into()
                 })

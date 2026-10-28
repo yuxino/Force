@@ -1,7 +1,10 @@
-use gpui::{ElementId, ParentElement as _, SharedString, Styled as _, rgb};
-use gpui_component::{Icon, button::Button};
+use gpui::{ElementId, ParentElement as _, SharedString, Styled as _, px, rgb};
+use gpui_component::{Icon, IconName, button::Button};
 
-use crate::view::{ControlState as _, control_icon, control_label, primary_button};
+use crate::view::{
+    ControlState as _, INK, MUTED, PAPER, control_icon, control_label, outlined_button,
+    primary_button,
+};
 
 pub(crate) const START_FOREGROUND: u32 = 0xffffff;
 pub(crate) const DISABLED_START_FOREGROUND: u32 = 0x626262;
@@ -31,6 +34,18 @@ pub(crate) fn start_button(
     } else {
         button
     }
+}
+
+/// A distinct secondary action for scheduling, shared by all calendar views.
+pub(crate) fn plan_button(id: impl Into<ElementId>, disabled: bool) -> Button {
+    let foreground = if disabled { MUTED } else { INK };
+    outlined_button(id)
+        .bg(rgb(PAPER))
+        .h(px(36.))
+        .px(px(12.))
+        .unavailable(disabled)
+        .icon(control_icon(IconName::Calendar, foreground))
+        .child(control_label("安排日程", foreground))
 }
 
 #[cfg(test)]
