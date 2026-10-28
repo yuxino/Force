@@ -547,16 +547,14 @@ impl ForceView {
                     self.completed = Some(record.clone());
                 }
                 let (start, end) = day_bounds(self.record_date);
-                if self.record_editor.original.is_none()
-                    || record.elapsed_between(start, end, now) == 0
-                {
-                    if let Some(date) = Local
+                if (self.record_editor.original.is_none()
+                    || record.elapsed_between(start, end, now) == 0)
+                    && let Some(date) = Local
                         .timestamp_opt(record.started_at, 0)
                         .single()
                         .map(|time| time.date_naive())
-                    {
-                        self.record_date = date;
-                    }
+                {
+                    self.record_date = date;
                 }
                 self.refresh(cx);
                 self.cancel_record_editor(window, cx);

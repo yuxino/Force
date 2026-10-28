@@ -631,6 +631,9 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
     manager
         .cx
         .simulate_input("A long running task title that needs two lines in the operation pane");
+    // Count-up is now the default and fits this viewport. Explicitly use a
+    // countdown so its remaining-time detail and progress create real overflow.
+    manager.click("duration-custom");
     manager.click("start-focus");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         // Browsing a paused task while another timer runs adds the genuine
@@ -651,6 +654,15 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
     let tasks = manager.bounds("focus-tasks");
     let header = manager.bounds("manager-header");
     let running_before = manager.bounds("focus-running");
+    assert!(
+        manager
+            .view
+            .read_with(&manager.cx, |view, _| view.panel_scroll[0]
+                .max_offset()
+                .height)
+            > px(0.),
+        "the countdown fixture must exceed the operation viewport before scrolling"
+    );
     manager.scroll("focus-operation", -240.);
     assert!(
         manager
@@ -659,7 +671,16 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
             < px(0.),
         "the operation fixture must actually scroll"
     );
-    assert!(manager.bounds("focus-running").top() < running_before.top());
+    assert!(
+        manager.bounds("focus-running").top() < running_before.top(),
+        "running before={running_before:?}, after={:?}, operation={:?}, scroll={:?}",
+        manager.bounds("focus-running"),
+        manager.bounds("focus-operation"),
+        manager.view.read_with(&manager.cx, |view, _| (
+            view.panel_scroll[0].offset(),
+            view.panel_scroll[0].max_offset()
+        ))
+    );
     assert_same_bounds(manager.bounds("focus-summary"), summary);
     assert_same_bounds(manager.bounds("focus-tasks"), tasks);
     assert!(manager.bounds("focus-summary").top() >= header.bottom() - px(1.));
