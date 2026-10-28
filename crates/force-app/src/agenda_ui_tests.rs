@@ -34,7 +34,7 @@ fn day_manager(cx: &mut TestAppContext, width: f32, height: f32, page: Page) -> 
 fn agenda_ui_month_overview_shows_task_titles_and_overflow_inside_each_day(
     cx: &mut TestAppContext,
 ) {
-    use crate::agenda_model::AgendaMonthItem;
+    use crate::agenda_model::{AgendaItemStatus, AgendaMonthItem};
     for (width, height) in [(1040., 780.), (780., 620.)] {
         let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
         manager.view.update_in(&mut manager.cx, |view, _, cx| {
@@ -46,6 +46,13 @@ fn agenda_ui_month_overview_shows_task_titles_and_overflow_inside_each_day(
                 (0..5)
                     .map(|index| AgendaMonthItem {
                         title: format!("复习操作系统与整理当天的学习记录 {index}"),
+                        tag_id: None,
+                        tag_color: Some("#B56F67".into()),
+                        status: if index == 0 {
+                            AgendaItemStatus::Completed
+                        } else {
+                            AgendaItemStatus::Recorded
+                        },
                         seconds: 1800,
                         planned: false,
                         completed: index == 0,
@@ -64,7 +71,17 @@ fn agenda_ui_month_overview_shows_task_titles_and_overflow_inside_each_day(
         assert_inside(grid, viewport);
         assert_inside(day, grid);
         assert_inside(title, day);
-        assert!(title.size.width >= px(80.));
+        assert!(title.size.width >= px(40.));
+        let status = manager.bounds("agenda-month-status-2026-08-15-0");
+        let indicator = manager.bounds("agenda-month-color-2026-08-15-0");
+        let row = manager.bounds("agenda-month-item-2026-08-15-0");
+        assert_inside(title, row);
+        assert_inside(status, row);
+        assert_inside(indicator, row);
+        assert!(indicator.right() <= title.left());
+        assert!(title.right() <= status.left());
+        assert_eq!(row.size.height, px(20.));
+        assert!(status.size.width >= px(24.));
         assert_inside(manager.bounds("agenda-month-more-2026-08-15"), day);
         let date_header = manager.bounds("agenda-month-date-header-2026-08-15");
         assert!(date_header.top() - day.top() <= px(10.));

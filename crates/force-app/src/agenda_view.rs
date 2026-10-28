@@ -4,11 +4,14 @@ use gpui::{prelude::*, *};
 use gpui_component::{
     Icon, IconName,
     button::{ButtonCustomVariant, ButtonVariants},
+    tooltip::Tooltip,
 };
 
 use crate::{
+    agenda_model::{AgendaItemStatus, agenda_tag_color},
     label::single_line,
     model::{ForceView, Page, day_bounds},
+    settings_view::{tag_color_rgb, tag_text_color},
     view::{
         CHROME, ControlState, DESTRUCTIVE, HOVER, INK, LINE, MUTED, PAPER, PRESSED, SURFACE,
         action_icon, button, choice_button, clock, control_icon, control_label, field_label,
@@ -51,8 +54,8 @@ struct CalendarBlock {
     help: String,
     start: f32,
     end: f32,
-    done: bool,
-    moved: bool,
+    status: AgendaItemStatus,
+    color: Option<String>,
     actual: bool,
     selected: bool,
     lane: usize,
@@ -126,7 +129,7 @@ impl ForceView {
         let width = f32::from(window.bounds().size.width).min(976.) - 80.;
         let cell_width = width / 7.;
         let cell_height = (f32::from(window.bounds().size.height) - 200.) / week_count as f32;
-        let available_rows = ((cell_height - 28.) / 20.5).floor().max(1.) as usize;
+        let available_rows = ((cell_height - 28.) / 21.).floor().max(1.) as usize;
         let today = Local::now().date_naive();
         let mut weeks = Vec::new();
         for week in 0..week_count {
@@ -214,48 +217,79 @@ impl ForceView {
                     );
                 for (index, item) in items.iter().enumerate() {
                     if index < item_limit {
+                        let color =
+                            agenda_tag_color(&self.tags, item.tag_id, item.tag_color.as_deref());
+                        let title_color = color.and_then(tag_text_color).unwrap_or(foreground);
+                        let indicator_color = color.and_then(tag_color_rgb).unwrap_or(LINE);
+                        let text_width = (cell_width - 18. - 3. - 8. - 24.).max(0.);
+                        let help = format!(
+                            "{}\n{}{}",
+                            item.title,
+                            item.status.description(item.planned),
+                            if item.rest { " · 休息" } else { "" }
+                        );
                         content = content.child(
                             div()
+                                .id(SharedString::from(format!(
+                                    "agenda-month-item-{date}-{index}"
+                                )))
                                 .debug_selector(move || format!("agenda-month-item-{date}-{index}"))
                                 .w_full()
+                                .h(px(20.))
                                 .flex_shrink_0()
                                 .flex()
-                                .flex_col()
-                                .text_color(rgb(if item.planned || item.moved {
-                                    MUTED
-                                } else {
-                                    foreground
-                                }))
-                                .child(
-                                    single_line(
-                                        format!(
-                                            "{}{}",
-                                            if item.moved {
-                                                "↗ "
-                                            } else if item.planned {
-                                                if item.completed { "✓ " } else { "待 · " }
-                                            } else if item.rest && item.title != "休息" {
-                                                "休息 · "
-                                            } else if item.completed {
-                                                "✓ "
-                                            } else {
-                                                ""
-                                            },
-                                            item.title
-                                        ),
-                                        13.,
-                                    )
-                                    .debug_selector(move || {
-                                        format!("agenda-month-title-{date}-{index}")
+                                .items_center()
+                                .gap(px(4.))
+                                .when(!self.agenda.popup_open, |row| {
+                                    row.tooltip(move |window, cx| {
+                                        Tooltip::new(help.clone()).build(window, cx)
                                     })
-                                    .w(px((cell_width - 18.).max(0.)))
-                                    .font_weight(
-                                        if item.planned || item.moved {
+                                })
+                                .child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("agenda-month-color-{date}-{index}")
+                                        })
+                                        .w(px(3.))
+                                        .h(px(12.))
+                                        .flex_shrink_0()
+                                        .rounded(px(1.))
+                                        .bg(rgb(indicator_color)),
+                                )
+                                .child(
+                                    single_line(item.title.clone(), 13.)
+                                        .debug_selector(move || {
+                                            format!("agenda-month-title-{date}-{index}")
+                                        })
+                                        .w(px(text_width))
+                                        .flex_shrink_0()
+                                        .text_color(rgb(title_color))
+                                        .font_weight(if item.planned || item.moved {
                                             FontWeight::NORMAL
                                         } else {
                                             FontWeight::MEDIUM
-                                        },
-                                    ),
+                                        }),
+                                )
+                                .child(
+                                    single_line(item.status.label(), 11.)
+                                        .debug_selector(move || {
+                                            format!("agenda-month-status-{date}-{index}")
+                                        })
+                                        .w(px(24.))
+                                        .flex_shrink_0()
+                                        .text_right()
+                                        .text_color(rgb(
+                                            if item.status == AgendaItemStatus::Running {
+                                                INK
+                                            } else {
+                                                MUTED
+                                            },
+                                        ))
+                                        .font_weight(if item.status == AgendaItemStatus::Running {
+                                            FontWeight::MEDIUM
+                                        } else {
+                                            FontWeight::NORMAL
+                                        }),
                                 ),
                         );
                     }
@@ -1127,30 +1161,14 @@ impl ForceView {
         let top = block.start / 60. * HOUR_HEIGHT;
         let height = ((block.end - block.start) / 60. * HOUR_HEIGHT).max(MIN_EVENT_HEIGHT);
         let target = block.target;
-        let foreground = INK;
+        let foreground = block
+            .color
+            .as_deref()
+            .and_then(tag_text_color)
+            .unwrap_or(INK);
+        let indicator = block.color.as_deref().and_then(tag_color_rgb);
         let secondary = MUTED;
-        let active = self.active.iter().find(|session| match target {
-            CalendarTarget::Plan(id) => self
-                .agenda
-                .plans
-                .iter()
-                .any(|plan| plan.id == id && Some(plan.task_id) == session.task_id),
-            CalendarTarget::Record(id) => session.id == id,
-            CalendarTarget::Completion(_) => false,
-        });
-        let status = if block.moved {
-            "已顺延"
-        } else if active.is_some_and(|session| session.is_running()) {
-            "计时中"
-        } else if active.is_some_and(|session| session.is_paused()) {
-            "已暂停"
-        } else if block.done {
-            "已完成"
-        } else if block.actual {
-            "已记录"
-        } else {
-            "计划"
-        };
+        let status = block.status.description(!block.actual);
         div()
             // Event blocks overlap the empty-hour hitboxes. Prevent selecting
             // an event from also opening a new arrangement behind it.
@@ -1163,7 +1181,22 @@ impl ForceView {
             .px(px(3.))
             .child(
                 button(("agenda-event", index))
-                    .custom(crate::view::quiet_variant(cx))
+                    .custom(
+                        crate::view::quiet_variant(cx)
+                            .border(rgb(if block.selected { INK } else { LINE }).into())
+                            .color(
+                                rgb(if block.selected {
+                                    CHROME
+                                } else if block.actual
+                                    || block.status == AgendaItemStatus::Completed
+                                {
+                                    SURFACE
+                                } else {
+                                    PAPER
+                                })
+                                .into(),
+                            ),
+                    )
                     .debug_selector(move || match target {
                         CalendarTarget::Plan(id) => format!("agenda-plan-{id}"),
                         CalendarTarget::Record(id) => format!("agenda-record-{id}"),
@@ -1176,18 +1209,8 @@ impl ForceView {
                     .rounded(px(4.))
                     .border_1()
                     .border_color(rgb(if block.selected { INK } else { LINE }))
-                    .border_l(px(if block.selected || block.actual {
-                        3.
-                    } else {
-                        1.
-                    }))
-                    .bg(rgb(if block.actual || block.done {
-                        SURFACE
-                    } else {
-                        0xffffff
-                    }))
                     .justify_start()
-                    .tooltip(block.help.clone())
+                    .tooltip(format!("{}\n{status}", block.help))
                     .child(
                         div()
                             .w(px(text_width))
@@ -1195,14 +1218,56 @@ impl ForceView {
                             .flex_col()
                             .gap(px(2.))
                             .child(
-                                single_line(block.title.clone(), 13.)
+                                div()
                                     .w(px(text_width))
-                                    .text_color(rgb(foreground))
-                                    .font_weight(FontWeight::MEDIUM),
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(4.))
+                                    .child(
+                                        div()
+                                            .w(px(3.))
+                                            .h(px(12.))
+                                            .flex_shrink_0()
+                                            .rounded(px(1.))
+                                            .bg(rgb(indicator.unwrap_or(LINE))),
+                                    )
+                                    .child(
+                                        single_line(block.title.clone(), 13.)
+                                            .debug_selector(move || {
+                                                format!("agenda-event-title-{index}")
+                                            })
+                                            .w(px(text_width - 35.))
+                                            .flex_shrink_0()
+                                            .text_color(rgb(foreground))
+                                            .font_weight(FontWeight::MEDIUM),
+                                    )
+                                    .child(
+                                        single_line(block.status.label(), 11.)
+                                            .debug_selector(move || {
+                                                format!("agenda-event-status-{index}")
+                                            })
+                                            .w(px(24.))
+                                            .flex_shrink_0()
+                                            .text_right()
+                                            .text_color(rgb(
+                                                if block.status == AgendaItemStatus::Running {
+                                                    INK
+                                                } else {
+                                                    secondary
+                                                },
+                                            ))
+                                            .font_weight(
+                                                if block.status == AgendaItemStatus::Running {
+                                                    FontWeight::MEDIUM
+                                                } else {
+                                                    FontWeight::NORMAL
+                                                },
+                                            ),
+                                    ),
                             )
                             .when(height >= 46., |column| {
                                 column.child(
-                                    single_line(format!("{status} · {}", block.detail), 12.)
+                                    single_line(block.detail.clone(), 12.)
                                         .w(px(text_width))
                                         .text_color(rgb(secondary)),
                                 )
@@ -1229,7 +1294,7 @@ impl ForceView {
                     session.elapsed_between(start, end, self.now)
                 })
                 .sum();
-            let done = self.agenda_plan_is_done(plan);
+            let status = self.agenda_plan_status(plan);
             let detail = if actual_seconds > 0 {
                 format!("今日累计 {}", short_time(actual_seconds))
             } else {
@@ -1261,8 +1326,8 @@ impl ForceView {
                 ),
                 start: f32::from(plan.start_minute),
                 end: f32::from(plan.end_minute),
-                done,
-                moved: plan.moved_to.is_some(),
+                status,
+                color: self.agenda_task_color(plan.task_id).map(str::to_owned),
                 actual: false,
                 selected: self.agenda.selected_plan == Some(plan.id),
                 lane: 0,
@@ -1313,8 +1378,13 @@ impl ForceView {
                     ),
                     start: left,
                     end: right,
-                    done: session.finished_at.is_some(),
-                    moved: false,
+                    status: self.agenda_record_status(session),
+                    color: agenda_tag_color(
+                        &self.tags,
+                        Some(session.tag_id),
+                        session.tag_color.as_deref(),
+                    )
+                    .map(str::to_owned),
                     actual: true,
                     selected: self.agenda.selected_record == Some(session.id),
                     lane: 0,
@@ -1331,8 +1401,13 @@ impl ForceView {
                     help: format!("{} · {} · 尚未计时", session.title, timestamp_clock(stamp)),
                     start: minute,
                     end: minute + 1.,
-                    done: session.finished_at.is_some(),
-                    moved: false,
+                    status: self.agenda_record_status(session),
+                    color: agenda_tag_color(
+                        &self.tags,
+                        Some(session.tag_id),
+                        session.tag_color.as_deref(),
+                    )
+                    .map(str::to_owned),
                     actual: true,
                     selected: self.agenda.selected_record == Some(session.id),
                     lane: 0,
@@ -1350,8 +1425,8 @@ impl ForceView {
                 help: format!("{} · 已完成，未计时", task.title),
                 start: minute,
                 end: minute + 1.,
-                done: true,
-                moved: false,
+                status: AgendaItemStatus::Completed,
+                color: agenda_tag_color(&self.tags, Some(task.tag_id), None).map(str::to_owned),
                 actual: true,
                 selected: self.agenda.selected_completion == Some(task.id),
                 lane: 0,
@@ -1385,13 +1460,7 @@ impl ForceView {
                     .child(detail_title("agenda-record-title", &session.title))
                     .child(field_label(&format!(
                         "{} · 当天{} {}",
-                        if session.is_running() {
-                            "计时中"
-                        } else if session.is_paused() {
-                            "已暂停"
-                        } else {
-                            "已记录"
-                        },
+                        self.agenda_record_status(session).description(false),
                         if session.tag_kind == TagKind::Rest {
                             "休息"
                         } else {

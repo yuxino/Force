@@ -5,8 +5,10 @@ use gpui::{prelude::*, *};
 use gpui_component::{IconName, button::ButtonVariants};
 
 use crate::{
+    agenda_model::agenda_tag_color,
     label::single_line,
     model::{ForceView, day_bounds},
+    settings_view::{tag_color_rgb, tag_text_color},
     view::{
         ControlState, DESTRUCTIVE, INK, LINE, MUTED, button, control_icon, control_label, field,
         field_label, primary_button, short_time,
@@ -348,18 +350,14 @@ impl ForceView {
         let mut rows = Vec::new();
         for plan in &self.agenda.plans {
             let id = plan.id;
-            let state = if plan.moved_to.is_some() {
-                "已改期"
-            } else if self.agenda_plan_is_done(plan) {
-                "安排已完成"
-            } else {
-                "安排"
-            };
+            let state = self.agenda_plan_status(plan).description(true);
+            let color = self.agenda_task_color(plan.task_id);
             rows.push(
                 summary_row(
                     cx,
                     format!("agenda-summary-plan-{id}"),
                     &plan.title,
+                    color,
                     format!(
                         "{state} · {:02}:{:02}–{:02}:{:02}",
                         plan.start_minute / 60,
@@ -379,24 +377,21 @@ impl ForceView {
                     cx,
                     format!("agenda-summary-record-{id}"),
                     &record.title,
-                    if seconds > 0 {
-                        format!(
-                            "{} · {}",
-                            if record.tag_kind == TagKind::Rest {
-                                "休息"
-                            } else {
-                                "已记录"
-                            },
-                            short_time(seconds)
-                        )
-                    } else {
+                    agenda_tag_color(&self.tags, Some(record.tag_id), record.tag_color.as_deref()),
+                    format!(
+                        "{} · {}{}",
+                        self.agenda_record_status(record).description(false),
                         if record.tag_kind == TagKind::Rest {
-                            "休息 · 尚未计时"
+                            "休息 · "
                         } else {
-                            "已开始 · 尚未计时"
+                            ""
+                        },
+                        if seconds > 0 {
+                            short_time(seconds)
+                        } else {
+                            "尚未计时".to_owned()
                         }
-                        .to_owned()
-                    },
+                    ),
                 )
                 .on_click(
                     cx.listener(move |this, _, window, cx| {
@@ -412,6 +407,7 @@ impl ForceView {
                     cx,
                     format!("agenda-summary-completion-{id}"),
                     &task.title,
+                    agenda_tag_color(&self.tags, Some(task.tag_id), None),
                     "已完成 · 未计时".to_owned(),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -448,6 +444,7 @@ fn summary_row(
     cx: &App,
     id: String,
     title: &str,
+    color: Option<&str>,
     detail: String,
 ) -> gpui_component::button::Button {
     let selector = id.clone();
@@ -461,7 +458,7 @@ fn summary_row(
         .border_0()
         .border_b_1()
         .border_color(rgb(LINE))
-        .tooltip(title.to_owned())
+        .tooltip(format!("{title}\n{detail}"))
         .child(
             div()
                 .w(px(310.))
@@ -469,9 +466,25 @@ fn summary_row(
                 .flex_col()
                 .gap(px(2.))
                 .child(
-                    single_line(title.to_owned(), 14.)
+                    div()
                         .w(px(310.))
-                        .text_color(rgb(INK)),
+                        .flex()
+                        .items_center()
+                        .gap(px(6.))
+                        .child(
+                            div()
+                                .w(px(3.))
+                                .h(px(14.))
+                                .flex_shrink_0()
+                                .rounded(px(1.))
+                                .bg(rgb(color.and_then(tag_color_rgb).unwrap_or(LINE))),
+                        )
+                        .child(
+                            single_line(title.to_owned(), 14.)
+                                .w(px(301.))
+                                .flex_shrink_0()
+                                .text_color(rgb(color.and_then(tag_text_color).unwrap_or(INK))),
+                        ),
                 )
                 .child(single_line(detail, 13.).w(px(310.)).text_color(rgb(MUTED))),
         )

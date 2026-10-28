@@ -218,14 +218,8 @@ fn headless_ui_manager_layout_is_bounded_at_default_and_minimum_size(cx: &mut Te
         let content = manager.bounds("manager-content");
         assert_horizontally_inside(manager.bounds("save-goal"), content);
         assert_horizontally_inside(manager.bounds("reset-goal"), content);
-        for selector in [
-            "settings-timing",
-            "settings-tags",
-            "settings-form",
-            "goal-input",
-            "tag-input",
-            "save-tag",
-        ] {
+        assert!(manager.cx.debug_bounds("settings-form").is_none());
+        for selector in ["settings-timing", "settings-tags", "goal-input", "new-tag"] {
             assert_horizontally_inside(manager.bounds(selector), content);
         }
     }
@@ -2202,6 +2196,7 @@ fn headless_ui_rest_without_return_ends_before_preparing_and_new_tags_are_focus(
         assert_eq!(view.history[0].tag_kind, force_core::TagKind::Rest);
     });
     manager.click("settings-tab");
+    manager.click("new-tag");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.new_tag_kind = force_core::TagKind::Rest;
         view.tag_input.update(cx, |input, cx| {
@@ -2932,6 +2927,168 @@ fn headless_ui_starting_a_stale_selected_task_preserves_external_edits(cx: &mut 
 }
 
 #[gpui::test]
+fn headless_ui_tag_editor_opens_on_demand_and_closes_after_save_cancel_and_escape(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Settings);
+    assert!(manager.cx.debug_bounds("settings-form").is_none());
+    assert!(manager.cx.debug_bounds("tag-input").is_none());
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.tag_form_open);
+        assert_eq!(view.panel_scroll[2].max_offset().height, px(0.));
+    });
+    let handle = manager.handle;
+    manager.cx.update(|_, cx| {
+        cx.bind_keys([gpui::KeyBinding::new(
+            "escape",
+            crate::ClosePanel,
+            Some("Force"),
+        )]);
+        cx.on_action(move |_: &crate::ClosePanel, cx| {
+            crate::with_force(handle, cx, |view, window, cx| view.close_panel(window, cx))
+        });
+    });
+
+    manager.click("new-tag");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(view.tag_form_open);
+        assert!(view.editing_tag.is_none());
+        assert!(view.tag_input.read(cx).focus_handle(cx).is_focused(window));
+    });
+    manager.cx.simulate_input("New compact tag");
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("save-tag");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(!view.tag_form_open);
+        assert!(view.tags.iter().any(|tag| tag.name == "New compact tag"));
+        assert!(view.tag_input.read(cx).value().is_empty());
+        assert!(!view.tag_input.read(cx).focus_handle(cx).is_focused(window));
+        assert!(view.focus_handle.is_focused(window));
+    });
+
+    for escape in [false, true] {
+        manager.click("new-tag");
+        manager.cx.simulate_input("Discard this draft");
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        if escape {
+            manager.cx.simulate_keystrokes("escape");
+            manager.cx.update(|window, _| window.refresh());
+            manager.cx.run_until_parked();
+        } else {
+            manager.click("cancel-tag-edit");
+        }
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert!(!view.tag_form_open);
+            assert!(
+                !view.compact,
+                "dismissing a draft must not hide the manager"
+            );
+            assert!(view.tag_input.read(cx).value().is_empty());
+            assert!(!view.tags.iter().any(|tag| tag.name == "Discard this draft"));
+            assert!(!view.tag_input.read(cx).focus_handle(cx).is_focused(window));
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_tag_editor_keeps_invalid_drafts_visible_across_navigation(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Settings);
+    manager.click("new-tag");
+    manager.cx.simulate_input("Pending compact tag");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.tag_color_input
+            .update(cx, |input, cx| input.set_value("#bad", window, cx));
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("save-tag");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.tag_form_open);
+        assert!(!view.can_save_tag(cx));
+        assert!(view.tag_draft_error(cx).is_some());
+        assert_eq!(view.tags.len(), 4);
+    });
+    manager.click("records-tab");
+    manager.click("settings-tab");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.tag_form_open);
+        assert_eq!(view.tag_input.read(cx).value(), "Pending compact tag");
+        assert_eq!(view.tag_color_input.read(cx).value(), "#bad");
+    });
+    manager.bounds("tag-draft-error");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.hide_manager(window, cx);
+        assert!(view.tag_form_open);
+        view.show_manager(window, cx);
+        assert!(view.tag_input.read(cx).focus_handle(cx).is_focused(window));
+    });
+    manager.cx.simulate_input(" resumed");
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.click("edit-tag-1");
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("取消");
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.tag_form_open);
+        assert!(view.editing_tag.is_none());
+        assert_eq!(
+            view.tag_input.read(cx).value(),
+            "Pending compact tag resumed"
+        );
+        assert_eq!(view.tag_color_input.read(cx).value(), "#bad");
+    });
+}
+
+#[gpui::test]
+fn headless_ui_tag_editor_controls_stay_compact_above_the_list(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.), (920., 620.), (1512., 865.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Settings);
+        manager.click("new-tag");
+        let form = manager.bounds("settings-form");
+        let labels = manager.bounds("settings-labels");
+        let input = manager.bounds("tag-input");
+        let classes = manager.bounds("tag-class-options");
+        let colors = manager.bounds("tag-color-options");
+        let actions = manager.bounds("tag-form-actions");
+        let save = manager.bounds("save-tag");
+        let cancel = manager.bounds("cancel-tag-edit");
+        assert_horizontally_inside(form, labels);
+        assert!(form.size.width <= px(480.));
+        assert!(form.size.height <= px(240.));
+        assert!(form.bottom() <= manager.bounds("settings-tags").top());
+        for bounds in [input, classes, colors, actions, save, cancel] {
+            assert_horizontally_inside(bounds, form);
+            assert!(bounds.top() >= form.top() && bounds.bottom() <= form.bottom());
+        }
+        assert!(classes.size.height <= px(36.));
+        assert!(colors.size.height <= px(36.));
+        for bounds in [classes, colors, save] {
+            assert!((bounds.left() - input.left()).abs() <= px(1.));
+        }
+        assert!(save.top() >= colors.bottom());
+        assert!(save.top() - colors.bottom() <= px(16.));
+        assert!((cancel.top() - save.top()).abs() <= px(1.));
+        assert!(cancel.left() > save.right());
+        assert!(cancel.left() - save.right() <= px(12.));
+        // On narrow windows the native anchor runs next frame. TestPlatform
+        // omits that callback, so use real outer wheel input to reveal actions.
+        if save.bottom() > px(height - 12.) {
+            manager.scroll_at(
+                point(px(8.), px(400.)),
+                f32::from(px(height - 12.) - save.bottom()),
+            );
+        }
+        for selector in ["save-tag", "cancel-tag-edit"] {
+            let bounds = manager.bounds(selector);
+            assert!(bounds.top() >= px(68.) && bounds.bottom() <= px(height));
+        }
+    }
+}
+
+#[gpui::test]
 fn headless_ui_reopening_the_same_tag_preserves_its_draft(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
@@ -2952,7 +3109,7 @@ fn headless_ui_reopening_the_same_tag_preserves_its_draft(cx: &mut TestAppContex
 fn headless_ui_new_tag_is_positive_and_counts_focus_by_default(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
-        view.navigate(Page::Settings, window, cx);
+        view.open_tag_settings(window, cx);
         assert_eq!(view.new_tag_class, force_core::TagClass::Positive);
         view.tag_input
             .update(cx, |input, cx| input.set_value("Default focus", window, cx));
@@ -3023,7 +3180,9 @@ fn headless_ui_tag_drafts_require_a_choice_before_switching_edit_targets(cx: &mu
             let mut manager = ManagerHarness::new(cx, 1040., 780.);
             manager.view.update_in(&mut manager.cx, |view, window, cx| {
                 view.navigate(Page::Settings, window, cx);
-                if !new_draft {
+                if new_draft {
+                    view.open_tag_settings(window, cx);
+                } else {
                     view.begin_edit_tag(1, window, cx);
                 }
                 view.tag_input
@@ -3065,15 +3224,13 @@ fn headless_ui_adding_a_tag_does_not_retag_a_saved_task(cx: &mut TestAppContext)
             .unwrap();
         view.refresh(cx);
         view.select_task(task.id, window, cx);
-        view.navigate(Page::Settings, window, cx);
+        view.open_tag_settings(window, cx);
         view.tag_input.update(cx, |input, cx| {
             input.set_value("Additional tag", window, cx)
         });
     });
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
-    // The extended tag form continues below the visible settings viewport.
-    manager.scroll("manager-content", -500.);
     manager.click("save-tag");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert!(view.tags.iter().any(|tag| tag.name == "Additional tag"));
@@ -3287,10 +3444,12 @@ fn headless_ui_tag_list_scrolls_independently_and_hands_off_at_both_edges(cx: &m
     for width in [1040., 780.] {
         let mut manager = ManagerHarness::new_on_page(cx, width, 620., Page::Settings);
         add_tag_scroll_fixture(&mut manager);
-        // At the narrow window, reveal the whole list through the page gutter.
+        manager.click("new-tag");
+        // The expanded editor gives the outer page meaningful room to scroll.
+        // Reveal the complete list using the page gutter, without moving tags.
         let bottom = manager.bounds("settings-tags").bottom();
-        if bottom > px(596.) {
-            manager.scroll_at(point(px(8.), px(400.)), f32::from(px(596.) - bottom));
+        if bottom > px(610.) {
+            manager.scroll_at(point(px(8.), px(400.)), f32::from(px(610.) - bottom));
         }
         let viewport = manager.bounds("settings-tag-viewport");
         assert_eq!(viewport.size.height, px(240.));
@@ -3352,6 +3511,14 @@ fn headless_ui_tag_list_scrolls_independently_and_hands_off_at_both_edges(cx: &m
 fn headless_ui_settings_scrollbar_tracks_stay_clickable_after_scrolling(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new_on_page(cx, 1040., 620., Page::Settings);
     add_tag_scroll_fixture(&mut manager);
+    manager.click("new-tag");
+    let bottom = manager.bounds("settings-tags").bottom();
+    if bottom > px(610.) {
+        manager.scroll_at(point(px(8.), px(400.)), f32::from(px(610.) - bottom));
+    }
+    let page_before = manager
+        .view
+        .read_with(&manager.cx, |view, _| view.panel_scroll[2].offset());
     let tag_viewport = manager.bounds("settings-tag-viewport");
     manager.scroll("settings-tags", -80.);
     // Clicking the original bottom of the track must still reach the final
@@ -3370,15 +3537,15 @@ fn headless_ui_settings_scrollbar_tracks_stay_clickable_after_scrolling(cx: &mut
             view.tag_scroll.offset().y,
             -view.tag_scroll.max_offset().height
         );
-        assert_eq!(view.panel_scroll[2].offset().y, px(0.));
+        assert_eq!(view.panel_scroll[2].offset(), page_before);
     });
     assert_same_bounds(manager.bounds("settings-tag-viewport"), tag_viewport);
 
     let page_viewport = manager.bounds("manager-viewport");
-    manager.scroll_at(point(px(8.), px(400.)), -40.);
+    manager.scroll_at(point(px(8.), px(400.)), -12.);
     manager.view.read_with(&manager.cx, |view, _| {
-        assert_eq!(view.panel_scroll[2].offset().y, px(-40.));
-        assert!(view.panel_scroll[2].max_offset().height > px(40.));
+        assert_eq!(view.panel_scroll[2].offset().y, page_before.y - px(12.));
+        assert!(view.panel_scroll[2].max_offset().height > -page_before.y + px(12.));
     });
     manager.cx.simulate_click(
         point(
@@ -3400,7 +3567,7 @@ fn headless_ui_settings_scrollbar_tracks_stay_clickable_after_scrolling(cx: &mut
 
 #[gpui::test]
 fn headless_ui_short_tag_list_passes_wheel_events_to_the_settings_page(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 1040., 620., Page::Settings);
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Settings);
     manager.view.read_with(&manager.cx, |view, _| {
         assert_eq!(view.tag_scroll.max_offset().height, px(0.));
         assert!(view.panel_scroll[2].max_offset().height > px(24.));
@@ -3720,7 +3887,8 @@ fn headless_ui_settings_use_available_width_without_height_based_stacking(cx: &m
             assert!(labels.top() >= general.bottom() - px(1.));
             assert!(about.top() >= labels.bottom() - px(1.));
         }
-        for selector in ["settings-tags", "settings-form", "tag-input", "save-tag"] {
+        assert!(manager.cx.debug_bounds("settings-form").is_none());
+        for selector in ["settings-tags", "new-tag"] {
             assert_horizontally_inside(manager.bounds(selector), labels);
         }
         assert_horizontally_inside(manager.bounds("goal-input"), general);

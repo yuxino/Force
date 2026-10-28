@@ -111,8 +111,10 @@ their rows, with 24–32 points between groups. Keep labels and their controls o
 pinning, completion sound and daily goal. Pinning and sound each use a
 keyboard-accessible buttons with directly clickable switches. Knob and outer
 button actions must each toggle once. Timing rows use 48 points. Tags use 40-point
-rows and a list capped at 240 points. The tag name, classification and color controls form one editor, with 添加 / 保存
-and 取消 together directly below the fields. New labels are focus tags; existing rest
+rows and a list capped at 240 points. The section header's 新标签 action opens an
+editor above the list; it is collapsed by default. Name, classification and color
+use aligned label rows within 480 points. 添加 / 保存 and 取消 stay together directly
+below the fields. Save or Cancel collapses it; validation errors keep it open. New labels are focus tags; existing rest
 labels remain editable. Highlight the row currently being renamed with the
 existing neutral surface. Re-selecting it preserves its draft; switching edit
 targets protects changed text with Save, Discard or Cancel. Adding a label must
@@ -128,11 +130,21 @@ Choosing a draft color immediately previews it on the selected classification.
 The list changes only after Save, and Cancel retains the saved color.
 Local data exposes the folder; export is owned by records.
 
-Single-line inputs and settings controls are 40 points high; main start and
-running actions are 44 points. Set input styled height explicitly because
+Single-line inputs and settings controls are 40 points high; the compact tag
+editor uses a 36-point name input and actions, 32-point choices and color input,
+and 28-point swatches. Main start and running actions are 44 points. Set input styled height explicitly because
 `Input::h` affects multiline editors only. Reuse field, button and semantic-color
 helpers. Current choices retain neutral hover, pressed and focus feedback. Month cells use
-a subtle neutral hover and no duplicate day-content tooltip over the day popup.
+a subtle neutral hover. Each month item uses its current tag color, a narrow
+color mark and an explicit compact status: 计时, 暂停, 完成, 记录, 待办 or 顺延.
+The title and status have separate measured widths; long titles truncate without
+covering status. Hover reveals the full title and state. Day summaries and the
+time grid follow the same color/status rules and retain neutral selection cues.
+A finished timer round is recorded, not necessarily a completed task; an
+occurrence check refers only to that arrangement. Running/paused applies only
+to today. Clearing a live tag color clears its calendar display; archived tags
+use the session's saved color when available. Historical names, classifications
+and totals retain their existing snapshot semantics.
 Do not clip focus rings when truncating labels. Toggle double-clicks must not
 undo the first click.
 
