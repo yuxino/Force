@@ -2056,9 +2056,11 @@ impl ForceView {
             // App-level save panels can return key status to the independent
             // floating clock. Return to the originating visible workspace.
             let _ = cx.update(|window, cx| {
-                let _ = this.update(cx, |this, _| {
+                let _ = this.update(cx, |this, cx| {
                     if !this.compact {
-                        window.activate_window();
+                        // Use the normal presentation path so AppKit key-status
+                        // callbacks cannot reenter GPUI's activation lock.
+                        this.show_manager(window, cx);
                         if let Some(focus) = return_focus.as_ref() {
                             focus.focus(window);
                         }
