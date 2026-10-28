@@ -4,6 +4,7 @@ use gpui::{prelude::*, *};
 use gpui_component::{
     Icon, IconName,
     button::{ButtonCustomVariant, ButtonVariants},
+    scroll::{Scrollbar, ScrollbarShow},
     tooltip::Tooltip,
 };
 
@@ -1107,73 +1108,88 @@ impl ForceView {
             );
         }
         div()
-            .id("agenda-day-scroll")
-            .debug_selector(|| "agenda-day-grid".into())
+            .debug_selector(|| "agenda-day-viewport".into())
+            .relative()
             .flex_1()
             .min_h_0()
             .w_full()
-            .overflow_y_scroll()
-            .overflow_x_scroll()
-            .track_scroll(&self.agenda.calendar_scroll)
             .child(
                 div()
-                    .debug_selector(|| "agenda-time-canvas".into())
-                    .relative()
-                    .w(px(canvas_width))
-                    .h(px(24. * HOUR_HEIGHT + MIN_EVENT_HEIGHT + 12.))
-                    .children(hours)
-                    .when(blocks.is_empty(), |grid| {
-                        grid.child(
-                            div()
-                                .absolute()
-                                .top(px(current_minute
-                                    .map_or(8. * HOUR_HEIGHT + 18., |minute| {
-                                        ((minute - 30.).max(0.) / 60.) * HOUR_HEIGHT + 18.
-                                    })))
-                                .left(px(TIME_GUTTER + 16.))
-                                .text_size(px(14.))
-                                .text_color(rgb(MUTED))
-                                .child("点击时间，安排要做的事"),
-                        )
-                    })
-                    .when_some(current_minute, |grid, minute| {
-                        grid.child(
-                            div()
-                                .absolute()
-                                .top(px(minute / 60. * HOUR_HEIGHT + CURRENT_TIME_LINE_TOP))
-                                .left_0()
-                                .right_0()
-                                .h(px(1.))
-                                .bg(rgb(INK))
-                                .child(
-                                    div()
-                                        .absolute()
-                                        .left_0()
-                                        .top(px(CURRENT_TIME_LABEL_OFFSET))
-                                        .w(px(TIME_GUTTER))
-                                        .h(px(CURRENT_TIME_LABEL_HEIGHT))
-                                        .py(px(2.))
-                                        .rounded(px(3.))
-                                        .text_center()
-                                        .text_size(px(10.))
-                                        .line_height(px(12.))
-                                        .bg(rgb(INK))
-                                        .text_color(rgb(0xffffff))
-                                        .child(minute_label(minute as u16)),
-                                ),
-                        )
-                    })
+                    .id("agenda-day-scroll")
+                    .debug_selector(|| "agenda-day-grid".into())
+                    .size_full()
+                    .overflow_y_scroll()
+                    .overflow_x_scroll()
+                    .track_scroll(&self.agenda.calendar_scroll)
                     .child(
                         div()
-                            .absolute()
-                            .left(px(TIME_GUTTER))
-                            .right_0()
-                            .top(px(10.))
-                            .h(px(24. * HOUR_HEIGHT + MIN_EVENT_HEIGHT))
-                            .children(blocks.iter().enumerate().map(|(index, block)| {
-                                self.agenda_calendar_block(block, index, canvas_width, cx)
-                            })),
+                            .debug_selector(|| "agenda-time-canvas".into())
+                            .relative()
+                            .w(px(canvas_width))
+                            .h(px(24. * HOUR_HEIGHT + MIN_EVENT_HEIGHT + 12.))
+                            .children(hours)
+                            .when(blocks.is_empty(), |grid| {
+                                grid.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(current_minute.map_or(
+                                            8. * HOUR_HEIGHT + 18.,
+                                            |minute| {
+                                                ((minute - 30.).max(0.) / 60.) * HOUR_HEIGHT + 18.
+                                            },
+                                        )))
+                                        .left(px(TIME_GUTTER + 16.))
+                                        .text_size(px(14.))
+                                        .text_color(rgb(MUTED))
+                                        .child("点击时间，安排要做的事"),
+                                )
+                            })
+                            .when_some(current_minute, |grid, minute| {
+                                grid.child(
+                                    div()
+                                        .absolute()
+                                        .top(px(minute / 60. * HOUR_HEIGHT + CURRENT_TIME_LINE_TOP))
+                                        .left_0()
+                                        .right_0()
+                                        .h(px(1.))
+                                        .bg(rgb(INK))
+                                        .child(
+                                            div()
+                                                .absolute()
+                                                .left_0()
+                                                .top(px(CURRENT_TIME_LABEL_OFFSET))
+                                                .w(px(TIME_GUTTER))
+                                                .h(px(CURRENT_TIME_LABEL_HEIGHT))
+                                                .py(px(2.))
+                                                .rounded(px(3.))
+                                                .text_center()
+                                                .text_size(px(10.))
+                                                .line_height(px(12.))
+                                                .bg(rgb(INK))
+                                                .text_color(rgb(0xffffff))
+                                                .child(minute_label(minute as u16)),
+                                        ),
+                                )
+                            })
+                            .child(
+                                div()
+                                    .absolute()
+                                    .left(px(TIME_GUTTER))
+                                    .right_0()
+                                    .top(px(10.))
+                                    .h(px(24. * HOUR_HEIGHT + MIN_EVENT_HEIGHT))
+                                    .children(blocks.iter().enumerate().map(|(index, block)| {
+                                        self.agenda_calendar_block(block, index, canvas_width, cx)
+                                    })),
+                            ),
                     ),
+            )
+            .child(
+                div().absolute().inset_0().child(
+                    Scrollbar::new(&self.agenda.calendar_scroll)
+                        .id("agenda-day-scrollbar")
+                        .scrollbar_show(ScrollbarShow::Hover),
+                ),
             )
     }
 

@@ -2332,3 +2332,41 @@ fn agenda_ui_moments_appear_as_points_without_creating_tasks_or_timer_totals(
         assert_inside(manager.bounds("moment-editor"), viewport);
     }
 }
+
+#[gpui::test]
+fn agenda_ui_timeline_scrollbars_reach_both_edges_without_moving_the_viewport(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = day_manager(cx, 780., 620., Page::Agenda);
+    for index in 0..8 {
+        seed_plan(&mut manager, &format!("Overlapping plan {index}"));
+    }
+    let viewport = manager.bounds("agenda-day-viewport");
+    manager.scroll("agenda-day-grid", -120.);
+    manager.cx.simulate_click(
+        Point::new(viewport.right() - px(6.), viewport.bottom() - px(20.)),
+        Modifiers::default(),
+    );
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        let scroll = &view.agenda.calendar_scroll;
+        assert!(scroll.max_offset().height > px(0.));
+        assert_eq!(scroll.offset().y, -scroll.max_offset().height);
+        assert!(
+            !view.agenda.editing,
+            "scrollbar must not open an hour editor"
+        );
+    });
+    manager.cx.simulate_click(
+        Point::new(viewport.right() - px(20.), viewport.bottom() - px(6.)),
+        Modifiers::default(),
+    );
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        let scroll = &view.agenda.calendar_scroll;
+        assert!(scroll.max_offset().width > px(0.));
+        assert_eq!(scroll.offset().x, -scroll.max_offset().width);
+        assert!(!view.agenda.editing, "scrollbar must not select a plan");
+    });
+    assert_eq!(manager.bounds("agenda-day-viewport"), viewport);
+}
