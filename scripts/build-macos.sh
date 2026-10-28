@@ -20,12 +20,17 @@ for argument in "$@"; do
     -h|--help)
       echo 'Usage: scripts/build-macos.sh [--release] [--production] [--ad-hoc]'
       echo 'Default: signed build/Force Dev.app, isolated development identity.'
+      echo '--production always uses release mode and the production data directory.'
       echo 'FORCE_SIGN_IDENTITY selects an existing code-signing identity by hash or name.'
       exit 0
       ;;
     *) echo "Unknown argument: $argument" >&2; exit 1 ;;
   esac
 done
+
+# Debug binaries intentionally select the development data directory.
+# A production bundle must therefore always contain a release binary.
+if [[ "$production" == true ]]; then profile=release; fi
 
 if [[ "$ad_hoc" == true ]]; then
   identity=-
