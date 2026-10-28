@@ -9,7 +9,7 @@
 - `wordmark-lettering.svg`：原有 FORCE 字形路径，不依赖字体。
 - `icon.png` / `Force.icns` / `Force.ico`：头像配白色圆角底的应用图标；ICO 包含 16、32、48、256 px。
 - `cat-side-expanded-clock.svg` / `cat-side-expanded-clock-outline.svg`：独立的中性深色控制面板及轮廓，展开时不拉伸猫的身体。
-- `readme-cover.png` / `readme-cover-dark.png`：以桌面猫钟的坐姿角色为参考的封面，配两行现代黑体引句。README 不额外重复 Logo 或句子。
+- `readme-cover.png` / `readme-cover-dark.png`：以桌面猫钟的坐姿角色为参考的封面，保留两行现代黑体主标语，下方用灰色小字放置两句辅助文案。README 不额外重复 Logo 或句子。
 
 角色和封面画稿由图像生成工具制作。修改角色时更新源画稿，再运行以下命令导出应用资源：
 
@@ -18,6 +18,6 @@ swift scripts/generate-brand-assets.swift
 swift scripts/generate-icons.swift
 ```
 
-第一步统一取景与尺寸并生成字标，第二步导出平台图标；不手工重画派生图。眨眼画稿需与坐姿画稿保持相同尺寸和位置，检查眼部覆盖与计时文字在真实猫钟里的效果。封面以坐姿原稿为参考，保留短毛、脸型、灰蓝眼睛、深色前爪与右侧卷尾；不另画不同体型或笔触的猫。明暗版保持同一句文案与排版。
+第一步统一取景与尺寸并生成字标，第二步导出平台图标；不手工重画派生图。眨眼画稿需与坐姿画稿保持相同尺寸和位置，检查眼部覆盖与计时文字在真实猫钟里的效果。封面以坐姿原稿为参考，保留短毛、脸型、灰蓝眼睛、深色前爪与右侧卷尾；不另画不同体型或笔触的猫。明暗版保持相同的主标语、辅助小字与排版；辅助文案不得替换或抢占主标语。
 
 README 明暗图片通过链接上的 `#gh-light-mode-only` / `#gh-dark-mode-only` 跟随 GitHub 页面主题。验收需覆盖系统主题与 GitHub 主题相反的组合；仅检查本地 `prefers-color-scheme` 不能证明 GitHub 显示正确。
