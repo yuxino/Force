@@ -315,7 +315,15 @@ impl Render for ForceView {
         self.tag_picker.update(cx, |picker, cx| {
             picker.set_trigger_width((task_width - 16.) / 2., cx);
         });
-        let compact = viewport.width < px(920.) || viewport.height < px(700.);
+        let show_background_quote =
+            viewport.height >= px(crate::background_quote::MIN_BACKGROUND_QUOTE_HEIGHT);
+        let page_height = viewport.height
+            - if show_background_quote {
+                px(crate::background_quote::BACKGROUND_QUOTE_HEIGHT)
+            } else {
+                px(0.)
+            };
+        let compact = viewport.width < px(920.) || page_height < px(700.);
         div()
             .id("force-manager")
             .track_focus(&self.focus_handle)
@@ -329,6 +337,9 @@ impl Render for ForceView {
             .flex_col()
             .child(self.panel_navigation(cx))
             .child(self.management_page(compact, window, cx))
+            .when(show_background_quote, |body| {
+                body.child(crate::background_quote::background_quote(self.now))
+            })
             .when_some(self.toast.as_ref(), |body, (message, _)| {
                 body.child(self.feedback_toast(message, cx))
             })

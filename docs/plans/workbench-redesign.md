@@ -6,7 +6,9 @@ Rebuild the visual composition around the task, the time and the next action.
 Use the Siamese cat brand mark. Neutral surfaces, strong type
 contrast, aligned numbers, restrained rules and open lists give the small local
 application a coherent identity. Do not add dashboards, account features,
-illustrations, textures, gradients, marketing slogans or decorative cards.
+illustrations, textures, gradients or decorative cards. The owner's two background
+quotes may appear as muted text in the management window's bottom whitespace; see
+`background-quotes.md`.
 
 The owner approved merging this substantial interface change after reviewing the
 design. Preserve the running formal app and all production data during delivery.

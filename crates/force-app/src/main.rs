@@ -7,6 +7,7 @@ mod activity_view;
 mod agenda_model;
 mod agenda_popover_view;
 mod agenda_view;
+mod background_quote;
 mod control_style;
 mod floating_view;
 mod focus_view;
