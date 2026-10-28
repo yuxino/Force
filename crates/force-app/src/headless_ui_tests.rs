@@ -90,6 +90,36 @@ impl ManagerHarness {
         self.cx.run_until_parked();
     }
 
+    /// Bring an already rendered control into the outer page viewport using
+    /// actual wheel input. The gutter avoids nested list scroll handlers.
+    fn reveal_in_page(&mut self, selector: &'static str) {
+        let viewport = self.bounds("manager-viewport");
+        let bounds = self.bounds(selector);
+        let top = viewport.top() + px(12.);
+        let bottom = viewport.bottom() - px(12.);
+        assert!(bounds.size.height <= bottom - top);
+        let delta = if bounds.bottom() > bottom {
+            bottom - bounds.bottom()
+        } else if bounds.top() < top {
+            top - bounds.top()
+        } else {
+            px(0.)
+        };
+        if delta != px(0.) {
+            self.scroll_at(
+                point(viewport.left() + px(8.), viewport.center().y),
+                f32::from(delta),
+            );
+        }
+        let visible = self.bounds(selector);
+        assert!(visible.top() >= top - px(1.), "{selector}: {visible:?}");
+        assert!(
+            visible.bottom() <= bottom + px(1.),
+            "{selector}: {visible:?}"
+        );
+        assert_horizontally_inside(visible, viewport);
+    }
+
     pub(crate) fn scroll(&mut self, selector: &'static str, amount: f32) {
         let position = self.bounds(selector).center();
         self.scroll_at(position, amount);
@@ -2196,6 +2226,7 @@ fn headless_ui_rest_without_return_ends_before_preparing_and_new_tags_are_focus(
         assert_eq!(view.history[0].tag_kind, force_core::TagKind::Rest);
     });
     manager.click("settings-tab");
+    manager.reveal_in_page("new-tag");
     manager.click("new-tag");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.new_tag_kind = force_core::TagKind::Rest;
@@ -3046,6 +3077,7 @@ fn headless_ui_tag_editor_keeps_invalid_drafts_visible_across_navigation(cx: &mu
 fn headless_ui_tag_editor_controls_stay_compact_above_the_list(cx: &mut TestAppContext) {
     for (width, height) in [(1040., 780.), (780., 620.), (920., 620.), (1512., 865.)] {
         let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Settings);
+        manager.reveal_in_page("new-tag");
         manager.click("new-tag");
         let form = manager.bounds("settings-form");
         let labels = manager.bounds("settings-labels");
@@ -3572,10 +3604,16 @@ fn headless_ui_short_tag_list_passes_wheel_events_to_the_settings_page(cx: &mut 
         assert_eq!(view.tag_scroll.max_offset().height, px(0.));
         assert!(view.panel_scroll[2].max_offset().height > px(24.));
     });
+    manager.reveal_in_page("settings-tags");
+    let outer_before = manager.view.read_with(&manager.cx, |view, _| {
+        let before = view.panel_scroll[2].offset().y;
+        assert!(view.panel_scroll[2].max_offset().height > -before + px(24.));
+        before
+    });
     manager.scroll("settings-tags", -24.);
     manager.view.read_with(&manager.cx, |view, _| {
         assert_eq!(view.tag_scroll.offset().y, px(0.));
-        assert_eq!(view.panel_scroll[2].offset().y, px(-24.));
+        assert_eq!(view.panel_scroll[2].offset().y, outer_before - px(24.));
     });
 }
 
@@ -3613,6 +3651,7 @@ fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut Te
     manager.click("settings-tab");
     let height = manager.bounds("tag-row-1").size.height;
     assert_eq!(height, px(40.));
+    manager.reveal_in_page("edit-tag-1");
     manager.click("edit-tag-1");
     assert_eq!(manager.bounds("editing-tag-row-1").size.height, height);
     // TestPlatform drops native frame callbacks, so ScrollAnchor's deferred
@@ -3623,6 +3662,7 @@ fn headless_ui_tag_edit_row_keeps_its_height_through_save_and_cancel(cx: &mut Te
         .view
         .read_with(&manager.cx, |view, _| assert!(view.editing_tag.is_none()));
     scroll_outer(&mut manager, px(1000.));
+    manager.reveal_in_page("edit-tag-1");
     manager.click("edit-tag-1");
     reveal_actions(&mut manager);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {

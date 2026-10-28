@@ -8,7 +8,7 @@ use gpui_component::{
 };
 
 use crate::{
-    agenda_model::{AgendaItemStatus, agenda_tag_color},
+    agenda_model::AgendaItemStatus,
     label::single_line,
     model::{ForceView, Page, day_bounds},
     settings_view::{tag_color_rgb, tag_text_color},
@@ -45,6 +45,7 @@ enum CalendarTarget {
     Plan(i64),
     Record(i64),
     Completion(i64),
+    Moment(i64),
 }
 
 struct CalendarBlock {
@@ -60,6 +61,27 @@ struct CalendarBlock {
     selected: bool,
     lane: usize,
     lane_count: usize,
+}
+
+impl CalendarBlock {
+    // A point marker is centered at its timestamp. Reserve only its visible
+    // hit area for collision layout; this never changes stored time or totals.
+    fn visual_start(&self) -> f32 {
+        if matches!(self.target, CalendarTarget::Moment(_)) {
+            self.start - MIN_EVENT_HEIGHT / HOUR_HEIGHT * 30.
+        } else {
+            self.start
+        }
+    }
+
+    fn visual_end(&self) -> f32 {
+        if matches!(self.target, CalendarTarget::Moment(_)) {
+            self.start + MIN_EVENT_HEIGHT / HOUR_HEIGHT * 30.
+        } else {
+            self.end
+                .max(self.start + MIN_EVENT_HEIGHT / HOUR_HEIGHT * 60.)
+        }
+    }
 }
 
 impl ForceView {
@@ -217,8 +239,11 @@ impl ForceView {
                     );
                 for (index, item) in items.iter().enumerate() {
                     if index < item_limit {
-                        let color =
-                            agenda_tag_color(&self.tags, item.tag_id, item.tag_color.as_deref());
+                        let color = self.display_color(
+                            item.tag_id,
+                            item.tag_class,
+                            item.tag_color.as_deref(),
+                        );
                         let title_color = color.and_then(tag_text_color).unwrap_or(foreground);
                         let indicator_color = color.and_then(tag_color_rgb).unwrap_or(LINE);
                         let text_width = (cell_width - 18. - 3. - 8. - 24.).max(0.);
@@ -254,7 +279,10 @@ impl ForceView {
                                         .h(px(12.))
                                         .flex_shrink_0()
                                         .rounded(px(1.))
-                                        .bg(rgb(indicator_color)),
+                                        .bg(rgb(indicator_color))
+                                        .when(item.status == AgendaItemStatus::Moment, |mark| {
+                                            mark.h(px(3.)).rounded_full().bg(rgb(MUTED))
+                                        }),
                                 )
                                 .child(
                                     single_line(item.title.clone(), 13.)
@@ -988,9 +1016,9 @@ impl ForceView {
     fn agenda_calendar_grid(&self, day_width: f32, cx: &mut Context<Self>) -> impl IntoElement {
         let mut blocks = self.agenda_blocks();
         blocks.sort_by(|a, b| {
-            a.start
-                .total_cmp(&b.start)
-                .then_with(|| a.end.total_cmp(&b.end))
+            a.visual_start()
+                .total_cmp(&b.visual_start())
+                .then_with(|| a.visual_end().total_cmp(&b.visual_end()))
         });
         // Width belongs to a connected overlap group. An isolated later
         // event must regain the full day width after an earlier overlap ends.
@@ -1001,14 +1029,14 @@ impl ForceView {
             let mut furthest_end = f32::NEG_INFINITY;
             let mut lane_ends: Vec<f32> = Vec::new();
             while let Some(block) = blocks.get_mut(group_end) {
-                if group_end > group_start && block.start >= furthest_end {
+                let visible_start = block.visual_start();
+                if group_end > group_start && visible_start >= furthest_end {
                     break;
                 }
-                let minimum_end = block.start + MIN_EVENT_HEIGHT / HOUR_HEIGHT * 60.;
-                let visible_end = block.end.max(minimum_end);
+                let visible_end = block.visual_end();
                 let lane = lane_ends
                     .iter()
-                    .position(|end| *end <= block.start)
+                    .position(|end| *end <= visible_start)
                     .unwrap_or(lane_ends.len());
                 if lane == lane_ends.len() {
                     lane_ends.push(visible_end);
@@ -1156,6 +1184,9 @@ impl ForceView {
         canvas_width: f32,
         cx: &mut Context<Self>,
     ) -> Div {
+        if let CalendarTarget::Moment(id) = block.target {
+            return self.agenda_moment_marker(id, block, canvas_width, cx);
+        }
         let lane_count = block.lane_count;
         let text_width = ((canvas_width - TIME_GUTTER) / lane_count as f32 - 20.).max(100.);
         let top = block.start / 60. * HOUR_HEIGHT;
@@ -1201,6 +1232,7 @@ impl ForceView {
                         CalendarTarget::Plan(id) => format!("agenda-plan-{id}"),
                         CalendarTarget::Record(id) => format!("agenda-record-{id}"),
                         CalendarTarget::Completion(id) => format!("agenda-completion-{id}"),
+                        CalendarTarget::Moment(id) => format!("agenda-moment-{id}"),
                     })
                     .w_full()
                     .h_full()
@@ -1273,11 +1305,87 @@ impl ForceView {
                                 )
                             }),
                     )
-                    .on_click(cx.listener(move |this, _, window, cx| match target {
-                        CalendarTarget::Plan(id) => this.select_plan(id, window, cx),
-                        CalendarTarget::Record(id) => this.select_agenda_record(id, window, cx),
-                        CalendarTarget::Completion(id) => {
-                            this.select_agenda_completion(id, window, cx)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        match target {
+                            CalendarTarget::Plan(id) => this.select_plan(id, window, cx),
+                            CalendarTarget::Record(id) => this.select_agenda_record(id, window, cx),
+                            CalendarTarget::Completion(id) => {
+                                this.select_agenda_completion(id, window, cx)
+                            }
+                            CalendarTarget::Moment(id) => {
+                                if let Some(moment) = this
+                                    .agenda
+                                    .day_moments
+                                    .iter()
+                                    .find(|moment| moment.id == id)
+                                    .cloned()
+                                {
+                                    this.edit_moment(moment, window, cx);
+                                }
+                            }
+                        }
+                    })),
+            )
+    }
+
+    fn agenda_moment_marker(
+        &self,
+        id: i64,
+        block: &CalendarBlock,
+        canvas_width: f32,
+        cx: &mut Context<Self>,
+    ) -> Div {
+        let width = ((canvas_width - TIME_GUTTER) / block.lane_count as f32 - 12.).max(100.);
+        div()
+            .block_mouse_except_scroll()
+            .absolute()
+            .left(relative(block.lane as f32 / block.lane_count as f32))
+            .top(px(block.visual_start() / 60. * HOUR_HEIGHT))
+            .w(relative(1. / block.lane_count as f32))
+            .h(px(MIN_EVENT_HEIGHT))
+            .px(px(3.))
+            .child(
+                button(("agenda-moment", id as u64))
+                    .debug_selector(move || format!("agenda-moment-{id}"))
+                    .custom(crate::view::quiet_variant(cx))
+                    .w_full()
+                    .h_full()
+                    .px(px(3.))
+                    .py_0()
+                    .border_0()
+                    .justify_start()
+                    .tooltip(format!("{} · 随记\n{}", block.detail, block.help))
+                    .child(
+                        div()
+                            .w(px(width))
+                            .flex()
+                            .items_center()
+                            .gap(px(5.))
+                            .child(
+                                div()
+                                    .size(px(6.))
+                                    .rounded_full()
+                                    .flex_shrink_0()
+                                    .bg(rgb(INK)),
+                            )
+                            .child(div().w(px(8.)).h(px(1.)).flex_shrink_0().bg(rgb(LINE)))
+                            .child(
+                                single_line(format!("{}  {}", block.detail, block.title), 13.)
+                                    .debug_selector(move || format!("agenda-moment-title-{id}"))
+                                    .w(px(width - 24.))
+                                    .flex_shrink_0()
+                                    .text_color(rgb(INK)),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Some(moment) = this
+                            .agenda
+                            .day_moments
+                            .iter()
+                            .find(|moment| moment.id == id)
+                            .cloned()
+                        {
+                            this.edit_moment(moment, window, cx);
                         }
                     })),
             )
@@ -1379,12 +1487,7 @@ impl ForceView {
                     start: left,
                     end: right,
                     status: self.agenda_record_status(session),
-                    color: agenda_tag_color(
-                        &self.tags,
-                        Some(session.tag_id),
-                        session.tag_color.as_deref(),
-                    )
-                    .map(str::to_owned),
+                    color: self.display_session_color(session).map(str::to_owned),
                     actual: true,
                     selected: self.agenda.selected_record == Some(session.id),
                     lane: 0,
@@ -1402,12 +1505,7 @@ impl ForceView {
                     start: minute,
                     end: minute + 1.,
                     status: self.agenda_record_status(session),
-                    color: agenda_tag_color(
-                        &self.tags,
-                        Some(session.tag_id),
-                        session.tag_color.as_deref(),
-                    )
-                    .map(str::to_owned),
+                    color: self.display_session_color(session).map(str::to_owned),
                     actual: true,
                     selected: self.agenda.selected_record == Some(session.id),
                     lane: 0,
@@ -1426,9 +1524,28 @@ impl ForceView {
                 start: minute,
                 end: minute + 1.,
                 status: AgendaItemStatus::Completed,
-                color: agenda_tag_color(&self.tags, Some(task.tag_id), None).map(str::to_owned),
+                color: self
+                    .display_color(Some(task.tag_id), force_core::TagClass::Legacy, None)
+                    .map(str::to_owned),
                 actual: true,
                 selected: self.agenda.selected_completion == Some(task.id),
+                lane: 0,
+                lane_count: 1,
+            });
+        }
+        for moment in &self.agenda.day_moments {
+            let minute = clock_minute(self.agenda.date, moment.occurred_at).min(1439.99);
+            blocks.push(CalendarBlock {
+                target: CalendarTarget::Moment(moment.id),
+                title: moment.content.lines().next().unwrap_or_default().to_owned(),
+                detail: timestamp_clock(moment.occurred_at),
+                help: moment.content.clone(),
+                start: minute,
+                end: minute,
+                status: AgendaItemStatus::Moment,
+                color: None,
+                actual: false,
+                selected: false,
                 lane: 0,
                 lane_count: 1,
             });

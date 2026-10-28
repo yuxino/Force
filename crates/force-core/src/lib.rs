@@ -13,11 +13,17 @@ pub const HISTORY_LIMIT: usize = 500;
 pub const MAX_GOAL_MINUTES: u32 = 24 * 60;
 pub const MIN_TARGET_SECONDS: i64 = 60;
 pub const MAX_TARGET_SECONDS: i64 = 24 * 60 * 60;
-const SCHEMA_VERSION: i64 = 6;
+const SCHEMA_VERSION: i64 = 8;
 
 mod agenda;
+mod analysis;
+mod classification;
+mod moment;
 mod task;
 pub use agenda::{PlanDraft, PlanEntry};
+pub use analysis::{DailyAnalysis, PeriodAnalysis};
+pub use classification::ClassColors;
+pub use moment::{MOMENT_CONTENT_LIMIT, Moment};
 pub use task::Task;
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -232,8 +238,15 @@ impl Store {
                 migrate_v5(&mut connection)?;
             }
             5 => migrate_v5(&mut connection)?,
+            6 | 7 => (),
             SCHEMA_VERSION => (),
             _ => return Err(Error::UnsupportedSchema),
+        }
+        if (1..7).contains(&version) {
+            moment::migrate_v6(&mut connection)?;
+        }
+        if (1..SCHEMA_VERSION).contains(&version) {
+            classification::migrate_v7(&mut connection)?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -842,7 +855,15 @@ fn calculate_stats(connection: &Connection, start: i64, end: i64, now: i64) -> R
 }
 
 fn initialize(connection: &mut Connection) -> Result<()> {
-    let transaction = connection.transaction()?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    if version == SCHEMA_VERSION {
+        transaction.commit()?;
+        return Ok(());
+    }
+    if version != 0 {
+        return Err(Error::UnsupportedSchema);
+    }
     transaction.execute_batch(
         "CREATE TABLE tags (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -888,6 +909,8 @@ fn initialize(connection: &mut Connection) -> Result<()> {
     transaction.execute_batch(task::SCHEMA)?;
     transaction.execute_batch(agenda::SCHEMA)?;
     transaction.execute_batch(IMPORTED_SESSIONS_SCHEMA)?;
+    transaction.execute_batch(moment::SCHEMA)?;
+    transaction.execute_batch(classification::SCHEMA)?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())
@@ -903,7 +926,7 @@ fn migrate_v1(connection: &mut Connection) -> Result<()> {
              CREATE INDEX interval_time_window ON intervals(ended_at, started_at);
              PRAGMA user_version = 2;",
         )?,
-        2 | 3 | 4 | 5 | SCHEMA_VERSION => (), // Another process completed the same migration.
+        2 | 3 | 4 | 5 | 6 | 7 | SCHEMA_VERSION => (), // Another process completed the same migration.
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -918,7 +941,7 @@ fn migrate_v3(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch("ALTER TABLE preferences ADD COLUMN completion_sound INTEGER NOT NULL DEFAULT 1 CHECK (completion_sound IN (0, 1));")?;
             transaction.pragma_update(None, "user_version", 4)?;
         }
-        4 | 5 | SCHEMA_VERSION => (),
+        4 | 5 | 6 | 7 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -951,9 +974,9 @@ fn migrate_v5(connection: &mut Connection) -> Result<()> {
                 ALTER TABLE sessions ADD COLUMN tag_class TEXT NOT NULL DEFAULT 'legacy' CHECK (tag_class IN ('positive', 'neutral', 'negative', 'leisure', 'legacy'));
                 ALTER TABLE sessions ADD COLUMN tag_color TEXT CHECK (tag_color IS NULL OR (length(tag_color) = 7 AND substr(tag_color, 1, 1) = '#' AND substr(tag_color, 2) NOT GLOB '*[^0-9A-Fa-f]*'));")?;
             transaction.execute_batch(IMPORTED_SESSIONS_SCHEMA)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 6)?;
         }
-        SCHEMA_VERSION => (),
+        6 | 7 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;

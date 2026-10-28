@@ -163,8 +163,8 @@ impl ForceView {
                             .pb(px(12.)).border_b_1().border_color(rgb(LINE))
                             .flex().items_center().justify_between().gap(px(24.))
                             .child(div().text_size(px(14.)).text_color(rgb(MUTED))
-                                .child(if query.is_empty() && self.record_class_filter.is_none() { format!("{} 条记录", self.history.len()) }
-                                    else { format!("匹配 {} 条", records.len()) }))
+                                .child(if query.is_empty() && self.record_class_filter.is_none() { format!("{} 条计时记录", self.history.len()) }
+                                    else { format!("匹配 {} 条计时记录", records.len()) }))
                             .child(
                                 div().w(px(240.)).flex_shrink_0()
                                     .child(field(&self.record_search)
@@ -179,6 +179,7 @@ impl ForceView {
                                         ))),
                             ),
                     )
+                    .child(self.record_moment_section(&query, cx))
                     .child(div().debug_selector(|| "record-class-filters".into()).flex().flex_wrap().gap(px(6.)).py(px(10.))
                         .children([
                             (None, "全部", "all"),
@@ -216,6 +217,81 @@ impl ForceView {
                             )),
                     )),
             )
+    }
+
+    fn record_moment_section(&self, query: &str, cx: &mut Context<Self>) -> Div {
+        let moments: Vec<_> = self
+            .record_moments
+            .iter()
+            .filter(|moment| query.is_empty() || moment.content.to_lowercase().contains(query))
+            .collect();
+        let no_matches = !query.is_empty() && moments.is_empty();
+        div()
+            .debug_selector(|| "record-moments".into())
+            .py(px(12.))
+            .border_b_1()
+            .border_color(rgb(LINE))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(
+                div()
+                    .debug_selector(|| "record-moments-header".into())
+                    .min_h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(12.))
+                    .child(
+                        div()
+                            .flex()
+                            .items_baseline()
+                            .gap(px(8.))
+                            .child(
+                                div()
+                                    .text_size(px(14.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .child("时刻"),
+                            )
+                            .when(!moments.is_empty(), |heading| {
+                                heading.child(
+                                    div()
+                                        .debug_selector(|| "record-moment-count".into())
+                                        .text_size(px(13.))
+                                        .text_color(rgb(MUTED))
+                                        .child(format!("{} 条", moments.len())),
+                                )
+                            }),
+                    )
+                    .child(
+                        button("record-add-moment")
+                            .debug_selector(|| "record-add-moment".into())
+                            .custom(crate::view::quiet_variant(cx))
+                            .h(px(32.))
+                            .px(px(8.))
+                            .unavailable(self.storage_failed)
+                            .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), INK))
+                            .child(control_label("随手记", INK))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.begin_moment(Some(this.record_date), window, cx)
+                            })),
+                    ),
+            )
+            .children(
+                moments
+                    .into_iter()
+                    .map(|moment| self.moment_row(moment, cx)),
+            )
+            .when(no_matches, |section| {
+                section.child(
+                    div()
+                        .debug_selector(|| "record-moments-empty-search".into())
+                        .py(px(4.))
+                        .text_size(px(13.))
+                        .text_color(rgb(MUTED))
+                        .child("没有匹配的时刻"),
+                )
+            })
     }
 
     fn record_row(&self, session: &Session, cx: &mut Context<Self>) -> Div {
@@ -326,9 +402,7 @@ impl ForceView {
                                             .items_center()
                                             .gap(px(6.))
                                             .when_some(
-                                                session
-                                                    .tag_color
-                                                    .as_deref()
+                                                self.display_session_color(session)
                                                     .and_then(crate::settings_view::tag_color_rgb),
                                                 |line, color| {
                                                     line.child(

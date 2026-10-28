@@ -1,8 +1,8 @@
 //! Calendar selection and drafts are independent from the actual timer lifecycle.
 use std::{cell::Cell, collections::BTreeMap};
 
-use chrono::{Datelike, Days, Local, Months, NaiveDate, Timelike};
-use force_core::{PlanDraft, PlanEntry, Session, Stats, Tag, TagKind, Task};
+use chrono::{Datelike, Days, Local, Months, NaiveDate, TimeZone, Timelike};
+use force_core::{Moment, PlanDraft, PlanEntry, Session, Stats, TagKind, Task};
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, Focusable as _, Pixels, Point, PromptButton,
     PromptLevel, ScrollHandle, Subscription, Window,
@@ -56,6 +56,7 @@ pub(crate) enum AgendaItemStatus {
     Recorded,
     Pending,
     Moved,
+    Moment,
 }
 
 impl AgendaItemStatus {
@@ -67,6 +68,7 @@ impl AgendaItemStatus {
             Self::Recorded => "记录",
             Self::Pending => "待办",
             Self::Moved => "顺延",
+            Self::Moment => "随记",
         }
     }
 
@@ -79,19 +81,8 @@ impl AgendaItemStatus {
             Self::Recorded => "已记录",
             Self::Pending => "待办安排",
             Self::Moved => "已顺延，原安排保留",
+            Self::Moment => "时刻记录",
         }
-    }
-}
-
-/// A cleared live color is intentional; only a deleted tag uses its snapshot.
-pub(crate) fn agenda_tag_color<'a>(
-    tags: &'a [Tag],
-    tag_id: Option<i64>,
-    snapshot: Option<&'a str>,
-) -> Option<&'a str> {
-    match tag_id.and_then(|id| tags.iter().find(|tag| tag.id == id)) {
-        Some(tag) => tag.color.as_deref(),
-        None => snapshot,
     }
 }
 
@@ -115,6 +106,7 @@ pub(crate) struct AgendaMonthItem {
     pub(crate) title: String,
     pub(crate) tag_id: Option<i64>,
     pub(crate) tag_color: Option<String>,
+    pub(crate) tag_class: force_core::TagClass,
     pub(crate) status: AgendaItemStatus,
     pub(crate) seconds: i64,
     pub(crate) planned: bool,
@@ -138,6 +130,8 @@ pub(crate) struct AgendaState {
     pub(crate) planned_days: Vec<NaiveDate>,
     pub(crate) actual_days: Vec<NaiveDate>,
     pub(crate) records: Vec<Session>,
+    pub(crate) day_moments: Vec<Moment>,
+    pub(crate) month_moments: Vec<Moment>,
     pub(crate) completed_tasks: Vec<Task>,
     pub(crate) stats: Stats,
     pub(crate) selected_plan: Option<i64>,
@@ -248,6 +242,8 @@ impl AgendaState {
             planned_days: Vec::new(),
             actual_days: Vec::new(),
             records: Vec::new(),
+            day_moments: Vec::new(),
+            month_moments: Vec::new(),
             completed_tasks: Vec::new(),
             stats: Stats::default(),
             selected_plan: None,
@@ -328,8 +324,12 @@ impl ForceView {
             merge_active_records(&mut month_records, &self.active, &visible_dates, self.now);
             let month_completions =
                 store.completed_tasks_between(visible_start, visible_end, self.now)?;
-            let actual_days =
+            let month_moments = store.moments_between(visible_start, visible_end)?;
+            let mut actual_days =
                 agenda_actual_dates(&visible_dates, &month_records, &month_completions, self.now);
+            actual_days.extend(month_moments.iter().filter_map(moment_date));
+            actual_days.sort_unstable();
+            actual_days.dedup();
             let month_plans = store.plans_between(range_first, range_end)?;
             let mut planned_days: Vec<_> = month_plans.iter().map(|plan| plan.day).collect();
             planned_days.sort_unstable();
@@ -344,6 +344,8 @@ impl ForceView {
                 month_records,
                 month_completions,
                 month_plans,
+                store.moments_between(start, end)?,
+                month_moments,
             ))
         })();
         match snapshot {
@@ -357,6 +359,8 @@ impl ForceView {
                 month_records,
                 month_completions,
                 month_plans,
+                day_moments,
+                month_moments,
             )) => {
                 self.agenda.month_days = agenda_month_days(
                     &visible_dates,
@@ -367,6 +371,9 @@ impl ForceView {
                     &self.active,
                     self.now,
                 );
+                merge_month_moments(&mut self.agenda.month_days, &month_moments);
+                self.agenda.day_moments = day_moments;
+                self.agenda.month_moments = month_moments;
                 self.agenda.month_records = month_records;
                 self.agenda.month_completions = month_completions;
                 self.agenda.month_plans = month_plans;
@@ -435,6 +442,7 @@ impl ForceView {
             &self.active,
             self.now,
         );
+        merge_month_moments(&mut self.agenda.month_days, &self.agenda.month_moments);
         if visible_dates.contains(&today)
             && !self.agenda.actual_days.contains(&today)
             && !agenda_actual_dates(&[today], &self.active, &[], self.now).is_empty()
@@ -453,7 +461,7 @@ impl ForceView {
             .map(|tag| FocusTagOption {
                 id: tag.id,
                 name: tag.name.clone(),
-                color: tag.color.clone(),
+                color: self.display_tag_color(tag).map(str::to_owned),
             })
             .collect();
         let selected = options
@@ -571,6 +579,8 @@ impl ForceView {
 
     /// Closing a contextual view never commits a plan or loses a changed draft.
     pub(crate) fn suspend_agenda_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.time_picker
+            .update(cx, |picker, cx| picker.dismiss(window, cx));
         if self.agenda.editing && !self.agenda_has_unsaved_changes(cx) {
             self.cancel_plan_edit(window, cx);
             return;
@@ -1111,6 +1121,8 @@ impl ForceView {
     }
 
     pub(crate) fn cancel_plan_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.time_picker
+            .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.agenda.editing = false;
         self.agenda.editor_visible = false;
         self.agenda.popup_open = false;
@@ -1208,15 +1220,16 @@ impl ForceView {
     }
 
     pub(crate) fn agenda_task_color(&self, task_id: i64) -> Option<&str> {
-        agenda_tag_color(
-            &self.tags,
+        let record = self
+            .agenda
+            .records
+            .iter()
+            .chain(&self.active)
+            .find(|record| record.task_id == Some(task_id));
+        self.display_color(
             self.agenda_task_tag_id(task_id),
-            self.agenda
-                .records
-                .iter()
-                .chain(&self.active)
-                .find(|record| record.task_id == Some(task_id))
-                .and_then(|record| record.tag_color.as_deref()),
+            record.map_or(force_core::TagClass::Legacy, |record| record.tag_class),
+            record.and_then(|record| record.tag_color.as_deref()),
         )
     }
 
@@ -1543,6 +1556,7 @@ fn agenda_month_days(
                     title: record.title.clone(),
                     tag_id: Some(record.tag_id),
                     tag_color: record.tag_color.clone(),
+                    tag_class: record.tag_class,
                     status: AgendaItemStatus::Recorded,
                     seconds: 0,
                     planned: false,
@@ -1571,6 +1585,7 @@ fn agenda_month_days(
                         title: task.title.clone(),
                         tag_id: Some(task.tag_id),
                         tag_color: None,
+                        tag_class: force_core::TagClass::Legacy,
                         status: AgendaItemStatus::Completed,
                         seconds: 0,
                         planned: false,
@@ -1612,6 +1627,11 @@ fn agenda_month_days(
                                     .find(|record| record.task_id == Some(plan.task_id))
                                     .map(|record| record.tag_id)
                             }),
+                        tag_class: records
+                            .iter()
+                            .chain(active)
+                            .find(|record| record.task_id == Some(plan.task_id))
+                            .map_or(force_core::TagClass::Legacy, |record| record.tag_class),
                         tag_color: records
                             .iter()
                             .chain(active)
@@ -1655,6 +1675,43 @@ fn agenda_month_days(
             (*day, items)
         })
         .collect()
+}
+
+fn moment_date(moment: &Moment) -> Option<NaiveDate> {
+    Local
+        .timestamp_opt(moment.occurred_at, 0)
+        .single()
+        .map(|time| time.date_naive())
+}
+
+/// Point notes occupy a row, never a duration or an invented timer session.
+fn merge_month_moments(days: &mut BTreeMap<NaiveDate, Vec<AgendaMonthItem>>, moments: &[Moment]) {
+    for moment in moments {
+        let Some(time) = Local.timestamp_opt(moment.occurred_at, 0).single() else {
+            continue;
+        };
+        let Some(items) = days.get_mut(&time.date_naive()) else {
+            continue;
+        };
+        let title = moment.content.lines().next().unwrap_or_default();
+        let item = AgendaMonthItem {
+            title: format!("{} {title}", time.format("%H:%M")),
+            tag_id: None,
+            tag_color: None,
+            tag_class: force_core::TagClass::Legacy,
+            status: AgendaItemStatus::Moment,
+            seconds: 0,
+            planned: false,
+            completed: false,
+            rest: false,
+            moved: false,
+        };
+        let index = items
+            .iter()
+            .position(|item| item.planned)
+            .unwrap_or(items.len());
+        items.insert(index, item);
+    }
 }
 
 pub(crate) fn agenda_clock(minute: u16) -> String {
@@ -1724,12 +1781,12 @@ fn validate_plan_fields(draft: &PlanInputSnapshot) -> Result<(NaiveDate, u16, u1
 mod tests {
     use super::{
         AgendaItemStatus, PlanInputSnapshot, agenda_actual_dates, agenda_clock, agenda_month_days,
-        agenda_tag_color, agenda_visible_dates, merge_active_records, parse_plan_time,
+        agenda_visible_dates, merge_active_records, merge_month_moments, parse_plan_time,
         record_status, validate_plan_fields,
     };
     use crate::model::day_bounds;
     use chrono::{Datelike, Days, NaiveDate};
-    use force_core::{Interval, PlanEntry, Session, Tag, TagClass, TagKind, Task};
+    use force_core::{Interval, PlanEntry, Session, TagKind, Task};
     fn draft() -> PlanInputSnapshot {
         PlanInputSnapshot {
             title: "Read".into(),
@@ -2128,24 +2185,6 @@ mod tests {
     }
 
     #[test]
-    fn calendar_tag_color_uses_current_color_including_clear_and_deleted_snapshot_fallback() {
-        let mut tags = vec![Tag {
-            id: 1,
-            name: "Work".into(),
-            kind: TagKind::Focus,
-            class: TagClass::Positive,
-            color: Some("#688BA5".into()),
-        }];
-        let snapshot = Some("#B56F67");
-        assert_eq!(agenda_tag_color(&tags, Some(1), snapshot), Some("#688BA5"));
-        tags[0].color = None;
-        assert_eq!(agenda_tag_color(&tags, Some(1), snapshot), None);
-        tags.clear();
-        assert_eq!(agenda_tag_color(&tags, Some(1), snapshot), snapshot);
-        assert_eq!(agenda_tag_color(&tags, None, None), None);
-    }
-
-    #[test]
     fn calendar_status_distinguishes_finished_rounds_and_today_clock_without_rewriting_history() {
         let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
         let previous = day.pred_opt().unwrap();
@@ -2236,6 +2275,44 @@ mod tests {
             days[&day]
                 .iter()
                 .all(|item| item.planned && item.seconds == 0)
+        );
+    }
+
+    #[test]
+    fn moment_month_rows_use_local_points_without_adding_minutes_or_completions() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let next = day.succ_opt().unwrap();
+        let start = day_bounds(day).0;
+        let next_start = day_bounds(next).0;
+        let mut days = agenda_month_days(&[day, next], &[], &[], &[], &[], &[], next_start + 60);
+        let moments = [
+            force_core::Moment {
+                id: 1,
+                content: "写下一点想法\n第二行".into(),
+                occurred_at: start,
+                created_at: next_start,
+                updated_at: next_start,
+            },
+            force_core::Moment {
+                id: 2,
+                content: "午夜记录".into(),
+                occurred_at: next_start,
+                created_at: next_start,
+                updated_at: next_start,
+            },
+        ];
+        merge_month_moments(&mut days, &moments);
+        assert_eq!(days[&day].len(), 1);
+        assert_eq!(days[&next].len(), 1);
+        assert_eq!(days[&day][0].title, "00:00 写下一点想法");
+        assert_eq!(days[&next][0].title, "00:00 午夜记录");
+        assert!(
+            days.values()
+                .flatten()
+                .all(|item| item.status == AgendaItemStatus::Moment
+                    && item.seconds == 0
+                    && !item.completed
+                    && !item.planned)
         );
     }
 

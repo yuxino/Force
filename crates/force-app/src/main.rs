@@ -7,15 +7,22 @@ mod activity_view;
 mod agenda_model;
 mod agenda_popover_view;
 mod agenda_view;
+mod analysis_model;
+mod analysis_view;
+mod classification_model;
+mod classification_view;
 mod control_style;
 mod floating_view;
 mod focus_view;
 mod label;
 mod model;
+mod moment_model;
+mod moment_view;
 mod platform;
 mod records_view;
 mod settings_view;
 mod tag_picker;
+mod time_picker;
 mod updates;
 mod view;
 
@@ -24,9 +31,15 @@ mod activity_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod agenda_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
+mod analysis_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
 mod headless_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
+mod moment_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
 mod task_draft_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
+mod time_picker_ui_tests;
 
 use gpui::{prelude::*, *};
 use gpui_component::{Root, Theme, ThemeMode};
@@ -38,6 +51,8 @@ actions!(
     [
         Quit,
         NewTask,
+        NewMoment,
+        SaveMoment,
         ToggleCompact,
         PrimaryAction,
         FinishSegment,
@@ -189,6 +204,8 @@ fn main() -> anyhow::Result<()> {
         cx.bind_keys([
             KeyBinding::new("secondary-q", Quit, None),
             KeyBinding::new("secondary-n", NewTask, None),
+            KeyBinding::new("secondary-shift-n", NewMoment, None),
+            KeyBinding::new("secondary-enter", SaveMoment, None),
             KeyBinding::new("secondary-p", PrimaryAction, None),
             KeyBinding::new("secondary-shift-p", FinishSegment, None),
             KeyBinding::new("secondary-,", ShowSettings, None),
@@ -210,6 +227,7 @@ fn main() -> anyhow::Result<()> {
                 name: "计时".into(),
                 items: vec![
                     MenuItem::action("新任务…", NewTask),
+                    MenuItem::action("随手记…", NewMoment),
                     MenuItem::separator(),
                     MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
                     MenuItem::action("结束本次计时", FinishSegment),
@@ -317,6 +335,16 @@ fn main() -> anyhow::Result<()> {
         match strip {
             Ok(strip) => {
                 model.update(cx, |model, _| model.strip_window = Some(strip));
+                cx.on_action(move |_: &NewMoment, cx| {
+                    with_force(handle, cx, |this, window, cx| {
+                        this.begin_moment(None, window, cx)
+                    })
+                });
+                cx.on_action(move |_: &SaveMoment, cx| {
+                    with_force(handle, cx, |this, window, cx| {
+                        this.save_moment(window, cx);
+                    })
+                });
                 cx.on_action(move |_: &NewTask, cx| {
                     with_force(handle, cx, |this, window, cx| this.new_task(window, cx))
                 });
