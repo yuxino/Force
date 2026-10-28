@@ -2,7 +2,7 @@ use chrono::{Local, TimeZone};
 use force_core::{Session, TagKind};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Icon, IconName,
+    IconName,
     button::ButtonVariants,
     scroll::{Scrollbar, ScrollbarShow},
     tooltip::Tooltip,
@@ -172,8 +172,7 @@ impl ForceView {
                                             )
                                         })
                                         .child(if let Some(session) = &self.completed {
-                                            self.completed_panel(session, compact, cx)
-                                                .into_any_element()
+                                            self.completed_panel(session, cx).into_any_element()
                                         } else if !self.preparing
                                             && let Some(session) = self.current_session()
                                         {
@@ -999,20 +998,6 @@ impl ForceView {
                                     cx.listener(move |this, _, _, cx| this.finish(id, cx))
                                 }),
                         )
-                    })
-                    .when(!rest, |row| {
-                        row.child(
-                            button("running-rest")
-                                .debug_selector(|| "running-rest".into())
-                                .w(px(124.))
-                                .custom(crate::view::quiet_variant(cx))
-                                .h(px(44.))
-                                .px(px(12.))
-                                .child(control_label("休息 5 分钟", MUTED))
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.start_break(window, cx)),
-                                ),
-                        )
                     }),
             )
     }
@@ -1079,12 +1064,7 @@ impl ForceView {
             })
     }
 
-    fn completed_panel(
-        &self,
-        session: &Session,
-        compact: bool,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn completed_panel(&self, session: &Session, cx: &mut Context<Self>) -> impl IntoElement {
         let rest = session.tag_kind == TagKind::Rest;
         let return_task = self.return_focus_task();
         div()
@@ -1098,19 +1078,6 @@ impl ForceView {
                     .flex()
                     .flex_col()
                     .gap(px(8.))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(px(6.))
-                            .text_color(rgb(MUTED))
-                            .child(Icon::new(IconName::Check).size(px(14.)))
-                            .child(field_label(if rest {
-                                "休息结束"
-                            } else {
-                                "本轮已结束"
-                            })),
-                    )
                     .child(task_heading(&session.tag_name))
                     .when(session.tag_name.trim() != session.title.trim(), |body| {
                         let name = session.title.clone();
@@ -1134,24 +1101,25 @@ impl ForceView {
             )
             .child(
                 div()
+                    .debug_selector(|| "focus-saved-state".into())
                     .flex()
-                    .flex_col()
-                    .gap(px(12.))
-                    .child(timer_readout(session.elapsed_at(self.now), compact, cx))
-                    .child(field_label(if rest {
-                        "休息时长"
-                    } else {
-                        "本轮时长"
-                    })),
-            )
-            .when_some(
-                session.target_seconds.filter(|target| *target > 0),
-                |body, target| body.child(countdown_progress(session.elapsed_at(self.now), target)),
+                    .items_baseline()
+                    .gap(px(8.))
+                    .child(field_label("已保存 ·"))
+                    .child(
+                        div()
+                            .debug_selector(|| "focus-saved-duration".into())
+                            .font(timer_font(cx))
+                            .text_size(px(16.))
+                            .text_color(rgb(INK))
+                            .child(clock(session.elapsed_at(self.now))),
+                    ),
             )
             .child(
                 div()
                     .flex()
                     .gap(px(12.))
+                    .flex_wrap()
                     .child(
                         primary_button("continue-task")
                             .debug_selector(|| "continue-task".into())
@@ -1166,7 +1134,7 @@ impl ForceView {
                                         "新建任务"
                                     }
                                 } else {
-                                    "再开始一轮"
+                                    "再计一次"
                                 },
                                 0xffffff,
                             ))
@@ -1176,7 +1144,7 @@ impl ForceView {
                                     |task| format!("继续：{}", task.title),
                                 )
                             } else {
-                                "为同一任务开始一次新的计时，原记录保留".to_owned()
+                                "开始新的计时，已保存的记录保留".to_owned()
                             })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 if rest {
@@ -1186,20 +1154,6 @@ impl ForceView {
                                 }
                             })),
                     )
-                    .when(!rest, |row| {
-                        row.child(
-                            outlined_button("rest-five")
-                                .debug_selector(|| "rest-five".into())
-                                .w(px(124.))
-                                .h(px(44.))
-                                .rounded(px(6.))
-                                .child(control_label("休息 5 分钟", INK))
-                                .tooltip("暂停当前计时并开始休息倒计时；已计时间保留")
-                                .on_click(
-                                    cx.listener(|this, _, window, cx| this.start_break(window, cx)),
-                                ),
-                        )
-                    })
                     .when(!rest && session.task_id.is_some(), |row| {
                         row.child(
                             button("complete-task")

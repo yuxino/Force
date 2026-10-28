@@ -344,6 +344,7 @@ impl Render for ForceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tag_picker(window, cx);
         self.sync_record_editor_picker(window, cx);
+        self.sync_completion_editor_picker(window, cx);
         self.sync_agenda_tag_picker(window, cx);
         let viewport = window.viewport_size();
         // Shape activity labels to the available task-operation column.
@@ -374,6 +375,9 @@ impl Render for ForceView {
             })
             .when(self.record_editor.visible, |body| {
                 body.child(self.record_editor(window, cx))
+            })
+            .when(self.completion_editor.visible, |body| {
+                body.child(self.completion_editor(window, cx))
             })
             .when(self.time_picker.read(cx).is_open(), |body| {
                 body.child(self.time_picker.clone())

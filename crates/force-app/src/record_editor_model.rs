@@ -337,6 +337,7 @@ impl ForceView {
     }
 
     fn reveal_record_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_completion_editor(window, cx);
         self.suspend_moment(window, cx);
         self.suspend_agenda_popup(window, cx);
         self.tag_picker
@@ -396,7 +397,9 @@ impl ForceView {
         let mut options: Vec<_> = self
             .tags
             .iter()
-            .filter(|tag| tag.kind == TagKind::Focus || original.is_some())
+            .filter(|tag| {
+                tag.kind == TagKind::Focus || original.is_some_and(|record| record.tag_id == tag.id)
+            })
             .map(|tag| FocusTagOption {
                 id: tag.id,
                 name: tag.name.clone(),
@@ -558,6 +561,20 @@ impl ForceView {
                 }
                 self.refresh(cx);
                 self.cancel_record_editor(window, cx);
+                if self.page == crate::model::Page::Agenda
+                    && !self
+                        .agenda
+                        .records
+                        .iter()
+                        .any(|entry| entry.id == record.id)
+                    && let Some(date) = Local
+                        .timestamp_opt(record.started_at, 0)
+                        .single()
+                        .map(|time| time.date_naive())
+                {
+                    self.select_agenda_date(date, window, cx);
+                    self.select_agenda_record(record.id, window, cx);
+                }
                 self.notify("记录已保存。", cx);
                 true
             }

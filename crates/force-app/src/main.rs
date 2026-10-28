@@ -11,6 +11,8 @@ mod analysis_model;
 mod analysis_view;
 mod classification_model;
 mod classification_view;
+mod completion_editor_model;
+mod completion_editor_view;
 mod control_style;
 mod floating_view;
 mod focus_view;
@@ -37,6 +39,8 @@ mod agenda_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod analysis_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
+mod completion_editor_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
 mod headless_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod moment_ui_tests;
@@ -62,7 +66,6 @@ actions!(
         ToggleCompact,
         PrimaryAction,
         FinishSegment,
-        StartBreak,
         ShowRecords,
         ShowSettings,
         CheckUpdates,
@@ -237,7 +240,6 @@ fn main() -> anyhow::Result<()> {
                     MenuItem::separator(),
                     MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
                     MenuItem::action("结束本次计时", FinishSegment),
-                    MenuItem::action("休息 5 分钟", StartBreak),
                 ],
             },
             Menu {
@@ -348,7 +350,9 @@ fn main() -> anyhow::Result<()> {
                 });
                 cx.on_action(move |_: &SaveMoment, cx| {
                     with_force(handle, cx, |this, window, cx| {
-                        if this.record_editor.visible {
+                        if this.completion_editor.visible {
+                            this.save_completion_editor(window, cx);
+                        } else if this.record_editor.visible {
                             this.save_record_editor(window, cx);
                         } else {
                             this.save_moment(window, cx);
@@ -376,11 +380,6 @@ fn main() -> anyhow::Result<()> {
                         if let Some(id) = this.strip_session().map(|session| session.id) {
                             this.finish(id, cx);
                         }
-                    })
-                });
-                cx.on_action(move |_: &StartBreak, cx| {
-                    with_force(handle, cx, |this, window, cx| {
-                        this.start_global_break(window, cx)
                     })
                 });
                 cx.on_action(move |_: &ShowRecords, cx| {

@@ -227,6 +227,7 @@ impl ForceView {
 
     fn reveal_moment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.suspend_record_editor(window, cx);
+        self.suspend_completion_editor(window, cx);
         self.time_picker
             .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.suspend_agenda_popup(window, cx);
@@ -311,6 +312,7 @@ impl ForceView {
     }
 
     pub(crate) fn delete_moment(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        let return_focus = window.focused(cx);
         let answer = window.prompt(
             PromptLevel::Warning,
             "删除这条随记？",
@@ -319,18 +321,29 @@ impl ForceView {
             cx,
         );
         cx.spawn_in(window, async move |this, cx| {
-            if let Ok(1) = answer.await {
-                let _ = cx.update(|window, cx| {
-                    let _ = this.update(cx, |this, cx| {
-                        if this.write(|store| store.delete_moment(id), cx) {
-                            if this.moments.editing == Some(id) {
-                                this.cancel_moment(window, cx);
-                            }
-                            this.notify("随记已删除。", cx);
+            let choice = answer.await;
+            let _ = cx.update(|window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if !this.compact {
+                        window.activate_window();
+                        if let Some(focus) = return_focus.as_ref() {
+                            focus.focus(window);
                         }
-                    });
+                    }
+                    match choice {
+                        Ok(1) => {
+                            if this.write(|store| store.delete_moment(id), cx) {
+                                if this.moments.editing == Some(id) {
+                                    this.cancel_moment(window, cx);
+                                }
+                                this.notify("随记已删除。", cx);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(_) => this.notify("无法确认删除，请重试。", cx),
+                    }
                 });
-            }
+            });
         })
         .detach();
     }

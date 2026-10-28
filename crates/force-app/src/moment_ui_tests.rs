@@ -140,6 +140,66 @@ fn moment_ui_multiline_note_saves_as_a_point_without_starting_or_counting_time(
 }
 
 #[gpui::test]
+fn moment_ui_cat_task_reveal_suspends_note_without_losing_either_draft(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.new_task(window, cx);
+        view.selected_tag = 1;
+        view.task_input
+            .update(cx, |input, cx| input.set_value("Prepared task", window, cx));
+        view.countdown = true;
+        view.timer_input
+            .update(cx, |input, cx| input.set_value("0", window, cx));
+        view.begin_moment(None, window, cx);
+        view.moments.content.update(cx, |input, cx| {
+            input.set_value("Keep this unsaved thought", window, cx)
+        });
+        view.moments
+            .date
+            .update(cx, |input, cx| input.set_value("2026-02-30", window, cx));
+        view.moments
+            .time
+            .update(cx, |input, cx| input.set_value("09:15", window, cx));
+    });
+    settle(&mut manager);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(view.moments.visible);
+        view.hide_manager(window, cx);
+        view.show_strip_task(window, cx);
+        assert_eq!(view.page, Page::Focus);
+        assert!(!view.compact);
+        assert!(!view.moments.visible);
+        assert!(view.moments.active);
+        assert!(
+            view.timer_input
+                .read(cx)
+                .focus_handle(cx)
+                .is_focused(window)
+        );
+        assert_eq!(view.task_input.read(cx).value(), "Prepared task");
+        assert_eq!(view.selected_tag, 1);
+        assert!(view.countdown);
+        assert_eq!(view.timer_input.read(cx).value(), "0");
+    });
+    settle(&mut manager);
+    assert!(!manager.cx.has_pending_prompt());
+    manager.click("global-new-moment");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.moments.visible);
+        assert!(view.moments.editing.is_none());
+        assert_eq!(
+            view.moments.content.read(cx).value(),
+            "Keep this unsaved thought"
+        );
+        assert_eq!(view.moments.date.read(cx).value(), "2026-02-30");
+        assert_eq!(view.moments.time.read(cx).value(), "09:15");
+        assert!(view.tasks.is_empty());
+        assert!(view.active.is_empty());
+        assert!(view.record_moments.is_empty());
+    });
+}
+
+#[gpui::test]
 fn moment_ui_invalid_and_suspended_drafts_survive_navigation_and_window_reopening(
     cx: &mut TestAppContext,
 ) {
@@ -331,10 +391,116 @@ fn moment_ui_switching_edit_targets_protects_changes_and_delete_requires_confirm
 }
 
 #[gpui::test]
+fn moment_ui_editor_delete_preserves_calendar_plan_draft_and_running_timer(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let day = Local::now().date_naive().pred_opt().unwrap();
+        let moment = seed_moment(&mut manager, day, "已有随记");
+        let running = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let running = view
+                .store
+                .as_mut()
+                .unwrap()
+                .create_and_start_task("保持计时", 1, view.now - 300, None)
+                .unwrap();
+            view.refresh(cx);
+            view.open_agenda_day(day, window, cx);
+            view.begin_plan(None, window, cx);
+            view.agenda.title_input.update(cx, |input, cx| {
+                input.set_value("尚未保存的计划", window, cx)
+            });
+            view.edit_moment(moment.clone(), window, cx);
+            view.moments
+                .content
+                .update(cx, |input, cx| input.set_value("保留这次修改", window, cx));
+            running
+        });
+        settle(&mut manager);
+        let viewport = Bounds::new(Point::default(), size(px(width), px(height)));
+        let editor = manager.bounds("moment-editor");
+        assert_inside(editor, viewport);
+        for selector in ["save-moment", "cancel-moment", "delete-moment-editor"] {
+            assert_inside(manager.bounds(selector), editor);
+        }
+        assert!(
+            manager.bounds("cancel-moment").right() < manager.bounds("delete-moment-editor").left()
+        );
+        manager.click("delete-moment-editor");
+        assert!(manager.cx.has_pending_prompt());
+        manager.cx.simulate_prompt_answer("取消");
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.page, Page::Agenda);
+            assert_eq!(view.agenda.date, day);
+            assert!(view.moments.visible && view.moments.active);
+            assert_eq!(view.moments.editing, Some(moment.id));
+            assert_eq!(view.moments.content.read(cx).value(), "保留这次修改");
+            assert_eq!(view.agenda.day_moments, vec![moment.clone()]);
+            assert!(view.agenda_has_suspended_draft(cx));
+        });
+        // No click or programmatic refocus after the native prompt: ordinary
+        // key input must still reach the existing draft, without saving it.
+        manager.cx.simulate_keystrokes("x");
+        settle(&mut manager);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert!(
+                view.moments
+                    .content
+                    .read(cx)
+                    .focus_handle(cx)
+                    .is_focused(window)
+            );
+            assert_eq!(view.moments.content.read(cx).value(), "x保留这次修改");
+            assert!(view.moments.visible && view.moments.active);
+            let (start, end) = day_bounds(day);
+            assert_eq!(
+                view.store
+                    .as_ref()
+                    .unwrap()
+                    .moments_between(start, end)
+                    .unwrap(),
+                vec![moment.clone()],
+                "canceling deletion and typing must not write the draft"
+            );
+            assert_eq!(view.agenda.day_moments, vec![moment.clone()]);
+            assert_eq!(view.agenda.title_input.read(cx).value(), "尚未保存的计划");
+        });
+        manager.click("delete-moment-editor");
+        manager.cx.simulate_prompt_answer("删除");
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.page, Page::Agenda);
+            assert_eq!(view.agenda.date, day);
+            assert!(!view.moments.visible && !view.moments.active);
+            assert_eq!(view.moments.editing, None);
+            assert!(view.agenda.day_moments.is_empty());
+            assert!(view.agenda_has_suspended_draft(cx));
+            assert_eq!(view.agenda.title_input.read(cx).value(), "尚未保存的计划");
+            assert_eq!(
+                view.store.as_ref().unwrap().active_sessions().unwrap(),
+                vec![running.clone()]
+            );
+            let (start, end) = day_bounds(day);
+            assert!(
+                view.store
+                    .as_ref()
+                    .unwrap()
+                    .moments_between(start, end)
+                    .unwrap()
+                    .is_empty()
+            );
+        });
+    }
+}
+
+#[gpui::test]
 fn moment_ui_editor_fits_and_record_search_does_not_classify_point_notes(cx: &mut TestAppContext) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
         let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Records);
         manager.click("global-new-moment");
+        assert!(manager.cx.debug_bounds("delete-moment-editor").is_none());
         manager
             .cx
             .simulate_input(&"A long thought with details\n".repeat(12));

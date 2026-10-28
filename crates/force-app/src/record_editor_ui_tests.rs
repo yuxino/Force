@@ -430,3 +430,152 @@ fn record_editor_existing_zero_second_round_can_keep_its_time_while_changing_des
         assert_eq!(saved.title, "补上说明");
     });
 }
+
+#[gpui::test]
+fn deleting_a_record_clears_only_its_own_suspended_editor_and_saved_receipt(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let record = seed(&mut manager, 2);
+    let other = seed(&mut manager, 1);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.completed = Some(record.clone());
+        view.edit_record(record.clone(), window, cx);
+        view.record_editor.description.update(cx, |input, cx| {
+            input.set_value("尚未保存的修改", window, cx)
+        });
+        view.suspend_record_editor(window, cx);
+        view.delete_record(record.id, window, cx);
+    });
+    manager.cx.simulate_prompt_answer("取消");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.record_editor.active);
+        assert_eq!(view.completed.as_ref().unwrap().id, record.id);
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.delete_record(other.id, window, cx);
+    });
+    manager.cx.simulate_prompt_answer("删除");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(view.record_editor.active);
+        assert_eq!(view.record_editor.original.as_ref().unwrap().id, record.id);
+        assert_eq!(view.completed.as_ref().unwrap().id, record.id);
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.delete_record(record.id, window, cx);
+    });
+    manager.cx.simulate_prompt_answer("删除");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.record_editor.active);
+        assert!(!view.record_editor.visible);
+        assert!(view.record_editor.original.is_none());
+        assert!(view.completed.is_none());
+        assert_eq!(view.page as u8, Page::Agenda as u8);
+    });
+}
+
+#[gpui::test]
+fn editing_focus_records_does_not_offer_new_rest_but_keeps_a_legacy_rest_activity(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Records);
+    let record = seed(&mut manager, 1);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.edit_record(record, window, cx);
+    });
+    settle(&mut manager);
+    manager.click("record-editor-activity");
+    assert!(manager.cx.debug_bounds("focus-tag-option-4").is_none());
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.cancel_record_editor(window, cx);
+        let store = view.store.as_mut().unwrap();
+        let rest = store.start_break(4, view.now - 600, 300).unwrap();
+        let rest = store.finish_exact_target(rest.id, view.now).unwrap();
+        view.refresh(cx);
+        view.edit_record(rest, window, cx);
+    });
+    settle(&mut manager);
+    manager.click("record-editor-activity");
+    assert!(manager.cx.debug_bounds("focus-tag-option-4").is_some());
+}
+
+#[gpui::test]
+fn deleting_the_just_saved_round_restores_editable_task_setup(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Focus);
+    let id = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.new_task(window, cx);
+        view.selected_tag = 2;
+        view.start(window, cx);
+        let id = view.selected_session.unwrap();
+        view.finish(id, cx);
+        assert!(view.completed.is_some());
+        assert!(!view.preparing);
+        view.navigate(Page::Agenda, window, cx);
+        view.delete_record(id, window, cx);
+        id
+    });
+    manager.cx.simulate_prompt_answer("删除");
+    settle(&mut manager);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(
+            view.store
+                .as_ref()
+                .unwrap()
+                .record_edit_snapshot(id)
+                .is_err()
+        );
+        assert!(view.preparing);
+        assert!(view.page == Page::Agenda);
+        view.navigate(Page::Focus, window, cx);
+        view.task_input
+            .update(cx, |input, cx| input.set_value("新的具体内容", window, cx));
+        assert!(view.task_has_unsaved_changes(cx));
+        assert!(view.save_task_changes(cx));
+        view.start(window, cx);
+        let running = view
+            .active
+            .iter()
+            .find(|record| Some(record.id) == view.selected_session)
+            .unwrap();
+        assert_eq!(running.title, "新的具体内容");
+    });
+}
+
+#[gpui::test]
+fn moving_a_record_to_another_day_keeps_the_saved_record_visible_in_calendar(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let record = seed(&mut manager, 1);
+    let before = Local
+        .timestamp_opt(record.started_at, 0)
+        .single()
+        .unwrap()
+        .date_naive();
+    let moved = before.checked_sub_days(Days::new(1)).unwrap();
+    let end = day_bounds(moved).0 + 60;
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.open_agenda_day(before, window, cx);
+        view.select_agenda_record(record.id, window, cx);
+        view.edit_record(record.clone(), window, cx);
+    });
+    set_stamp(&mut manager, 0, false, end - 60);
+    set_stamp(&mut manager, 0, true, end);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(view.save_record_editor(window, cx));
+        assert!(view.page == Page::Agenda);
+        assert_eq!(view.agenda.date, moved);
+        assert_eq!(view.agenda.selected_record, Some(record.id));
+        assert!(
+            view.agenda
+                .records
+                .iter()
+                .any(|entry| entry.id == record.id)
+        );
+        assert!(view.agenda.popup_open);
+        assert!(!view.record_editor.active);
+    });
+}

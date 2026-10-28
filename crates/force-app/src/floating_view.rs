@@ -28,6 +28,7 @@ struct TimerFace {
     running: bool,
     paused: bool,
     completed: bool,
+    repeatable: bool,
     failed: bool,
     invalid_duration: bool,
     session: Option<i64>,
@@ -47,22 +48,26 @@ impl TimerFace {
 
     fn compact_display(&self) -> (String, String) {
         if self.failed {
-            ("!".to_owned(), "重试".to_owned())
-        } else if self.completed {
-            ("✓".to_owned(), "完成".to_owned())
+            ("重试".to_owned(), String::new())
         } else if self.invalid_duration {
-            ("—".to_owned(), "设置".to_owned())
+            ("设置时长".to_owned(), String::new())
         } else if self.idle {
-            ("+".to_owned(), String::new())
+            ("开始".to_owned(), String::new())
         } else {
-            (
-                compact_clock(self.seconds),
-                if self.seconds >= 3_600 {
-                    format!("{:02}:{:02}", self.seconds / 60 % 60, self.seconds % 60)
+            let detail = if self.completed {
+                "已保存"
+            } else if self.paused {
+                "已暂停"
+            } else if self.running {
+                if self.progress.is_some() {
+                    "剩余"
                 } else {
-                    String::new()
-                },
-            )
+                    "正计时"
+                }
+            } else {
+                "待开始"
+            };
+            (compact_clock(self.seconds), detail.to_owned())
         }
     }
 }
@@ -123,7 +128,7 @@ impl FloatingStrip {
         let state = if model.storage_failed {
             "打开 Force 重试"
         } else if completed {
-            "本轮已保存"
+            "已保存"
         } else if paused {
             "已暂停"
         } else if current.is_some_and(|s| s.tag_kind == TagKind::Rest) {
@@ -143,7 +148,7 @@ impl FloatingStrip {
                     if model.storage_failed || paused {
                         state.to_owned()
                     } else if completed {
-                        format!("已完成 · {}", clock(seconds))
+                        format!("已保存 · {}", clock(seconds))
                     } else if let Some(session) = current {
                         if session.tag_kind == TagKind::Rest {
                             "休息中".to_owned()
@@ -176,6 +181,11 @@ impl FloatingStrip {
             running: current.is_some_and(Session::is_running),
             paused,
             completed,
+            repeatable: completed
+                && model
+                    .completed
+                    .as_ref()
+                    .is_some_and(|session| session.tag_kind == TagKind::Focus),
             failed: model.storage_failed,
             invalid_duration,
             session: current.map(|s| s.id),
@@ -382,23 +392,23 @@ impl FloatingStrip {
 
     fn cat_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
         let (readout, detail) = face.compact_display();
-        // Keep the open-eye image in place. Only the cropped eye region of
-        // the aligned closed-eye image fades in, so the body never shifts.
-        // Mount the transparent patch even at rest to preload its image.
+        // The image and eye patch share one scale. Keep all typography below
+        // the paws so neither the coat nor the timer becomes a text backdrop.
+        let scale = 62. / 76.;
         let blink = div()
             .absolute()
-            .left(px(13.))
-            .top(px(24.))
-            .w(px(34.))
-            .h(px(16.))
+            .left(px(13. * scale))
+            .top(px(24. * scale))
+            .w(px(34. * scale))
+            .h(px(16. * scale))
             .overflow_hidden()
             .child(
                 img(crate::embedded_image_source("force-cat-blink.png"))
                     .absolute()
-                    .left(px(-13.))
-                    .top(px(-24.))
-                    .w(px(76.))
-                    .h(px(112.)),
+                    .left(px(-13. * scale))
+                    .top(px(-24. * scale))
+                    .w(px(62.))
+                    .h(px(112. * scale)),
             );
         let blink = if cat_click_active(self.face_click_started, Instant::now()) {
             blink
@@ -411,96 +421,12 @@ impl FloatingStrip {
         } else {
             blink.opacity(0.).into_any_element()
         };
-        let readout_size = if face.idle || face.failed || face.completed || face.invalid_duration {
-            18.
-        } else if face.seconds >= 3_600 && readout.chars().count() >= 6 {
-            10.
-        } else if face.seconds >= 3_600 && readout.chars().count() == 5 {
-            10.5
+        let readout_size = if readout.chars().count() > 8 {
+            11.5
         } else {
-            match readout.chars().count() {
-                0..=5 => 11.5,
-                6..=7 => 10.,
-                8 => 9.5,
-                _ => 8.,
-            }
+            13.
         };
-        let artwork = div()
-            .absolute()
-            .left_0()
-            .top_0()
-            .w(px(76.))
-            .h(px(116.))
-            .child(
-                img(crate::embedded_image_source("force-cat-clock.png"))
-                    .absolute()
-                    .left_0()
-                    .top_0()
-                    .w(px(76.))
-                    .h(px(112.)),
-            )
-            .child(blink)
-            .child(
-                div()
-                    .debug_selector(|| "strip-time".into())
-                    .absolute()
-                    .left(px(9.))
-                    .top(px(46.))
-                    .w(px(44.))
-                    .h(px(18.))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .font(timer_font(cx))
-                    .text_size(px(readout_size))
-                    .line_height(px(18.))
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(rgb(INK))
-                    .child(
-                        div()
-                            .debug_selector(|| "strip-time-text".into())
-                            .flex_none()
-                            .child(readout),
-                    ),
-            )
-            .when(face.show_paused_mark(), |artwork| {
-                artwork.child(
-                    div()
-                        .debug_selector(|| "strip-paused-mark".into())
-                        .absolute()
-                        .left(px(if detail.is_empty() { 28. } else { 9. }))
-                        .top(px(65.))
-                        .w(px(6.8))
-                        .h(px(6.))
-                        .flex()
-                        .justify_between()
-                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0x62544a)))
-                        .child(div().w(px(2.2)).h_full().rounded(px(0.7)).bg(rgb(0x62544a))),
-                )
-            })
-            .when(!detail.is_empty(), |artwork| {
-                artwork.child(
-                    div()
-                        .debug_selector(|| "strip-detail".into())
-                        .absolute()
-                        .left(px(if face.show_paused_mark() { 18. } else { 11. }))
-                        .top(px(65.))
-                        .w(px(if face.show_paused_mark() { 35. } else { 40. }))
-                        .h(px(11.))
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .text_size(px(8.))
-                        .line_height(px(10.))
-                        .text_color(rgb(0x62544a))
-                        .child(
-                            div()
-                                .debug_selector(|| "strip-detail-text".into())
-                                .flex_none()
-                                .child(detail),
-                        ),
-                )
-            });
+        let has_detail = !detail.is_empty();
         div()
             .id("cat-clock-face")
             .debug_selector(|| "strip-face".into())
@@ -508,18 +434,103 @@ impl FloatingStrip {
             .left(px(6.))
             .top(px(4.))
             .w(px(76.))
-            .h(px(116.))
+            .h(px(122.))
             .cursor_pointer()
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_face_press))
             .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
-            .child(artwork)
+            .child(
+                div()
+                    .debug_selector(|| "strip-artwork".into())
+                    .absolute()
+                    .left(px(7.))
+                    .top_0()
+                    .w(px(62.))
+                    .h(px(112. * scale))
+                    .child(img(crate::embedded_image_source("force-cat-clock.png")).size_full())
+                    .child(blink),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "strip-readout-plate".into())
+                    .absolute()
+                    .left_0()
+                    .top(px(92.))
+                    .w(px(76.))
+                    .h(px(30.))
+                    .rounded(px(8.))
+                    .bg(rgb(0xf7f7f7))
+                    .border_1()
+                    .border_color(rgb(0xd5d5d5))
+                    .child(
+                        div()
+                            .debug_selector(|| "strip-time".into())
+                            .absolute()
+                            .left(px(3.))
+                            .top(px(if has_detail { 0. } else { 6. }))
+                            .w(px(68.))
+                            .h(px(17.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .font(timer_font(cx))
+                            .text_size(px(readout_size))
+                            .line_height(px(17.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(rgb(INK))
+                            .child(
+                                div()
+                                    .debug_selector(|| "strip-time-text".into())
+                                    .flex_none()
+                                    .child(readout),
+                            ),
+                    )
+                    .when(has_detail, |plate| {
+                        plate.child(
+                            div()
+                                .debug_selector(|| "strip-detail".into())
+                                .absolute()
+                                .left(px(3.))
+                                .top(px(17.))
+                                .w(px(68.))
+                                .h(px(12.))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .gap(px(4.))
+                                .text_size(px(11.))
+                                .line_height(px(12.))
+                                .text_color(rgb(0x575757))
+                                .when(face.show_paused_mark(), |detail| {
+                                    detail.child(
+                                        div()
+                                            .debug_selector(|| "strip-paused-mark".into())
+                                            .w(px(5.))
+                                            .h(px(6.))
+                                            .flex_none()
+                                            .flex()
+                                            .justify_between()
+                                            .child(div().w(px(1.5)).h_full().bg(rgb(0x575757)))
+                                            .child(div().w(px(1.5)).h_full().bg(rgb(0x575757))),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .debug_selector(|| "strip-detail-text".into())
+                                        .flex_none()
+                                        .child(detail),
+                                ),
+                        )
+                    }),
+            )
     }
 
     fn drawer(&self, face: &TimerFace, cx: &mut Context<Self>) -> Div {
         let primary_label = if face.failed {
             "打开 Force"
+        } else if face.repeatable {
+            "再计一次"
         } else if face.completed {
-            "查看本轮"
+            "查看详情"
         } else if face.running {
             "暂停"
         } else if face.session.is_some() {
@@ -530,8 +541,8 @@ impl FloatingStrip {
             "查看任务"
         };
         let primary_icon = if face.failed
-            || face.completed
-            || (!face.running && face.session.is_none() && !face.ready)
+            || (face.completed && !face.repeatable)
+            || (!face.completed && !face.running && face.session.is_none() && !face.ready)
         {
             Icon::new(IconName::ArrowRight)
         } else {
@@ -698,16 +709,16 @@ impl FloatingStrip {
     }
 
     fn dock_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
-        let minutes = if face.failed {
-            "!".to_owned()
+        let (readout, unit) = if face.failed {
+            ("重试".to_owned(), String::new())
         } else if face.completed {
-            "✓".to_owned()
+            ("已存".to_owned(), String::new())
         } else if face.invalid_duration {
-            "—".to_owned()
+            ("设置".to_owned(), String::new())
         } else if face.idle {
-            "+".to_owned()
+            ("开始".to_owned(), String::new())
         } else {
-            compact_time(face.seconds).0
+            compact_time(face.seconds)
         };
         div()
             .id("cat-clock-dock")
@@ -729,13 +740,25 @@ impl FloatingStrip {
             .child(
                 div()
                     .font(timer_font(cx))
-                    .text_size(px(if minutes.chars().count() > 2 {
-                        10.
+                    .debug_selector(|| "strip-dock-time".into())
+                    .text_size(px(if readout.chars().count() > 2 {
+                        11.
                     } else {
-                        15.
+                        12.
                     }))
-                    .child(minutes),
+                    .line_height(px(16.))
+                    .child(readout),
             )
+            .when(!unit.is_empty(), |dock| {
+                dock.child(
+                    div()
+                        .debug_selector(|| "strip-dock-unit".into())
+                        .text_size(px(11.))
+                        .line_height(px(12.))
+                        .text_color(rgb(0xbcbcbc))
+                        .child(unit),
+                )
+            })
             .when(face.show_paused_mark(), |dock| {
                 dock.child(
                     div()
@@ -786,24 +809,16 @@ impl Render for FloatingStrip {
                             .top_0()
                             .size_full()
                             .child(
-                                Icon::default()
-                                    .path("force-cat-side-expanded-clock-outline.svg")
+                                div()
                                     .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .w(px(EXPANDED_WIDTH))
-                                    .h(px(EXPANDED_HEIGHT))
-                                    .text_color(rgb(0x858585)),
-                            )
-                            .child(
-                                Icon::default()
-                                    .path("force-cat-side-expanded-clock.svg")
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .w(px(EXPANDED_WIDTH))
-                                    .h(px(EXPANDED_HEIGHT))
-                                    .text_color(rgb(INK)),
+                                    .left(px(72.))
+                                    .top(px(42.))
+                                    .w(px(164.))
+                                    .h(px(88.))
+                                    .rounded(px(14.))
+                                    .border_1()
+                                    .border_color(rgb(0x5c5c5c))
+                                    .bg(rgb(INK)),
                             );
                         let drawer = self.drawer(&face, cx);
                         if self.disclosure_task.is_some() {
@@ -934,11 +949,8 @@ fn cat_blink_opacity(progress: f32) -> f32 {
 
 fn compact_clock(seconds: i64) -> String {
     let seconds = seconds.max(0);
-    let hours = seconds / 3_600;
-    if hours >= 10_000 {
-        "9999h+".to_owned()
-    } else if hours > 0 {
-        format!("{hours}h")
+    if seconds / 3_600 >= 10_000 {
+        "9999时+".to_owned()
     } else {
         clock(seconds)
     }
@@ -947,19 +959,16 @@ fn compact_clock(seconds: i64) -> String {
 fn compact_time(seconds: i64) -> (String, String) {
     let seconds = seconds.max(0);
     if seconds < 3600 {
-        (
-            format!("{:02}", seconds / 60),
-            format!("{:02}", seconds % 60),
-        )
+        (format!("{:02}", seconds / 60), "分".to_owned())
     } else {
         let hours = seconds / 3600;
         (
             if hours > 99 {
-                "99h+".to_owned()
+                "99+".to_owned()
             } else {
-                format!("{hours}h")
+                hours.to_string()
             },
-            format!("{:02}:{:02}", seconds % 3600 / 60, seconds % 60),
+            "时".to_owned(),
         )
     }
 }
@@ -1036,7 +1045,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(face.idle && !face.ready);
-            assert_eq!(face.compact_display().0, "+");
+            assert_eq!(face.compact_display().0, "开始");
         });
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.primary_action(window, cx);
@@ -1118,7 +1127,7 @@ mod tests {
 
     #[cfg(feature = "ui-test-support")]
     #[gpui::test]
-    fn compact_cat_keeps_idle_and_timer_text_in_the_body(cx: &mut gpui::TestAppContext) {
+    fn compact_cat_keeps_readouts_below_the_artwork_in_every_state(cx: &mut gpui::TestAppContext) {
         use crate::headless_ui_tests::ManagerHarness;
         use gpui::{
             AppContext as _, Bounds, Point, VisualTestContext, WindowBounds, WindowOptions, px,
@@ -1151,15 +1160,13 @@ mod tests {
         visual.update(|window, _| window.refresh());
         visual.run_until_parked();
 
-        // The idle action is a single mark; the text label must not return at
-        // the silhouette's lower edge.
-        let face = visual.debug_bounds("strip-face").unwrap();
+        let artwork = visual.debug_bounds("strip-artwork").unwrap();
+        let plate = visual.debug_bounds("strip-readout-plate").unwrap();
         let mark = visual.debug_bounds("strip-time-text").unwrap();
         assert!(visual.debug_bounds("strip-detail").is_none());
-        assert!(mark.left() >= face.left() + px(9.));
-        assert!(mark.right() <= face.left() + px(53.));
-        assert!(mark.top() >= face.top() + px(46.));
-        assert!(mark.bottom() <= face.top() + px(64.));
+        assert!(artwork.bottom() <= plate.top());
+        assert!(mark.left() >= plate.left() && mark.right() <= plate.right());
+        assert!(mark.top() >= plate.top() && mark.bottom() <= plate.bottom());
 
         // Render prepared, long-running, paused, completed and failed
         // states with real text boxes rather than only the outer layout.
@@ -1203,52 +1210,29 @@ mod tests {
             }
             visual.update(|window, _| window.refresh());
             visual.run_until_parked();
+            let root = visual.debug_bounds("strip-root").unwrap();
             let face = visual.debug_bounds("strip-face").unwrap();
+            let artwork = visual.debug_bounds("strip-artwork").unwrap();
+            let plate = visual.debug_bounds("strip-readout-plate").unwrap();
             let time = visual.debug_bounds("strip-time").unwrap();
-            let time_text = visual.debug_bounds("strip-time-text").unwrap();
-            assert!(time.left() >= face.left() + px(9.));
-            assert!(time.right() <= face.left() + px(53.));
-            assert!(time_text.left() >= face.left() + px(9.));
-            assert!(time_text.right() <= face.left() + px(53.));
-            {
-                let (text, container) = (time_text, time);
-                assert!(
-                    text.left() >= container.left() - px(1.),
-                    "{text:?} outside {container:?}"
-                );
-                assert!(
-                    text.right() <= container.right() + px(1.),
-                    "{text:?} outside {container:?}"
-                );
-                assert!(
-                    text.top() >= container.top() - px(1.),
-                    "{text:?} outside {container:?}"
-                );
-                assert!(
-                    text.bottom() <= container.bottom() + px(1.),
-                    "{text:?} outside {container:?}"
-                );
-                assert!(text.size.width > px(0.) && text.size.height > px(0.));
-            }
-            if (1..=3).contains(&state) {
+            let text = visual.debug_bounds("strip-time-text").unwrap();
+            assert_eq!(root.size, size(px(88.), px(128.)));
+            assert!(artwork.bottom() <= plate.top());
+            assert!(plate.left() >= face.left() && plate.right() <= face.right());
+            assert!(plate.bottom() <= root.bottom());
+            assert!(text.left() >= time.left() - px(1.) && text.right() <= time.right() + px(1.));
+            assert!(text.top() >= time.top() - px(1.) && text.bottom() <= time.bottom() + px(1.));
+            assert!(text.size.width > px(0.) && text.size.height > px(0.));
+            if state < 5 {
                 let detail = visual.debug_bounds("strip-detail-text").unwrap();
-                assert!(time_text.bottom() <= detail.top());
-                assert!(detail.left() >= face.left() + px(9.));
-                assert!(detail.right() <= face.left() + px(53.));
-                if state >= 2 {
+                assert!(text.bottom() <= detail.top());
+                assert!(detail.left() >= plate.left() && detail.right() <= plate.right());
+                assert!(detail.bottom() <= plate.bottom());
+                if (2..=3).contains(&state) {
                     let pause = visual.debug_bounds("strip-paused-mark").unwrap();
-                    assert!(time_text.bottom() <= pause.top() + px(1.));
-                    assert!(pause.bottom() <= face.top() + px(71.));
                     assert!(pause.right() < detail.left());
+                    assert!(pause.bottom() <= plate.bottom());
                 }
-            } else if state >= 4 {
-                let detail = visual.debug_bounds("strip-detail").unwrap();
-                let detail_text = visual.debug_bounds("strip-detail-text").unwrap();
-                assert!(time_text.bottom() <= detail_text.top());
-                assert!(detail_text.left() >= detail.left() - px(1.));
-                assert!(detail_text.right() <= detail.right() + px(1.));
-                assert!(detail_text.top() >= detail.top() - px(1.));
-                assert!(detail_text.bottom() <= detail.bottom() + px(1.));
             }
         }
         visual.update(|window, _| window.remove_window());
@@ -1325,14 +1309,15 @@ mod tests {
             cat.read_with(&visual, |cat, cx| {
                 let face = cat.timer_face(cx);
                 assert!(face.failed && face.paused);
-                assert_eq!(face.compact_display(), ("!".into(), "重试".into()));
+                assert_eq!(face.compact_display(), ("重试".into(), String::new()));
                 assert!(!face.show_paused_mark());
             });
             if docked {
                 assert!(visual.debug_bounds("strip-dock").is_some());
                 assert!(visual.debug_bounds("strip-dock-paused-mark").is_none());
             } else {
-                assert!(visual.debug_bounds("strip-detail-text").is_some());
+                assert!(visual.debug_bounds("strip-time-text").is_some());
+                assert!(visual.debug_bounds("strip-detail-text").is_none());
                 assert!(visual.debug_bounds("strip-paused-mark").is_none());
             }
             visual.update(|window, _| window.remove_window());
@@ -1372,7 +1357,7 @@ mod tests {
                 let face = cat.timer_face(cx);
                 assert!(face.invalid_duration && !face.ready);
                 assert_eq!(face.status, "设置时长");
-                assert_eq!(face.compact_display(), ("—".into(), "设置".into()));
+                assert_eq!(face.compact_display(), ("设置时长".into(), String::new()));
             });
             manager.view.read_with(&manager.cx, |view, cx| {
                 assert_eq!(view.timer_input.read(cx).value(), invalid);
@@ -1387,7 +1372,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(!face.invalid_duration && face.ready);
-            assert_eq!(face.compact_display(), ("37:00".into(), String::new()));
+            assert_eq!(face.compact_display(), ("37:00".into(), "待开始".into()));
         });
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.timer_input
@@ -1398,7 +1383,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(!face.invalid_duration && face.ready);
-            assert_eq!(face.compact_display(), ("00:00".into(), String::new()));
+            assert_eq!(face.compact_display(), ("00:00".into(), "待开始".into()));
             assert_eq!(face.status, "正计时 · 随时开始");
         });
         manager.view.update_in(&mut manager.cx, |view, _, cx| {
@@ -1424,14 +1409,14 @@ mod tests {
             assert_eq!(face.seconds, remaining);
             assert_eq!(
                 face.compact_display(),
-                (compact_clock(remaining), String::new())
+                (compact_clock(remaining), "剩余".into())
             );
         });
     }
 
     #[cfg(feature = "ui-test-support")]
     #[gpui::test]
-    fn invalid_cat_hint_fits_with_a_gap_below_the_dash(cx: &mut gpui::TestAppContext) {
+    fn invalid_cat_names_the_action_without_a_dash_or_stale_time(cx: &mut gpui::TestAppContext) {
         use crate::headless_ui_tests::ManagerHarness;
         use gpui::{
             AppContext as _, Bounds, Point, VisualTestContext, WindowBounds, WindowOptions, px,
@@ -1471,34 +1456,14 @@ mod tests {
         visual.simulate_resize(size(px(88.), px(128.)));
         visual.update(|window, _| window.refresh());
         visual.run_until_parked();
-        let face = visual.debug_bounds("strip-face").unwrap();
-        let dash = visual.debug_bounds("strip-time").unwrap();
-        let dash_text = visual.debug_bounds("strip-time-text").unwrap();
-        let detail = visual.debug_bounds("strip-detail").unwrap();
-        let text = visual.debug_bounds("strip-detail-text").unwrap();
-        assert!(
-            dash.bottom() + px(1.) <= detail.top(),
-            "dash {dash:?} overlaps hint {detail:?}"
-        );
-        assert!(
-            dash_text.left() >= dash.left() - px(1.) && dash_text.right() <= dash.right() + px(1.)
-        );
-        assert!(
-            dash_text.top() >= dash.top() - px(1.) && dash_text.bottom() <= dash.bottom() + px(1.)
-        );
-        assert!(
-            dash_text.bottom() + px(1.) <= text.top(),
-            "dash text {dash_text:?} overlaps hint text {text:?}"
-        );
-        assert!(detail.left() >= face.left() && detail.right() <= face.right());
-        assert!(detail.top() >= face.top() && detail.bottom() <= face.bottom());
-        assert!(
-            text.left() >= detail.left() - px(1.) && text.right() <= detail.right() + px(1.),
-            "hint text {text:?} exceeds {detail:?}"
-        );
-        assert!(text.top() >= detail.top() - px(1.));
-        assert!(text.bottom() <= detail.bottom() + px(1.));
-        assert!(text.size.width > px(0.) && text.size.height > px(0.));
+        let artwork = visual.debug_bounds("strip-artwork").unwrap();
+        let plate = visual.debug_bounds("strip-readout-plate").unwrap();
+        let message = visual.debug_bounds("strip-time-text").unwrap();
+        assert!(artwork.bottom() <= plate.top());
+        assert!(message.left() >= plate.left() && message.right() <= plate.right());
+        assert!(message.top() >= plate.top() && message.bottom() <= plate.bottom());
+        assert!(message.size.width > px(0.) && message.size.height > px(0.));
+        assert!(visual.debug_bounds("strip-detail").is_none());
         visual.update(|window, _| window.remove_window());
         visual.run_until_parked();
     }
@@ -1530,7 +1495,7 @@ mod tests {
     }
 
     #[test]
-    fn paused_readout_keeps_seconds_for_long_sessions() {
+    fn paused_readout_keeps_the_same_complete_clock_for_long_sessions() {
         let mut face = TimerFace {
             title: String::new(),
             status: String::new(),
@@ -1538,6 +1503,7 @@ mod tests {
             running: false,
             paused: true,
             completed: false,
+            repeatable: false,
             failed: false,
             invalid_duration: false,
             session: Some(1),
@@ -1547,19 +1513,25 @@ mod tests {
         };
         for paused in [false, true] {
             face.paused = paused;
-            for (hours, expected) in [
-                (1, "1h"),
-                (99, "99h"),
-                (100, "100h"),
-                (9_999, "9999h"),
-                (10_000, "9999h+"),
+            face.running = !paused;
+            let state = if paused { "已暂停" } else { "正计时" };
+            for (seconds, expected) in [
+                (3_599, "59:59"),
+                (3_600, "1:00:00"),
+                (99 * 3_600 + 3_599, "99:59:59"),
+                (100 * 3_600 + 3_599, "100:59:59"),
+                (9_999 * 3_600 + 3_599, "9999:59:59"),
+                (10_000 * 3_600, "9999时+"),
             ] {
-                face.seconds = hours * 3_600 + 3_599;
-                assert_eq!(face.compact_display(), (expected.into(), "59:59".into()));
+                face.seconds = seconds;
+                assert_eq!(face.compact_display(), (expected.into(), state.into()));
             }
-            face.seconds = 3_599;
-            assert_eq!(face.compact_display(), ("59:59".into(), String::new()));
         }
+        face.paused = false;
+        face.running = false;
+        face.completed = true;
+        face.seconds = 1_245;
+        assert_eq!(face.compact_display(), ("20:45".into(), "已保存".into()));
     }
 
     #[test]
@@ -1571,6 +1543,7 @@ mod tests {
             running: false,
             paused: false,
             completed: false,
+            repeatable: false,
             failed: false,
             invalid_duration: false,
             session: None,
@@ -1596,9 +1569,9 @@ mod tests {
 
     #[test]
     fn compact_clock_keeps_subhour_seconds_and_hour_meaning() {
-        assert_eq!(compact_time(1122), ("18".into(), "42".into()));
-        assert_eq!(compact_time(3607), ("1h".into(), "00:07".into()));
-        assert_eq!(compact_time(-1), ("00".into(), "00".into()));
-        assert_eq!(compact_time(i64::MAX).0, "99h+");
+        assert_eq!(compact_time(1122), ("18".into(), "分".into()));
+        assert_eq!(compact_time(3607), ("1".into(), "时".into()));
+        assert_eq!(compact_time(-1), ("00".into(), "分".into()));
+        assert_eq!(compact_time(i64::MAX), ("99+".into(), "时".into()));
     }
 }

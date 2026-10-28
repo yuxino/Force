@@ -300,7 +300,7 @@ fn restored_draft_is_consumed_after_opening_and_starting_it(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn untitled_draft_survives_starting_a_break(cx: &mut TestAppContext) {
+fn untitled_draft_survives_starting_another_task(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.timer_input
@@ -309,12 +309,18 @@ fn untitled_draft_survives_starting_a_break(cx: &mut TestAppContext) {
     });
     manager.cx.run_until_parked();
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
-        view.start_global_break(window, cx);
-        assert!(
-            view.active
-                .iter()
-                .any(|session| session.tag_kind == force_core::TagKind::Rest)
-        );
+        let task = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_task("Another task", 1, view.now)
+            .unwrap();
+        view.refresh(cx);
+        view.select_task(task.id, window, cx);
+        view.start(window, cx);
+        assert_eq!(view.active.len(), 1);
+        assert_eq!(view.active[0].task_id, Some(task.id));
+        assert_eq!(view.active[0].tag_kind, force_core::TagKind::Focus);
         view.new_task(window, cx);
     });
     assert!(!manager.cx.has_pending_prompt());

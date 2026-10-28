@@ -34,7 +34,7 @@ impl ForceView {
                             .size(px(24.))
                             .icon(control_icon(Icon::new(IconName::Info).size(px(13.)), MUTED))
                             .tooltip(
-                                "统一设置分类颜色，标签默认跟随。已单独设置颜色的标签保留原色。",
+                                "统一设置分类颜色，活动默认跟随。已单独设置颜色的活动保留原色。",
                             ),
                     ),
             )

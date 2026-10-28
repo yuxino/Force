@@ -1535,8 +1535,8 @@ impl ForceView {
             blocks.push(CalendarBlock {
                 target: CalendarTarget::Completion(task.id),
                 title: task.title.clone(),
-                detail: "已完成，未计时".to_owned(),
-                help: format!("{} · 已完成，未计时", task.title),
+                detail: "已完成 · 当天未计时".to_owned(),
+                help: format!("{} · 已完成 · 当天未计时", task.title),
                 start: minute,
                 end: minute + 1.,
                 status: AgendaItemStatus::Completed,
@@ -1585,6 +1585,12 @@ impl ForceView {
             .find(|record| Some(record.id) == self.agenda.selected_record)
         {
             let id = session.id;
+            let editable = session.finished_at.is_some()
+                && session
+                    .intervals
+                    .iter()
+                    .all(|interval| interval.end.is_some());
+            let edit = session.clone();
             let date = self.agenda.date;
             let (start, end) = day_bounds(date);
             return Some(
@@ -1604,10 +1610,39 @@ impl ForceView {
                     .child(
                         div()
                             .flex()
+                            .flex_wrap()
                             .gap(px(8.))
+                            .when(editable, |row| {
+                                row.child(
+                                    primary_button("agenda-record-edit")
+                                        .debug_selector(|| "agenda-record-edit".into())
+                                        .h(px(36.))
+                                        .unavailable(self.storage_failed)
+                                        .child(control_label("编辑", PAPER))
+                                        .on_click(cx.listener(move |this, _, window, cx| {
+                                            this.edit_record(edit.clone(), window, cx)
+                                        })),
+                                )
+                                .child(
+                                    button("agenda-record-delete")
+                                        .debug_selector(|| "agenda-record-delete".into())
+                                        .custom(crate::view::quiet_variant(cx))
+                                        .h(px(36.))
+                                        .unavailable(self.storage_failed)
+                                        .child(control_label("删除计时记录", DESTRUCTIVE))
+                                        .on_click(cx.listener(
+                                            move |this, event: &ClickEvent, window, cx| {
+                                                if event.click_count() == 1 {
+                                                    this.delete_record(id, window, cx)
+                                                }
+                                            },
+                                        )),
+                                )
+                            })
                             .when(session.finished_at.is_none(), |row| {
                                 row.child(
                                     primary_button("agenda-record-timer")
+                                        .debug_selector(|| "agenda-record-timer".into())
                                         .h(px(36.))
                                         .child(control_label("返回计时", 0xffffff))
                                         .on_click(cx.listener(move |this, _, window, cx| {
@@ -1634,10 +1669,42 @@ impl ForceView {
             .iter()
             .find(|task| Some(task.id) == self.agenda.selected_completion)
             .map(|task| {
+                let id = task.id;
                 detail_section()
                     .debug_selector(|| "agenda-completion-detail".into())
                     .child(detail_title("agenda-completion-title", &task.title))
-                    .child(field_label("已完成，未计时"))
+                    .child(field_label("已完成 · 当天未计时"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_wrap()
+                            .gap(px(8.))
+                            .child(
+                                primary_button("agenda-completion-edit")
+                                    .debug_selector(|| "agenda-completion-edit".into())
+                                    .h(px(36.))
+                                    .unavailable(self.storage_failed)
+                                    .child(control_label("编辑", PAPER))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.edit_completion(id, window, cx)
+                                    })),
+                            )
+                            .child(
+                                button("agenda-completion-delete")
+                                    .debug_selector(|| "agenda-completion-delete".into())
+                                    .custom(crate::view::quiet_variant(cx))
+                                    .h(px(36.))
+                                    .unavailable(self.storage_failed)
+                                    .child(control_label("删除完成事项", DESTRUCTIVE))
+                                    .on_click(cx.listener(
+                                        move |this, event: &ClickEvent, window, cx| {
+                                            if event.click_count() == 1 {
+                                                this.delete_completion(id, window, cx)
+                                            }
+                                        },
+                                    )),
+                            ),
+                    )
             })
     }
 
