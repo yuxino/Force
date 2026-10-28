@@ -234,7 +234,7 @@ impl ForceView {
                     .flex()
                     .items_center()
                     .justify_between()
-                    .child(section_heading("标签"))
+                    .child(section_heading("活动"))
                     .when(
                         !self.tag_form_open || self.editing_tag.is_some(),
                         |header| {
@@ -248,7 +248,7 @@ impl ForceView {
                                         Icon::new(IconName::Plus).size(px(14.)),
                                         INK,
                                     ))
-                                    .child(control_label("新标签", INK))
+                                    .child(control_label("新活动", INK))
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.open_tag_settings(window, cx)
                                     })),
@@ -294,7 +294,7 @@ impl ForceView {
                                         .items_center()
                                         .text_size(px(14.))
                                         .text_color(rgb(MUTED))
-                                        .child("暂无标签"),
+                                        .child("暂无活动"),
                                 )
                             })
                             .children(self.tags.iter().map(|tag| {
@@ -373,7 +373,7 @@ impl ForceView {
                                                     .size(px(15.)),
                                                 if editing { INK } else { MUTED },
                                             ))
-                                            .tooltip("编辑标签")
+                                            .tooltip("编辑活动")
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.begin_edit_tag(id, window, cx)
                                             })),
@@ -389,7 +389,7 @@ impl ForceView {
                                                     .size(px(15.)),
                                                 MUTED,
                                             ))
-                                            .tooltip("移除标签")
+                                            .tooltip("移除活动")
                                             .on_click(cx.listener(move |this, _, window, cx| {
                                                 this.delete_tag(id, window, cx)
                                             })),
@@ -424,9 +424,9 @@ impl ForceView {
                             .text_size(px(14.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(if self.editing_tag.is_some() {
-                                "编辑标签"
+                                "编辑活动"
                             } else {
-                                "新标签"
+                                "新活动"
                             }),
                     )
                     .when(self.editing_tag.is_some(), |heading| {
@@ -495,7 +495,7 @@ impl ForceView {
                             .custom(crate::view::quiet_variant(cx))
                             .size(px(24.))
                             .icon(control_icon(Icon::new(IconName::Info).size(px(13.)), MUTED))
-                            .tooltip("专注标签的正向和负向计入专注，中性和休闲保留记录。"),
+                            .tooltip("专注活动的正向和负向计入专注，中性和休闲保留记录。"),
                     ),
             ))
             .child(tag_form_row(

@@ -45,7 +45,7 @@ fn untitled_changed_tag_survives_switching_to_a_different_task(cx: &mut TestAppC
             .create_task("Existing", 1, view.now)
             .unwrap();
         view.refresh(cx);
-        assert_eq!(view.selected_tag, 1);
+        assert_eq!(view.selected_tag, 0);
         view.selected_tag = 2;
         task.id
     });
@@ -157,7 +157,7 @@ fn removed_tag_requires_reselection_even_after_refresh(cx: &mut TestAppContext) 
         assert!(
             view.toast
                 .as_ref()
-                .is_some_and(|(message, _)| message.contains("原标签已不可用"))
+                .is_some_and(|(message, _)| message.contains("原活动已不可用"))
         );
     });
     manager.click("focus-tag-picker");
@@ -279,6 +279,7 @@ fn restored_draft_is_consumed_after_opening_and_starting_it(cx: &mut TestAppCont
         assert_eq!(view.timer_input.read(cx).value(), "0");
         view.task_input
             .update(cx, |input, cx| input.set_value("Now start", window, cx));
+        view.selected_tag = 1;
         view.timer_input
             .update(cx, |input, cx| input.set_value("45", window, cx));
     });

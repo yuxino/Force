@@ -19,6 +19,8 @@ mod model;
 mod moment_model;
 mod moment_view;
 mod platform;
+mod record_editor_model;
+mod record_editor_view;
 mod records_view;
 mod settings_view;
 mod tag_picker;
@@ -26,6 +28,8 @@ mod time_picker;
 mod updates;
 mod view;
 
+#[cfg(all(test, feature = "ui-test-support"))]
+mod activity_task_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod activity_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
@@ -36,6 +40,8 @@ mod analysis_ui_tests;
 mod headless_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod moment_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
+mod record_editor_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod task_draft_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
@@ -342,7 +348,11 @@ fn main() -> anyhow::Result<()> {
                 });
                 cx.on_action(move |_: &SaveMoment, cx| {
                     with_force(handle, cx, |this, window, cx| {
-                        this.save_moment(window, cx);
+                        if this.record_editor.visible {
+                            this.save_record_editor(window, cx);
+                        } else {
+                            this.save_moment(window, cx);
+                        }
                     })
                 });
                 cx.on_action(move |_: &NewTask, cx| {

@@ -343,11 +343,14 @@ impl ForceView {
 impl Render for ForceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tag_picker(window, cx);
+        self.sync_record_editor_picker(window, cx);
         self.sync_agenda_tag_picker(window, cx);
         let viewport = window.viewport_size();
-        // Shape tag labels to the same fixed width as the visible trigger.
+        // Shape activity labels to the available task-operation column.
         self.tag_picker.update(cx, |picker, cx| {
-            picker.set_trigger_width(TASK_TAG_WIDTH, cx);
+            let width = (f32::from(viewport.width).min(976.) - 80. - TASK_SIDEBAR_WIDTH - 32. - 4.)
+                .max(260.);
+            picker.set_trigger_width(width, cx);
         });
         let compact = viewport.width < px(920.) || viewport.height < px(700.);
         div()
@@ -368,6 +371,9 @@ impl Render for ForceView {
             })
             .when(self.moments.visible, |body| {
                 body.child(self.moment_editor(window, cx))
+            })
+            .when(self.record_editor.visible, |body| {
+                body.child(self.record_editor(window, cx))
             })
             .when(self.time_picker.read(cx).is_open(), |body| {
                 body.child(self.time_picker.clone())

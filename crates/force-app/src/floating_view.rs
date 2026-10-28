@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use force_core::{Session, TagKind};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Icon, IconName, Sizable,
+    Icon, IconName,
     button::{ButtonCustomVariant, ButtonVariants},
 };
 
@@ -41,13 +41,17 @@ impl TimerFace {
         self.paused && !self.failed
     }
 
+    fn dock_progress(&self) -> Option<f32> {
+        self.progress.filter(|_| !self.failed && !self.paused)
+    }
+
     fn compact_display(&self) -> (String, String) {
         if self.failed {
             ("!".to_owned(), "重试".to_owned())
         } else if self.completed {
             ("✓".to_owned(), "完成".to_owned())
         } else if self.invalid_duration {
-            ("—".to_owned(), "检查时长".to_owned())
+            ("—".to_owned(), "设置".to_owned())
         } else if self.idle {
             ("+".to_owned(), String::new())
         } else {
@@ -73,10 +77,8 @@ impl FloatingStrip {
             model.strip_session()
         };
         let completed = current.is_none() && model.completed.is_some();
-        let title_empty = model.task_input.read(cx).value().trim().is_empty();
-        let timing_draft = model.preparing
-            && (!model.countdown || model.timer_input.read(cx).value().trim() != "25");
-        let has_task_draft = model.selected_task.is_some() || !title_empty || timing_draft;
+        let resolved_title = model.resolved_task_title(cx);
+        let has_task_draft = model.selected_task.is_some() || model.new_task_has_draft(cx);
         let invalid_duration = !model.storage_failed
             && current.is_none()
             && !completed
@@ -103,27 +105,19 @@ impl FloatingStrip {
         let title = if model.storage_failed {
             "本地数据不可用".to_owned()
         } else if let Some(session) = current.or(model.completed.as_ref()) {
-            session.title.clone()
-        } else {
-            let input = model.task_input.read(cx).value();
-            if title_empty {
-                model
-                    .selected_task
-                    .and_then(|id| model.tasks.iter().find(|task| task.id == id))
-                    .map_or_else(
-                        || {
-                            if timing_draft {
-                                "新任务"
-                            } else {
-                                "做一件事"
-                            }
-                            .to_owned()
-                        },
-                        |task| task.title.clone(),
-                    )
+            activity_task_label(&session.tag_name, &session.title)
+        } else if resolved_title.is_empty() {
+            if has_task_draft {
+                "新任务"
             } else {
-                input.to_string()
+                "做一件事"
             }
+            .to_owned()
+        } else {
+            activity_task_label(
+                model.selected_activity_name().unwrap_or_default(),
+                &resolved_title,
+            )
         };
         let paused = current.is_some_and(Session::is_paused);
         let state = if model.storage_failed {
@@ -142,14 +136,14 @@ impl FloatingStrip {
             "未开始"
         };
         let status = if invalid_duration {
-            "检查时长".to_owned()
+            "设置时长".to_owned()
         } else {
             model.toast.as_ref().filter(|_| model.compact).map_or_else(
                 || {
                     if model.storage_failed || paused {
                         state.to_owned()
                     } else if completed {
-                        format!("本轮投入 {}", clock(seconds))
+                        format!("已完成 · {}", clock(seconds))
                     } else if let Some(session) = current {
                         if session.tag_kind == TagKind::Rest {
                             "休息中".to_owned()
@@ -158,8 +152,12 @@ impl FloatingStrip {
                         } else {
                             "正计时".to_owned()
                         }
-                    } else if title_empty && has_task_draft {
-                        "填写任务名称".to_owned()
+                    } else if has_task_draft && model.task_tag_error().is_some() {
+                        "选择活动".to_owned()
+                    } else if model.task_title_error(cx).is_some() {
+                        "检查说明".to_owned()
+                    } else if model.task_has_unsaved_changes(cx) {
+                        "修改待保存".to_owned()
                     } else if model.countdown {
                         "倒计时 · 未开始".to_owned()
                     } else {
@@ -539,9 +537,16 @@ impl FloatingStrip {
         } else {
             action_icon(if face.running { "pause" } else { "play" })
         };
+        let label_width = if face.failed {
+            56.
+        } else if face.completed || (!face.ready && face.session.is_none()) {
+            44.
+        } else {
+            22.
+        };
         let session_id = if face.failed { None } else { face.session };
-        let has_finish = session_id.is_some();
         let opens_task = face.failed || (!face.completed && face.session.is_none() && !face.ready);
+        let title_help = face.title.clone();
         div()
             .debug_selector(|| "strip-drawer".into())
             .absolute()
@@ -550,138 +555,145 @@ impl FloatingStrip {
             .w(px(172.))
             .h(px(88.))
             .child(
+                // The content begins beyond the complete cat hit area. Three
+                // short rows share one axis, irrespective of the timer state.
                 div()
+                    .debug_selector(|| "strip-content".into())
                     .absolute()
-                    .left(px(20.))
+                    .left(px(28.))
                     .top(px(12.))
-                    .w(px(136.))
-                    .h(px(20.))
-                    .rounded(px(4.))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .hover(|title| title.bg(rgb(0x292929)))
-                    .id("cat-task-details")
-                    .debug_selector(|| "strip-open".into())
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _, _, cx| {
-                        if !this.drawer_controls_ready() {
-                            return;
-                        }
-                        this.dispatch(cx, move |model, window, cx| {
-                            if let Some(id) = session_id {
-                                model.show_manager(window, cx);
-                                model.select_session(id, window, cx);
-                            } else {
-                                model.show_strip_task(window, cx);
-                            }
-                        });
-                    }))
-                    .child(
-                        div().w(px(122.)).child(
-                            single_line(face.title.clone(), 13.)
-                                .debug_selector(|| "strip-title-text".into())
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(rgb(0xf5f5f5)),
-                        ),
-                    )
-                    .child(control_icon(IconName::ChevronRight, 0xa6a6a6).size(px(10.))),
-            )
-            .child(
-                div()
-                    .absolute()
-                    .left(px(20.))
-                    .top(px(35.))
-                    .w(px(122.))
-                    .h(px(15.))
-                    .child(
-                        single_line(face.status.clone(), 10.)
-                            .debug_selector(|| "strip-status".into())
-                            .text_color(rgb(if face.failed { 0xe8b3b3 } else { 0xa6a6a6 })),
-                    ),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "strip-controls".into())
-                    .absolute()
-                    .left(px(20.))
-                    .top(px(54.))
-                    .h(px(26.))
                     .w(px(128.))
+                    .h(px(68.))
                     .flex()
-                    .items_center()
-                    .gap(px(6.))
+                    .flex_col()
+                    .gap(px(4.))
                     .child(
-                        button("bar-primary")
-                            .debug_selector(|| "strip-primary".into())
-                            .small()
-                            .w(px(if has_finish { 66. } else { 82. }))
-                            .h(px(26.))
-                            .px(px(6.))
-                            .rounded(px(8.))
-                            .custom(
-                                ButtonCustomVariant::new(cx)
-                                    .color(rgb(0xf2f2f2).into())
-                                    .foreground(rgb(INK).into())
-                                    .border(rgba(0x00000000).into())
-                                    .hover(rgb(0xffffff).into())
-                                    .active(rgb(0xd8d8d8).into()),
-                            )
+                        div()
+                            .id("cat-task-details")
+                            .debug_selector(|| "strip-open".into())
+                            .w_full()
+                            .h(px(18.))
+                            .flex_shrink_0()
+                            .rounded(px(3.))
+                            .hover(|title| title.bg(rgb(0x292929)))
+                            .cursor_pointer()
+                            .tooltip(move |window, cx| {
+                                gpui_component::tooltip::Tooltip::new(title_help.clone())
+                                    .build(window, cx)
+                            })
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if !this.drawer_controls_ready() {
+                                    return;
+                                }
+                                this.dispatch(cx, move |model, window, cx| {
+                                    if let Some(id) = session_id {
+                                        model.show_manager(window, cx);
+                                        model.select_session(id, window, cx);
+                                    } else {
+                                        model.show_strip_task(window, cx);
+                                    }
+                                });
+                            }))
                             .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(4.))
-                                    .child(
-                                        div()
-                                            .debug_selector(|| "strip-primary-icon".into())
-                                            .size(px(12.))
-                                            .flex_none()
-                                            .child(control_icon(primary_icon, INK).size(px(12.))),
+                                single_line(face.title.clone(), 12.)
+                                    .debug_selector(|| "strip-title-text".into())
+                                    .w(px(128.))
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(rgb(0xf5f5f5)),
+                            ),
+                    )
+                    .child(
+                        single_line(face.status.clone(), 11.)
+                            .debug_selector(|| "strip-status".into())
+                            .w(px(128.))
+                            .flex_shrink_0()
+                            .text_color(rgb(if face.failed { 0xe8b3b3 } else { 0xaaaaaa })),
+                    )
+                    .child(
+                        div()
+                            .debug_selector(|| "strip-controls".into())
+                            .w(px(128.))
+                            .h(px(24.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .justify_between()
+                            .child(
+                                button("bar-primary")
+                                    .debug_selector(|| "strip-primary".into())
+                                    .w(px(label_width + 21.))
+                                    .h(px(24.))
+                                    .px_0()
+                                    .rounded(px(4.))
+                                    .justify_start()
+                                    .custom(
+                                        cat_secondary_variant(cx).foreground(rgb(0xf5f5f5).into()),
                                     )
                                     .child(
                                         div()
-                                            .debug_selector(|| "strip-primary-label".into())
-                                            .flex_none()
-                                            .text_size(px(11.))
-                                            .text_color(rgb(INK))
-                                            .child(primary_label),
-                                    ),
+                                            .w(px(label_width + 17.))
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(5.))
+                                            .child(
+                                                single_line(primary_label, 11.)
+                                                    .debug_selector(|| "strip-primary-label".into())
+                                                    .w(px(label_width))
+                                                    .flex_shrink_0()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(rgb(0xf5f5f5)),
+                                            )
+                                            .child(
+                                                div()
+                                                    .debug_selector(|| "strip-primary-icon".into())
+                                                    .size(px(12.))
+                                                    .flex_none()
+                                                    .child(
+                                                        control_icon(primary_icon, 0xd2d2d2)
+                                                            .size(px(12.)),
+                                                    ),
+                                            ),
+                                    )
+                                    .on_click(cx.listener(
+                                        move |this, event: &ClickEvent, _, cx| {
+                                            if this.drawer_controls_ready()
+                                                && event.click_count() == 1
+                                            {
+                                                this.dispatch(cx, move |model, window, cx| {
+                                                    if opens_task {
+                                                        model.show_strip_task(window, cx);
+                                                    } else {
+                                                        model.strip_primary_action(window, cx);
+                                                    }
+                                                });
+                                            }
+                                        },
+                                    )),
                             )
-                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                                if this.drawer_controls_ready() && event.click_count() == 1 {
-                                    this.dispatch(cx, move |model, window, cx| {
-                                        if opens_task {
-                                            model.show_strip_task(window, cx);
-                                        } else {
-                                            model.strip_primary_action(window, cx);
+                            .children(face.session.filter(|_| !face.failed).map(|id| {
+                                button("bar-finish")
+                                    .debug_selector(|| "strip-finish".into())
+                                    .w(px(56.))
+                                    .h(px(24.))
+                                    .px_0()
+                                    .rounded(px(4.))
+                                    .justify_end()
+                                    .custom(cat_secondary_variant(cx))
+                                    .child(
+                                        single_line("结束计时", 11.)
+                                            .debug_selector(|| "strip-finish-label".into())
+                                            .w(px(44.))
+                                            .text_color(rgb(0xaaaaaa)),
+                                    )
+                                    .on_click(cx.listener(move |this, _, _, cx| {
+                                        if this.drawer_controls_ready() {
+                                            this.dispatch(cx, move |model, _, cx| {
+                                                model.finish(id, cx)
+                                            })
                                         }
-                                    });
-                                }
+                                    }))
                             })),
-                    )
-                    .children(face.session.filter(|_| !face.failed).map(|id| {
-                        button("bar-finish")
-                            .debug_selector(|| "strip-finish".into())
-                            .small()
-                            .w(px(56.))
-                            .h(px(26.))
-                            .px(px(4.))
-                            .rounded(px(7.))
-                            .custom(cat_secondary_variant(cx))
-                            .child(
-                                div()
-                                    .debug_selector(|| "strip-finish-label".into())
-                                    .text_size(px(11.))
-                                    .text_color(rgb(0xd2d2d2))
-                                    .child("结束计时"),
-                            )
-                            .on_click(cx.listener(move |this, _, _, cx| {
-                                if this.drawer_controls_ready() {
-                                    this.dispatch(cx, move |model, _, cx| model.finish(id, cx))
-                                }
-                            }))
-                    })),
+                    ),
             )
     }
 
@@ -724,30 +736,22 @@ impl FloatingStrip {
                     }))
                     .child(minutes),
             )
-            .child(if face.show_paused_mark() {
+            .when(face.show_paused_mark(), |dock| {
+                dock.child(
+                    div()
+                        .debug_selector(|| "strip-dock-paused-mark".into())
+                        .size(px(10.))
+                        .child(Icon::default().path("force-icons/pause.svg").size(px(10.))),
+                )
+            })
+            .children(face.dock_progress().map(|progress| {
                 div()
-                    .debug_selector(|| "strip-dock-paused-mark".into())
-                    .size(px(10.))
-                    .child(Icon::default().path("force-icons/pause.svg").size(px(10.)))
-                    .into_any_element()
-            } else {
-                div()
+                    .debug_selector(|| "strip-dock-progress".into())
                     .h(px(22.))
                     .w(px(2.))
                     .bg(rgb(0x535353))
-                    .child(
-                        div()
-                            .w_full()
-                            .h(relative(if face.failed {
-                                0.
-                            } else {
-                                face.progress
-                                    .unwrap_or(if face.invalid_duration { 0. } else { 1. })
-                            }))
-                            .bg(rgb(0xf5f5f5)),
-                    )
-                    .into_any_element()
-            })
+                    .child(div().w_full().h(relative(progress)).bg(rgb(0xf5f5f5)))
+            }))
     }
 }
 
@@ -903,6 +907,14 @@ fn cat_secondary_variant(cx: &App) -> ButtonCustomVariant {
         .active(rgb(0x454545).into())
 }
 
+fn activity_task_label(activity: &str, title: &str) -> String {
+    if activity.is_empty() || activity == title {
+        title.to_owned()
+    } else {
+        format!("{activity} · {title}")
+    }
+}
+
 fn disclosure_reveal(from: f32, target: f32, started: Instant, now: Instant) -> f32 {
     let elapsed = (now.saturating_duration_since(started).as_secs_f32()
         / DISCLOSURE_DURATION.as_secs_f32())
@@ -1005,6 +1017,102 @@ mod tests {
             assert!(cat.drawer_controls_ready());
             cat.expanded = false;
             assert!(!cat.drawer_controls_ready());
+        });
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn activity_countup_default_is_idle_until_a_real_selection_or_description(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::headless_ui_tests::ManagerHarness;
+        use gpui::AppContext as _;
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        let model = manager.view.clone();
+        let handle = manager.handle;
+        let cat = manager
+            .cx
+            .update(|window, cx| cx.new(|cx| super::FloatingStrip::new(model, handle, window, cx)));
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(face.idle && !face.ready);
+            assert_eq!(face.compact_display().0, "+");
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.primary_action(window, cx);
+            assert_eq!(view.selected_tag, 0);
+            assert!(!view.countdown);
+            assert!(view.active.is_empty());
+            view.task_input.update(cx, |input, cx| {
+                input.set_value("未选活动的说明", window, cx)
+            });
+        });
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(!face.idle && !face.ready);
+            assert_eq!(face.status, "选择活动");
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.task_input
+                .update(cx, |input, cx| input.set_value("", window, cx));
+            view.selected_tag = 2;
+            cx.notify();
+        });
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(!face.idle && face.ready);
+            assert_eq!(face.title, "学习");
+            assert_eq!(face.status, "正计时 · 随时开始");
+        });
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn saved_countup_task_reports_pending_changes_until_saved(cx: &mut gpui::TestAppContext) {
+        use crate::headless_ui_tests::ManagerHarness;
+        use gpui::AppContext as _;
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let task = view
+                .store
+                .as_mut()
+                .unwrap()
+                .create_task("已有说明", 1, view.now)
+                .unwrap();
+            view.refresh(cx);
+            view.select_task(task.id, window, cx);
+            view.countdown = false;
+        });
+        let model = manager.view.clone();
+        let handle = manager.handle;
+        let cat = manager
+            .cx
+            .update(|window, cx| cx.new(|cx| super::FloatingStrip::new(model, handle, window, cx)));
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(face.ready);
+            assert_eq!(face.status, "正计时 · 随时开始");
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.task_input
+                .update(cx, |input, cx| input.set_value("修改后的说明", window, cx));
+            assert!(view.task_has_unsaved_changes(cx));
+        });
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(!face.ready && !face.running);
+            assert_eq!(face.status, "修改待保存");
+        });
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.save_task_changes(cx);
+            assert!(!view.task_has_unsaved_changes(cx));
+            assert_eq!(view.tasks[0].title, "修改后的说明");
+            assert!(view.active.is_empty());
+        });
+        cat.read_with(&manager.cx, |cat, cx| {
+            let face = cat.timer_face(cx);
+            assert!(face.ready && !face.running);
+            assert_eq!(face.status, "正计时 · 随时开始");
         });
     }
 
@@ -1243,6 +1351,7 @@ mod tests {
         let mut manager = ManagerHarness::new(cx, 1040., 780.);
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.new_task(window, cx);
+            view.selected_tag = 1;
             view.task_input
                 .update(cx, |input, cx| input.set_value("Prepare", window, cx));
             view.hide_manager(window, cx);
@@ -1262,8 +1371,8 @@ mod tests {
             cat.read_with(&manager.cx, |cat, cx| {
                 let face = cat.timer_face(cx);
                 assert!(face.invalid_duration && !face.ready);
-                assert_eq!(face.status, "检查时长");
-                assert_eq!(face.compact_display(), ("—".into(), "检查时长".into()));
+                assert_eq!(face.status, "设置时长");
+                assert_eq!(face.compact_display(), ("—".into(), "设置".into()));
             });
             manager.view.read_with(&manager.cx, |view, cx| {
                 assert_eq!(view.timer_input.read(cx).value(), invalid);
@@ -1305,7 +1414,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(!face.invalid_duration && face.running);
-            assert_eq!(face.title, "Running");
+            assert_eq!(face.title, "工作 · Running");
             let model = cat.model.read(cx);
             let session = model.strip_session().unwrap();
             assert_eq!(face.session, Some(session.id));
@@ -1335,6 +1444,7 @@ mod tests {
             view.new_task(window, cx);
             view.task_input
                 .update(cx, |input, cx| input.set_value("Test", window, cx));
+            view.countdown = true;
             view.timer_input
                 .update(cx, |input, cx| input.set_value("0", window, cx));
         });
@@ -1450,6 +1560,38 @@ mod tests {
             face.seconds = 3_599;
             assert_eq!(face.compact_display(), ("59:59".into(), String::new()));
         }
+    }
+
+    #[test]
+    fn dock_progress_requires_a_countdown_and_yields_to_pause_or_error() {
+        let mut face = TimerFace {
+            title: String::new(),
+            status: String::new(),
+            seconds: 0,
+            running: false,
+            paused: false,
+            completed: false,
+            failed: false,
+            invalid_duration: false,
+            session: None,
+            progress: None,
+            ready: false,
+            idle: true,
+        };
+        assert_eq!(face.dock_progress(), None);
+        face.idle = false;
+        face.running = true;
+        face.session = Some(1);
+        assert_eq!(face.dock_progress(), None); // Count-up has no goal.
+        for progress in [0., 0.5, 1.] {
+            face.progress = Some(progress);
+            assert_eq!(face.dock_progress(), Some(progress));
+        }
+        face.paused = true;
+        assert_eq!(face.dock_progress(), None);
+        face.paused = false;
+        face.failed = true;
+        assert_eq!(face.dock_progress(), None);
     }
 
     #[test]

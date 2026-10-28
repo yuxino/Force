@@ -40,12 +40,12 @@ Focus keeps its daily summary and task column stable across preparation,
 running, paused, rest and completion. A thin daily progress line ties the summary
 together. The operation column shares a left-aligned task heading, time area
 and action row. Countdown progress may use a restrained functional scale;
-stopwatch time must not imply an invented target. Round setup separates countdown
-and stopwatch modes. Countdown has an always
-visible minute input and compact 25/45/60 shortcuts; arbitrary durations do not
-require a separate custom mode. Task metadata stays above this group. Setup uses a 24-point heading and
-40-point fields, a compact 168-point tag picker, and aligned 80-point setting
-labels. Timing mode and duration share one group with a segmented mode control
+stopwatch time must not imply an invented target. Round setup defaults to stopwatch mode. Countdown alone reveals the minute
+input and compact 25/45/60 shortcuts; arbitrary durations do not require a
+separate custom mode. Setup puts the full-column activity picker first, followed
+by an optional description. No activity is preselected. A blank description
+uses the chosen activity name, while distinct existing titles stay intact.
+Use a 24-point heading, 40-point fields and aligned labels. Timing mode and duration share one group with a segmented mode control
 and bordered duration presets. New drafts
 can be saved for later without starting. Primary actions have compact fixed
 widths; keep task completion separate from the save position. Running shows
@@ -105,7 +105,7 @@ remain a separate acceptance boundary.
 
 ## Task creation refinement
 
-The title-first entry and compact metadata grouping take cues from
+The original title-first entry and compact metadata grouping took cues from
 [Reminders](https://support.apple.com/en-ca/guide/reminders/remndc729e28/mac);
 [Calendar](https://support.apple.com/en-gb/guide/calendar/icalwr13-events/mac)
 provides the reference for date-context creation. Force keeps its own neutral
@@ -115,3 +115,12 @@ Saving a task does not start timing. Mode changes retain custom minutes;
 closing or changing views preserves the existing task/calendar draft rules.
 The refinement changes control grouping and visual hierarchy, not persistence,
 native window behavior, or timer routing.
+
+## Activity-first refinement
+
+Activities are the shared names used by task creation, records and settings.
+Selecting an activity is sufficient to save or start; an extra description is
+optional. Keep calendar plans distinct and preserve their titles. Presentation
+uses the existing neutral grid and shared classification-color resolver. User
+data classification cleanup is an explicit, backed-up local operation, never an
+automatic migration for every installation.

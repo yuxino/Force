@@ -608,6 +608,7 @@ impl ForceView {
     }
 
     pub(crate) fn resume_agenda_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_record_editor(window, cx);
         if !self.agenda.editing {
             return;
         }
@@ -757,6 +758,7 @@ impl ForceView {
     }
 
     pub(crate) fn begin_plan_at(&mut self, hour: u16, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_record_editor(window, cx);
         if self.agenda.editor_visible || hour > 23 {
             return;
         }
@@ -791,6 +793,7 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.suspend_record_editor(window, cx);
         if self.agenda.editing
             && self.agenda.edit_id.is_none()
             && self.agenda.draft_task == task_id
@@ -880,6 +883,7 @@ impl ForceView {
     }
 
     pub(crate) fn edit_plan(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_record_editor(window, cx);
         if self.agenda.editing && self.agenda.edit_id == Some(id) {
             self.resume_agenda_draft(window, cx);
             return;

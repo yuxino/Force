@@ -299,7 +299,7 @@ impl ForceView {
                         ),
                     ),
             )
-            .child(editor_field("标签").w(px(TAG_WIDTH)).flex_shrink_0().child(
+            .child(editor_field("活动").w(px(TAG_WIDTH)).flex_shrink_0().child(
                 if let Some(task) = linked_task {
                     div()
                         .h(px(40.))

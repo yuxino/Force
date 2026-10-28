@@ -345,6 +345,7 @@ fn headless_ui_disabled_start_and_timer_transitions_keep_the_manager_stable(
         );
     });
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.selected_tag = 1;
         view.task_input
             .update(cx, |input, cx| input.focus(window, cx));
     });
@@ -451,7 +452,7 @@ fn headless_ui_titles_and_long_timers_stay_bounded_and_actions_remain_reachable(
                     .store
                     .as_mut()
                     .unwrap()
-                    .create_and_start_task(title, view.selected_tag, view.now - elapsed, target)
+                    .create_and_start_task(title, 1, view.now - elapsed, target)
                     .unwrap();
                 view.refresh(cx);
                 view.select_session(session.id, window, cx);
@@ -574,9 +575,7 @@ fn headless_ui_task_titles_use_the_row_content_width(cx: &mut TestAppContext) {
                 (1, "英语"),
                 (2, "英语阅读与写作练习这是需要省略的较长中文任务标题"),
             ] {
-                let task = store
-                    .create_task(title, view.selected_tag, view.now)
-                    .unwrap();
+                let task = store.create_task(title, 1, view.now).unwrap();
                 assert_eq!(task.id, id);
             }
             view.refresh(cx);
@@ -619,18 +618,22 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
         let store = view.store.as_mut().unwrap();
         for index in 1..=20 {
             store
-                .create_task(&format!("Saved task {index}"), view.selected_tag, view.now)
+                .create_task(&format!("Saved task {index}"), 1, view.now)
                 .unwrap();
         }
         view.refresh(cx);
     });
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.selected_tag = 1;
         view.task_input
             .update(cx, |input, cx| input.focus(window, cx));
     });
     manager
         .cx
         .simulate_input("A long running task title that needs two lines in the operation pane");
+    // Count-up is now the default and fits this viewport. Explicitly use a
+    // countdown so its remaining-time detail and progress create real overflow.
+    manager.click("duration-custom");
     manager.click("start-focus");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         // Browsing a paused task while another timer runs adds the genuine
@@ -640,7 +643,7 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
         view.store
             .as_mut()
             .unwrap()
-            .create_and_start_task("Another running task", view.selected_tag, view.now, None)
+            .create_and_start_task("Another running task", 1, view.now, None)
             .unwrap();
         view.refresh(cx);
         view.select_session(selected, window, cx);
@@ -651,6 +654,15 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
     let tasks = manager.bounds("focus-tasks");
     let header = manager.bounds("manager-header");
     let running_before = manager.bounds("focus-running");
+    assert!(
+        manager
+            .view
+            .read_with(&manager.cx, |view, _| view.panel_scroll[0]
+                .max_offset()
+                .height)
+            > px(0.),
+        "the countdown fixture must exceed the operation viewport before scrolling"
+    );
     manager.scroll("focus-operation", -240.);
     assert!(
         manager
@@ -659,7 +671,16 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
             < px(0.),
         "the operation fixture must actually scroll"
     );
-    assert!(manager.bounds("focus-running").top() < running_before.top());
+    assert!(
+        manager.bounds("focus-running").top() < running_before.top(),
+        "running before={running_before:?}, after={:?}, operation={:?}, scroll={:?}",
+        manager.bounds("focus-running"),
+        manager.bounds("focus-operation"),
+        manager.view.read_with(&manager.cx, |view, _| (
+            view.panel_scroll[0].offset(),
+            view.panel_scroll[0].max_offset()
+        ))
+    );
     assert_same_bounds(manager.bounds("focus-summary"), summary);
     assert_same_bounds(manager.bounds("focus-tasks"), tasks);
     assert!(manager.bounds("focus-summary").top() >= header.bottom() - px(1.));
@@ -672,6 +693,78 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
     );
     assert_same_bounds(manager.bounds("focus-summary"), summary);
     assert_same_bounds(manager.bounds("focus-tasks"), tasks);
+    for (selector, task_list) in [
+        ("focus-operation-scrollbar", false),
+        ("task-list-scrollbar", true),
+    ] {
+        let rail = manager.bounds(selector);
+        manager.cx.simulate_click(
+            point(rail.right() - px(6.), rail.bottom() - px(6.)),
+            Modifiers::default(),
+        );
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, _| {
+            let scroll = if task_list {
+                &view.task_scroll
+            } else {
+                &view.panel_scroll[0]
+            };
+            assert!(scroll.max_offset().height > px(0.));
+            assert_eq!(scroll.offset().y, -scroll.max_offset().height);
+        });
+        assert_same_bounds(manager.bounds(selector), rail);
+        assert_same_bounds(manager.bounds("focus-summary"), summary);
+        assert_same_bounds(manager.bounds("focus-tasks"), tasks);
+    }
+    for (selector, task_list) in [
+        ("focus-operation-scrollbar", false),
+        ("task-list-scrollbar", true),
+    ] {
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.panel_scroll[0].set_offset(point(px(0.), px(0.)));
+            view.task_scroll.set_offset(point(px(0.), px(0.)));
+            cx.notify();
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        let rail = manager.bounds(selector);
+        let start = point(rail.right() - px(6.), rail.top() + px(6.));
+        let end = point(start.x, start.y + px(60.));
+        manager.cx.simulate_event(gpui::MouseDownEvent {
+            position: start,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+        manager.cx.simulate_event(gpui::MouseMoveEvent {
+            position: end,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::default(),
+        });
+        manager.cx.simulate_event(gpui::MouseUpEvent {
+            position: end,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, _| {
+            let (dragged, other) = if task_list {
+                (&view.task_scroll, &view.panel_scroll[0])
+            } else {
+                (&view.panel_scroll[0], &view.task_scroll)
+            };
+            assert!(dragged.offset().y < px(0.), "the thumb must actually move");
+            assert_eq!(
+                other.offset().y,
+                px(0.),
+                "dragging {selector} moved the other pane"
+            );
+        });
+    }
     manager.click("global-new-task");
     assert_eq!(
         manager
@@ -698,11 +791,7 @@ fn headless_ui_activity_days_fit_and_select_records_without_resetting_scroll(
                 for index in 0..20 {
                     let start = day_bounds(date).0 + 3_600 + index * 180;
                     let session = store
-                        .start(
-                            &format!("{prefix} record {index}"),
-                            view.selected_tag,
-                            start,
-                        )
+                        .start(&format!("{prefix} record {index}"), 1, start)
                         .unwrap();
                     store.finish(session.id, start + duration).unwrap();
                 }
@@ -919,6 +1008,7 @@ fn headless_ui_global_new_task_is_available_without_scheduling_and_preserves_its
             assert!(view.agenda.plans.is_empty());
         });
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.selected_tag = 1;
             view.task_input.update(cx, |input, cx| {
                 input.set_value("A task without a date", window, cx)
             });
@@ -1084,6 +1174,7 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     let drawer = strip.debug_bounds("strip-drawer").unwrap();
     let silhouette = strip.debug_bounds("strip-expanded-silhouette").unwrap();
     assert_same_bounds(silhouette, root);
+    let content = strip.debug_bounds("strip-content").unwrap();
     let text = strip.debug_bounds("strip-title-text").unwrap();
     let time = strip.debug_bounds("strip-time").unwrap();
     let status = strip.debug_bounds("strip-status").unwrap();
@@ -1123,11 +1214,21 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     assert_horizontally_inside(primary, controls);
     assert_horizontally_inside(primary_icon, primary);
     assert_horizontally_inside(primary_label, primary);
-    assert!(primary_icon.right() <= primary_label.left() + px(1.));
+    assert!(primary_label.right() <= primary_icon.left() + px(1.));
+    assert!((primary_label.left() - text.left()).abs() <= px(1.));
     assert!(primary_icon.size.width >= px(10.) && primary_label.size.width > px(0.));
     assert!(primary.top() >= controls.top() - px(1.));
     assert!(primary.bottom() <= controls.bottom() + px(1.));
     assert!(drawer.bottom() - controls.bottom() >= px(8.));
+    assert!(content.left() >= face.right() + px(10.));
+    assert!(primary.size.height <= px(24.));
+    assert!(primary.size.width <= px(80.));
+    assert!((text.left() - controls.left()).abs() <= px(1.));
+    for child in [text, status, controls, primary_label, primary_icon] {
+        assert_horizontally_inside(child, content);
+        assert!(child.top() >= content.top() - px(1.));
+        assert!(child.bottom() <= content.bottom() + px(1.));
+    }
     [primary, open]
 }
 
@@ -1337,6 +1438,7 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         assert!(!view.compact);
     });
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.selected_tag = 1;
         view.task_input
             .update(cx, |input, cx| input.focus(window, cx));
     });
@@ -1425,7 +1527,7 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
             .store
             .as_mut()
             .unwrap()
-            .create_and_start_task(title, view.selected_tag, view.now - long_elapsed, None)
+            .create_and_start_task(title, 1, view.now - long_elapsed, None)
             .unwrap();
         view.refresh(cx);
         view.select_session(session.id, window, cx);
@@ -1470,7 +1572,7 @@ fn headless_ui_cat_title_opens_selected_saved_task_without_replacing_it(cx: &mut
             .store
             .as_mut()
             .unwrap()
-            .create_task("Saved task to revisit", view.selected_tag, view.now)
+            .create_task("Saved task to revisit", 1, view.now)
             .unwrap();
         view.refresh(cx);
         view.select_task(task.id, window, cx);
@@ -1507,7 +1609,7 @@ fn headless_ui_cat_invalid_task_action_returns_to_unchanged_draft(cx: &mut TestA
                     .store
                     .as_mut()
                     .unwrap()
-                    .create_task("Saved original", view.selected_tag, view.now)
+                    .create_task("Saved original", 1, view.now)
                     .unwrap();
                 view.refresh(cx);
                 view.select_task(task.id, window, cx);
@@ -1519,6 +1621,8 @@ fn headless_ui_cat_invalid_task_action_returns_to_unchanged_draft(cx: &mut TestA
             view.task_input
                 .update(cx, |input, cx| input.set_value("Draft to keep", window, cx));
             if !existing {
+                view.selected_tag = 1;
+                view.countdown = true;
                 view.timer_input
                     .update(cx, |input, cx| input.set_value("0", window, cx));
             }
@@ -1602,7 +1706,7 @@ fn headless_ui_cat_keeps_an_existing_task_whose_draft_title_was_cleared(cx: &mut
             .store
             .as_mut()
             .unwrap()
-            .create_task("Original saved title", view.selected_tag, view.now)
+            .create_task("Original saved title", 1, view.now)
             .unwrap();
         view.refresh(cx);
         view.select_task(task.id, window, cx);
@@ -1621,6 +1725,10 @@ fn headless_ui_cat_keeps_an_existing_task_whose_draft_title_was_cleared(cx: &mut
         assert!(!view.compact && view.preparing);
         assert_eq!(view.selected_task, Some(task_id));
         assert_eq!(view.task_input.read(cx).value(), "");
+        assert!(view.task_title_error(cx).is_none());
+        assert!(view.can_save_task(cx));
+        // Clearing a distinct description is a valid pending change; the
+        // saved task remains unchanged until its Save action is used.
         assert!(view.task_has_unsaved_changes(cx));
         assert!(view.active.is_empty());
         assert_eq!(
@@ -1641,7 +1749,7 @@ fn headless_ui_cat_keeps_an_existing_task_whose_draft_title_was_cleared(cx: &mut
 
 #[gpui::test]
 fn headless_ui_cat_preserves_a_blank_new_task_with_changed_timing(cx: &mut TestAppContext) {
-    for (countdown, minutes) in [(true, "37"), (true, ""), (false, "25")] {
+    for (countdown, minutes) in [(true, "37"), (true, ""), (false, "37")] {
         let mut manager = ManagerHarness::new(cx, 1040., 780.);
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.new_task(window, cx);
@@ -1666,7 +1774,11 @@ fn headless_ui_cat_preserves_a_blank_new_task_with_changed_timing(cx: &mut TestA
             assert!(view.tasks.is_empty());
         });
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
-            assert!(view.task_input.read(cx).focus_handle(cx).is_focused(window));
+            assert!(
+                view.tag_picker
+                    .focus_handle(cx)
+                    .contains_focused(window, cx)
+            );
         });
         strip.update(|window, _| window.remove_window());
         strip.run_until_parked();
@@ -1689,7 +1801,8 @@ fn headless_ui_cat_idle_blank_default_task_opens_new_task_directly(cx: &mut Test
         assert!(view.selected_task.is_none());
         assert_eq!(view.task_input.read(cx).value(), "");
         assert_eq!(view.timer_input.read(cx).value(), "25");
-        assert!(view.countdown && view.active.is_empty());
+        assert!(!view.countdown && view.active.is_empty());
+        assert_eq!(view.selected_tag, 0);
     });
     strip.update(|window, _| window.remove_window());
     strip.run_until_parked();
@@ -1715,6 +1828,7 @@ fn headless_ui_tag_menu_is_anchored_to_its_visible_control(cx: &mut TestAppConte
 fn headless_ui_tag_picker_shows_selected_and_menu_colors(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
     manager.view.update(&mut manager.cx, |view, cx| {
+        view.selected_tag = 1;
         let tag = view
             .tags
             .iter()
@@ -1986,6 +2100,7 @@ fn headless_ui_browsing_exposes_current_timer_and_switching_preserves_both_tasks
         manager.click("return-current-timer");
         manager.click("global-new-task");
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.selected_tag = 1;
             view.task_input
                 .update(cx, |input, cx| input.set_value("Next task", window, cx));
         });
@@ -2132,9 +2247,9 @@ fn headless_ui_task_submit_saves_and_invalid_save_keeps_the_draft(cx: &mut TestA
     });
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.task_input
-            .update(cx, |input, cx| input.set_value("", window, cx));
+            .update(cx, |input, cx| input.set_value("x".repeat(201), window, cx));
         assert!(!view.save_task_changes(cx));
-        assert_eq!(view.task_input.read(cx).value(), "");
+        assert_eq!(view.task_input.read(cx).value(), "x".repeat(201));
         assert_eq!(view.tasks[0].title, "Saved by Return");
         assert!(view.active.is_empty());
     });
@@ -2258,6 +2373,7 @@ fn headless_ui_new_draft_is_saved_without_starting_before_global_rest(cx: &mut T
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.new_task(window, cx);
+        view.selected_tag = 1;
         view.task_input.update(cx, |input, cx| {
             input.set_value("Unstarted draft", window, cx)
         });
@@ -2289,6 +2405,7 @@ fn headless_ui_new_draft_is_saved_without_starting_before_global_rest(cx: &mut T
 fn headless_ui_completed_round_actions_are_visible_at_minimum_size(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new(cx, 780., 620.);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.selected_tag = 1;
         view.task_input.update(cx, |input, cx| {
             input.set_value("Completed round", window, cx)
         });
@@ -2356,6 +2473,7 @@ fn headless_ui_repeated_new_preserves_draft_before_selection_and_global_rest(
             .create_task("Existing task", 1, view.now - 100)
             .unwrap();
         view.refresh(cx);
+        view.selected_tag = 1;
         view.task_input.update(cx, |input, cx| {
             input.set_value("Initial draft", window, cx);
         });
@@ -2402,7 +2520,9 @@ fn headless_ui_custom_timer_starts_with_typed_minutes_at_default_and_minimum_siz
     for (width, height, minutes) in [(1040., 780., 37), (780., 620., 1), (780., 620., 1_440)] {
         let mut manager = ManagerHarness::new(cx, width, height);
         manager.bounds("global-new-task");
+        manager.click("duration-custom");
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.selected_tag = 1;
             view.task_input.update(cx, |input, cx| {
                 input.set_value("Custom duration", window, cx)
             });
@@ -2462,7 +2582,7 @@ fn headless_ui_custom_timer_starts_with_typed_minutes_at_default_and_minimum_siz
         manager.click("global-new-task");
         manager.view.read_with(&manager.cx, |view, cx| {
             assert!(view.is_new_task_form());
-            assert!(view.countdown);
+            assert!(!view.countdown);
             assert_eq!(view.timer_input.read(cx).value(), "25");
             assert_eq!(view.timer_minutes, 25);
             assert!(view.active[0].is_running());
@@ -2477,6 +2597,7 @@ fn headless_ui_invalid_custom_minutes_block_start_and_presets_restore_validity(
 ) {
     let mut manager = ManagerHarness::new(cx, 1040., 780.);
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.selected_tag = 1;
         view.task_input.update(cx, |input, cx| {
             input.set_value("Validated duration", window, cx)
         });
@@ -2489,12 +2610,15 @@ fn headless_ui_invalid_custom_minutes_block_start_and_presets_restore_validity(
         });
         manager.cx.update(|window, _| window.refresh());
         manager.cx.run_until_parked();
-        manager.bounds("timer-duration-error");
+        if !invalid.is_empty() {
+            manager.bounds("timer-duration-error");
+        }
         manager.click("start-focus");
         manager.view.update(&mut manager.cx, |view, cx| {
             view.timer_input.update(cx, |_, cx| {
                 cx.emit(gpui_component::input::InputEvent::PressEnter { secondary: false });
             });
+            view.selected_tag = 1;
             view.task_input.update(cx, |_, cx| {
                 cx.emit(gpui_component::input::InputEvent::PressEnter { secondary: false });
             });
@@ -2561,6 +2685,7 @@ fn headless_ui_saving_a_new_task_preserves_timer_draft_without_starting(cx: &mut
     ] {
         let mut manager = ManagerHarness::new(cx, width, height);
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.selected_tag = 1;
             view.task_input.update(cx, |input, cx| {
                 input.set_value("Save for later", window, cx)
             });
@@ -2661,6 +2786,7 @@ fn headless_ui_saving_a_new_task_keeps_the_current_round_running(cx: &mut TestAp
         view.refresh(cx);
         view.select_session(session.id, window, cx);
         view.new_task(window, cx);
+        view.selected_tag = 1;
         view.task_input
             .update(cx, |input, cx| input.set_value("Queued task", window, cx));
         session
@@ -3342,7 +3468,7 @@ fn headless_ui_task_validation_agrees_with_return_and_preserves_invalid_edits(
         view.refresh(cx);
         view.select_task(task.id, window, cx);
     });
-    for value in [String::new(), "Long".repeat(51), "Invalid\0name".to_owned()] {
+    for value in ["Long".repeat(51), "Invalid\0name".to_owned()] {
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.task_input
                 .update(cx, |input, cx| input.set_value(value.clone(), window, cx));
@@ -3983,5 +4109,160 @@ fn headless_ui_settings_app_actions_and_update_results_stay_grouped(cx: &mut Tes
             assert!((update.left() - data_folder.left()).abs() <= px(1.));
             assert!((update.right() - data_folder.right()).abs() <= px(1.));
         }
+    }
+}
+
+#[gpui::test]
+fn headless_ui_empty_activity_entry_accepts_keyboard_from_new_task(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new(cx, width, height);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let ids: Vec<_> = view
+                .tags
+                .iter()
+                .filter(|tag| tag.kind == force_core::TagKind::Focus)
+                .map(|tag| tag.id)
+                .collect();
+            for id in ids {
+                view.store.as_mut().unwrap().delete_tag(id).unwrap();
+            }
+            view.refresh(cx);
+            view.new_task(window, cx);
+            assert!(!view.can_start_task(cx));
+            assert!(!view.can_save_task(cx));
+            assert!(view.tag_picker.focus_handle(cx).is_focused(window));
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        let add = manager.bounds("add-focus-tag");
+        let operation = manager.bounds("focus-operation");
+        assert_horizontally_inside(add, operation);
+        assert!(add.top() >= operation.top() && add.bottom() <= operation.bottom());
+        manager.cx.simulate_keystrokes("enter");
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert!(matches!(view.page, Page::Settings));
+            assert!(view.tag_form_open);
+            assert!(view.tag_input.focus_handle(cx).is_focused(window));
+            assert!(view.tasks.is_empty() && view.active.is_empty());
+        });
+        manager.bounds("settings-form");
+    }
+}
+
+#[gpui::test]
+fn headless_ui_distinct_description_keeps_full_row_width_with_a_long_activity(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new(cx, width, height);
+        let session_id = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let store = view.store.as_mut().unwrap();
+            let activity = store
+                .create_tag(
+                    "很长的活动名称也不应该挤掉任务核心说明",
+                    force_core::TagKind::Focus,
+                )
+                .unwrap();
+            let session = store
+                .create_and_start_task(
+                    "第四章：进程调度的关键题目",
+                    activity.id,
+                    view.now - 60,
+                    None,
+                )
+                .unwrap();
+            view.refresh(cx);
+            view.select_session(session.id, window, cx);
+            session.id
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        let row = manager.bounds("task-row-1");
+        let title = manager.bounds("task-title-1");
+        let status = manager.bounds("task-status-1");
+        assert_eq!(row.size.height, px(64.));
+        assert!(title.size.width >= row.size.width - px(28.));
+        assert!(status.size.width >= row.size.width - px(28.));
+        assert_horizontally_inside(title, row);
+        assert_horizontally_inside(status, row);
+        assert!(title.bottom() <= status.top());
+        for completed in [false, true] {
+            if completed {
+                manager
+                    .view
+                    .update(&mut manager.cx, |view, cx| view.finish(session_id, cx));
+                manager.cx.update(|window, _| window.refresh());
+                manager.cx.run_until_parked();
+            }
+            let description = manager.bounds("focus-session-description");
+            let heading = manager.bounds("focus-task-title");
+            let operation = manager.bounds("focus-operation");
+            assert_horizontally_inside(description, operation);
+            assert!(description.size.width >= operation.size.width - px(8.));
+            assert!(description.top() >= heading.bottom());
+            assert!(description.bottom() <= operation.bottom());
+        }
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.tasks[0].title, "第四章：进程调度的关键题目");
+            assert_eq!(
+                view.completed.as_ref().unwrap().title,
+                "第四章：进程调度的关键题目"
+            );
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_new_activity_and_empty_minutes_do_not_show_premature_errors(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 780., 620.);
+    manager.click("global-new-task");
+    assert!(manager.cx.debug_bounds("task-tag-error").is_none());
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert_eq!(view.selected_tag, 0);
+        assert!(!view.can_start_task(cx));
+        assert!(!view.can_save_task(cx));
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.selected_tag = 1;
+        view.choose_custom_duration(window, cx);
+        view.timer_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    assert!(manager.cx.debug_bounds("timer-duration-error").is_none());
+    let actions = manager.bounds("prepare-actions");
+    let feedback = manager.bounds("timer-duration-feedback");
+    let operation = manager.bounds("focus-operation");
+    assert!(actions.bottom() <= operation.bottom() + px(1.));
+    manager.click("start-focus");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(!view.can_start_task(cx));
+        assert!(view.timer_duration_error(cx).is_some());
+        assert!(view.can_save_task(cx));
+        assert!(view.tasks.is_empty() && view.active.is_empty());
+    });
+    for minutes in ["0", "45", ""] {
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.timer_input
+                .update(cx, |input, cx| input.set_value(minutes, window, cx));
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        assert_eq!(manager.bounds("prepare-actions"), actions);
+        assert_eq!(manager.bounds("timer-duration-feedback"), feedback);
+        if minutes == "0" {
+            let error = manager.bounds("timer-duration-error");
+            assert!(error.top() >= feedback.top());
+            assert!(error.bottom() <= feedback.bottom() + px(1.));
+        }
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.can_start_task(cx), minutes == "45");
+            assert!(view.tasks.is_empty() && view.active.is_empty());
+        });
     }
 }

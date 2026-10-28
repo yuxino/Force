@@ -226,6 +226,7 @@ impl ForceView {
     }
 
     fn reveal_moment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_record_editor(window, cx);
         self.time_picker
             .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.suspend_agenda_popup(window, cx);
