@@ -1,6 +1,6 @@
 use force_core::TagClass;
 use gpui::{prelude::*, *};
-use gpui_component::{Icon, IconName, button::ButtonVariants, tooltip::Tooltip};
+use gpui_component::{Icon, IconName, button::ButtonVariants};
 
 use crate::{
     analysis_model::AnalysisPeriod,
@@ -12,6 +12,8 @@ use crate::{
 };
 
 const CHART_HEIGHT: f32 = 148.;
+const DATE_WIDTH: f32 = 106.;
+const ROW_ACTION_WIDTH: f32 = 24.;
 const CLASSES: [(TagClass, &str); 5] = [
     (TagClass::Positive, "正向"),
     (TagClass::Negative, "负向"),
@@ -21,7 +23,8 @@ const CLASSES: [(TagClass, &str); 5] = [
 ];
 
 impl ForceView {
-    pub(crate) fn analysis_panel(&self, _window: &Window, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn analysis_panel(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        let content_width = f32::from(window.viewport_size().width).min(976.) - 80.;
         let range = self
             .analysis
             .days
@@ -94,16 +97,17 @@ impl ForceView {
                 )
             })
             .when(!self.analysis.error, |body| {
-                body.child(self.analysis_summary(cx))
-                    .child(self.analysis_chart())
-                    .child(self.analysis_table(cx))
+                body.child(self.analysis_summary(content_width, cx))
+                    .child(self.analysis_chart(content_width, cx))
+                    .child(self.analysis_table(content_width, cx))
             })
     }
 
-    fn analysis_summary(&self, cx: &App) -> Div {
+    fn analysis_summary(&self, content_width: f32, cx: &App) -> Div {
+        let column_width = (content_width - 48.) / 3.;
         div()
             .debug_selector(|| "analysis-summary".into())
-            .w_full()
+            .w(px(content_width))
             .flex()
             .gap(px(24.))
             .py(px(18.))
@@ -132,8 +136,8 @@ impl ForceView {
                 .map(|(id, title, seconds)| {
                     div()
                         .debug_selector(move || id.into())
-                        .flex_1()
-                        .min_w_0()
+                        .w(px(column_width))
+                        .flex_shrink_0()
                         .flex()
                         .flex_col()
                         .gap(px(8.))
@@ -150,7 +154,9 @@ impl ForceView {
             )
     }
 
-    fn analysis_chart(&self) -> Div {
+    fn analysis_chart(&self, content_width: f32, cx: &mut Context<Self>) -> Div {
+        let day_count = self.analysis.days.len().max(1) as f32;
+        let slot_width = ((content_width - 60. - (day_count - 1.) * 2.) / day_count).max(1.);
         let peak = self
             .analysis
             .days
@@ -183,7 +189,7 @@ impl ForceView {
                         div()
                             .text_size(px(12.))
                             .text_color(rgb(MUTED))
-                            .child("每天 · 包含今天"),
+                            .child("点击查看当日记录"),
                     ),
             )
             .child(
@@ -256,30 +262,41 @@ impl ForceView {
                                                     date.format("%Y年%-m月%-d日"),
                                                     table_duration(seconds)
                                                 );
-                                                div()
-                                                    .id(SharedString::from(format!(
-                                                        "analysis-bar-{date}"
-                                                    )))
-                                                    .debug_selector(move || {
-                                                        format!("analysis-bar-{date}")
-                                                    })
-                                                    .h_full()
-                                                    .flex_1()
-                                                    .min_w_0()
-                                                    .flex()
-                                                    .items_end()
-                                                    .justify_center()
-                                                    .tooltip(move |window, cx| {
-                                                        Tooltip::new(tooltip.clone())
-                                                            .build(window, cx)
-                                                    })
-                                                    .child(
-                                                        div()
-                                                            .w_full()
-                                                            .max_w(px(28.))
-                                                            .h(px(height))
-                                                            .bg(rgb(0x363636)),
-                                                    )
+                                                button(SharedString::from(format!(
+                                                    "analysis-bar-{date}"
+                                                )))
+                                                .debug_selector(move || {
+                                                    format!("analysis-bar-{date}")
+                                                })
+                                                .custom(crate::view::quiet_variant(cx))
+                                                .w(px(slot_width))
+                                                .h(px(CHART_HEIGHT))
+                                                .p_0()
+                                                .border_0()
+                                                .rounded(px(2.))
+                                                // The daily rows below expose the same
+                                                // destinations in the keyboard tab order.
+                                                .tab_stop(false)
+                                                .tooltip(format!("{tooltip} · 查看记录"))
+                                                .child(
+                                                    div()
+                                                        .w(px(slot_width))
+                                                        .h(px(CHART_HEIGHT))
+                                                        .flex()
+                                                        .items_end()
+                                                        .justify_center()
+                                                        .child(
+                                                            div()
+                                                                .w(px(slot_width.min(28.)))
+                                                                .h(px(height))
+                                                                .bg(rgb(0x363636)),
+                                                        ),
+                                                )
+                                                .on_click(cx.listener(
+                                                    move |this, _, window, cx| {
+                                                        this.open_analysis_day(date, window, cx)
+                                                    },
+                                                ))
                                             })),
                                     )
                                     .when(peak == 0, |plot| {
@@ -308,7 +325,8 @@ impl ForceView {
             )
     }
 
-    fn analysis_table(&self, cx: &mut Context<Self>) -> Div {
+    fn analysis_table(&self, content_width: f32, cx: &mut Context<Self>) -> Div {
+        let data_width = (content_width - DATE_WIDTH - ROW_ACTION_WIDTH) / 6.;
         div().debug_selector(|| "analysis-table".into()).w_full().flex().flex_col()
             .child(div().mb(px(12.)).flex().items_center().justify_between()
                 .child(section_heading("每日明细"))
@@ -326,30 +344,50 @@ impl ForceView {
                     .child("专注合并正向、负向及未分类的专注时段，暂停和休息不计入。分类与计时投入按每条记录累加，重叠记录分别计入；日均包含没有计时的日期。跨日按当地日期拆分，随手记不计时。")),
             )
             .child(div().debug_selector(|| "analysis-table-header".into())
-                .h(px(36.)).flex().items_center().border_b_1().border_color(rgb(LINE))
+                .w(px(content_width)).h(px(36.)).flex().items_center().border_b_1().border_color(rgb(LINE))
                 .text_size(px(12.)).text_color(rgb(MUTED))
-                .child(div().w(px(106.)).flex_shrink_0().child("日期"))
-                .child(table_cell("专注"))
-                .children(CLASSES.into_iter().map(|(_, label)| table_cell(label))))
+                .child(div().w(px(DATE_WIDTH)).flex_shrink_0().child("日期"))
+                .child(table_cell("专注", data_width).debug_selector(|| "analysis-header-focus".into()))
+                .children(CLASSES.into_iter().enumerate().map(|(index, (_, label))|
+                    table_cell(label, data_width).debug_selector(move || format!("analysis-header-class-{index}"))))
+                .child(div().debug_selector(|| "analysis-header-arrow".into()).w(px(ROW_ACTION_WIDTH)).flex_shrink_0()))
             .children(self.analysis.days.iter().rev().map(|day| {
                 let date = day.date;
-                div().debug_selector(move || format!("analysis-day-{date}"))
-                    .h(px(38.)).flex().items_center().border_b_1().border_color(rgb(LINE))
-                    .text_size(px(12.)).font(timer_font(cx))
-                    .child(div().w(px(106.)).flex_shrink_0().text_color(rgb(MUTED)).child(date.format("%Y-%m-%d").to_string()))
-                    .child(table_cell(table_duration(day.values.focus_seconds)).font_weight(FontWeight::MEDIUM))
-                    .children(CLASSES.into_iter().map(|(class, _)| {
-                        let seconds = day.values.class_seconds(class);
-                        table_cell(if seconds == 0 { "—".to_owned() } else { table_duration(seconds) }).text_color(rgb(MUTED))
+                button(SharedString::from(format!("analysis-day-{date}")))
+                    .debug_selector(move || format!("analysis-day-{date}"))
+                    .custom(crate::view::quiet_variant(cx))
+                    .w_full().h(px(38.)).p_0().rounded(px(0.))
+                    .border_0().border_b_1().border_color(rgb(LINE))
+                    .tooltip(format!("{} · 查看记录", date.format("%Y年%-m月%-d日")))
+                    .child(div().debug_selector(move || format!("analysis-day-content-{date}"))
+                        // Button content wrappers do not resolve percentage
+                        // widths reliably; size the complete row to the grid.
+                        .w(px(content_width)).flex_shrink_0().flex().items_center()
+                        .text_size(px(12.)).font(timer_font(cx)).text_color(rgb(INK))
+                        .child(div().w(px(DATE_WIDTH)).flex_shrink_0().text_color(rgb(MUTED)).child(date.format("%Y-%m-%d").to_string()))
+                        .child(table_cell(table_duration(day.values.focus_seconds), data_width)
+                            .debug_selector(move || format!("analysis-day-focus-{date}"))
+                            .font_weight(FontWeight::MEDIUM))
+                        .children(CLASSES.into_iter().enumerate().map(|(index, (class, _))| {
+                            let seconds = day.values.class_seconds(class);
+                            table_cell(if seconds == 0 { "—".to_owned() } else { table_duration(seconds) }, data_width)
+                                .debug_selector(move || format!("analysis-day-class-{index}-{date}"))
+                                .text_color(rgb(MUTED))
+                        }))
+                        .child(div().debug_selector(move || format!("analysis-day-arrow-{date}"))
+                            .w(px(ROW_ACTION_WIDTH)).flex_shrink_0().flex().justify_end()
+                            .child(control_icon(Icon::new(IconName::ChevronRight).size(px(12.)), MUTED))))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.open_analysis_day(date, window, cx)
                     }))
             }))
     }
 }
 
-fn table_cell(text: impl Into<SharedString>) -> Div {
+fn table_cell(text: impl Into<SharedString>, width: f32) -> Div {
     div()
-        .flex_1()
-        .min_w_0()
+        .w(px(width))
+        .flex_shrink_0()
         .text_align(TextAlign::Right)
         .child(text.into())
 }

@@ -41,13 +41,17 @@ impl TimerFace {
         self.paused && !self.failed
     }
 
+    fn dock_progress(&self) -> Option<f32> {
+        self.progress.filter(|_| !self.failed && !self.paused)
+    }
+
     fn compact_display(&self) -> (String, String) {
         if self.failed {
             ("!".to_owned(), "重试".to_owned())
         } else if self.completed {
             ("✓".to_owned(), "完成".to_owned())
         } else if self.invalid_duration {
-            ("—".to_owned(), "检查时长".to_owned())
+            ("—".to_owned(), "设置".to_owned())
         } else if self.idle {
             ("+".to_owned(), String::new())
         } else {
@@ -132,7 +136,7 @@ impl FloatingStrip {
             "未开始"
         };
         let status = if invalid_duration {
-            "检查时长".to_owned()
+            "设置时长".to_owned()
         } else {
             model.toast.as_ref().filter(|_| model.compact).map_or_else(
                 || {
@@ -732,30 +736,22 @@ impl FloatingStrip {
                     }))
                     .child(minutes),
             )
-            .child(if face.show_paused_mark() {
+            .when(face.show_paused_mark(), |dock| {
+                dock.child(
+                    div()
+                        .debug_selector(|| "strip-dock-paused-mark".into())
+                        .size(px(10.))
+                        .child(Icon::default().path("force-icons/pause.svg").size(px(10.))),
+                )
+            })
+            .children(face.dock_progress().map(|progress| {
                 div()
-                    .debug_selector(|| "strip-dock-paused-mark".into())
-                    .size(px(10.))
-                    .child(Icon::default().path("force-icons/pause.svg").size(px(10.)))
-                    .into_any_element()
-            } else {
-                div()
+                    .debug_selector(|| "strip-dock-progress".into())
                     .h(px(22.))
                     .w(px(2.))
                     .bg(rgb(0x535353))
-                    .child(
-                        div()
-                            .w_full()
-                            .h(relative(if face.failed {
-                                0.
-                            } else {
-                                face.progress
-                                    .unwrap_or(if face.invalid_duration { 0. } else { 1. })
-                            }))
-                            .bg(rgb(0xf5f5f5)),
-                    )
-                    .into_any_element()
-            })
+                    .child(div().w_full().h(relative(progress)).bg(rgb(0xf5f5f5)))
+            }))
     }
 }
 
@@ -1375,8 +1371,8 @@ mod tests {
             cat.read_with(&manager.cx, |cat, cx| {
                 let face = cat.timer_face(cx);
                 assert!(face.invalid_duration && !face.ready);
-                assert_eq!(face.status, "检查时长");
-                assert_eq!(face.compact_display(), ("—".into(), "检查时长".into()));
+                assert_eq!(face.status, "设置时长");
+                assert_eq!(face.compact_display(), ("—".into(), "设置".into()));
             });
             manager.view.read_with(&manager.cx, |view, cx| {
                 assert_eq!(view.timer_input.read(cx).value(), invalid);
@@ -1564,6 +1560,38 @@ mod tests {
             face.seconds = 3_599;
             assert_eq!(face.compact_display(), ("59:59".into(), String::new()));
         }
+    }
+
+    #[test]
+    fn dock_progress_requires_a_countdown_and_yields_to_pause_or_error() {
+        let mut face = TimerFace {
+            title: String::new(),
+            status: String::new(),
+            seconds: 0,
+            running: false,
+            paused: false,
+            completed: false,
+            failed: false,
+            invalid_duration: false,
+            session: None,
+            progress: None,
+            ready: false,
+            idle: true,
+        };
+        assert_eq!(face.dock_progress(), None);
+        face.idle = false;
+        face.running = true;
+        face.session = Some(1);
+        assert_eq!(face.dock_progress(), None); // Count-up has no goal.
+        for progress in [0., 0.5, 1.] {
+            face.progress = Some(progress);
+            assert_eq!(face.dock_progress(), Some(progress));
+        }
+        face.paused = true;
+        assert_eq!(face.dock_progress(), None);
+        face.paused = false;
+        face.failed = true;
+        assert_eq!(face.dock_progress(), None);
     }
 
     #[test]

@@ -672,6 +672,78 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
     );
     assert_same_bounds(manager.bounds("focus-summary"), summary);
     assert_same_bounds(manager.bounds("focus-tasks"), tasks);
+    for (selector, task_list) in [
+        ("focus-operation-scrollbar", false),
+        ("task-list-scrollbar", true),
+    ] {
+        let rail = manager.bounds(selector);
+        manager.cx.simulate_click(
+            point(rail.right() - px(6.), rail.bottom() - px(6.)),
+            Modifiers::default(),
+        );
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, _| {
+            let scroll = if task_list {
+                &view.task_scroll
+            } else {
+                &view.panel_scroll[0]
+            };
+            assert!(scroll.max_offset().height > px(0.));
+            assert_eq!(scroll.offset().y, -scroll.max_offset().height);
+        });
+        assert_same_bounds(manager.bounds(selector), rail);
+        assert_same_bounds(manager.bounds("focus-summary"), summary);
+        assert_same_bounds(manager.bounds("focus-tasks"), tasks);
+    }
+    for (selector, task_list) in [
+        ("focus-operation-scrollbar", false),
+        ("task-list-scrollbar", true),
+    ] {
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.panel_scroll[0].set_offset(point(px(0.), px(0.)));
+            view.task_scroll.set_offset(point(px(0.), px(0.)));
+            cx.notify();
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        let rail = manager.bounds(selector);
+        let start = point(rail.right() - px(6.), rail.top() + px(6.));
+        let end = point(start.x, start.y + px(60.));
+        manager.cx.simulate_event(gpui::MouseDownEvent {
+            position: start,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+            first_mouse: false,
+        });
+        manager.cx.simulate_event(gpui::MouseMoveEvent {
+            position: end,
+            pressed_button: Some(MouseButton::Left),
+            modifiers: Modifiers::default(),
+        });
+        manager.cx.simulate_event(gpui::MouseUpEvent {
+            position: end,
+            modifiers: Modifiers::default(),
+            button: MouseButton::Left,
+            click_count: 1,
+        });
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, _| {
+            let (dragged, other) = if task_list {
+                (&view.task_scroll, &view.panel_scroll[0])
+            } else {
+                (&view.panel_scroll[0], &view.task_scroll)
+            };
+            assert!(dragged.offset().y < px(0.), "the thumb must actually move");
+            assert_eq!(
+                other.offset().y,
+                px(0.),
+                "dragging {selector} moved the other pane"
+            );
+        });
+    }
     manager.click("global-new-task");
     assert_eq!(
         manager

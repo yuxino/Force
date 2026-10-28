@@ -1,7 +1,12 @@
 use chrono::{Local, TimeZone};
 use force_core::{Session, TagKind};
 use gpui::{prelude::*, *};
-use gpui_component::{Icon, IconName, button::ButtonVariants, tooltip::Tooltip};
+use gpui_component::{
+    Icon, IconName,
+    button::ButtonVariants,
+    scroll::{Scrollbar, ScrollbarShow},
+    tooltip::Tooltip,
+};
 
 use crate::{
     label::single_line,
@@ -146,30 +151,42 @@ impl ForceView {
                         .gap(px(32.))
                         .child(
                             div()
-                                .id("focus-operation")
-                                .debug_selector(|| "focus-operation".into())
+                                .debug_selector(|| "focus-operation-viewport".into())
+                                .relative()
                                 .flex_1()
                                 .min_w_0()
                                 .h_full()
-                                .overflow_y_scroll()
-                                .track_scroll(&self.panel_scroll[0])
-                                .pr(px(4.))
-                                .pb(px(8.))
-                                .when(self.browsing_other_timer(), |body| {
-                                    body.when_some(self.timer_context(cx), |body, context| {
-                                        body.child(context.mb(px(12.)))
-                                    })
-                                })
-                                .child(if let Some(session) = &self.completed {
-                                    self.completed_panel(session, compact, cx)
-                                        .into_any_element()
-                                } else if !self.preparing
-                                    && let Some(session) = self.current_session()
-                                {
-                                    self.running_panel(session, compact, cx).into_any_element()
-                                } else {
-                                    self.prepare_panel(cx).into_any_element()
-                                }),
+                                .child(
+                                    div()
+                                        .id("focus-operation")
+                                        .debug_selector(|| "focus-operation".into())
+                                        .size_full()
+                                        .overflow_y_scroll()
+                                        .track_scroll(&self.panel_scroll[0])
+                                        .pr(px(4.))
+                                        .pb(px(8.))
+                                        .when(self.browsing_other_timer(), |body| {
+                                            body.when_some(
+                                                self.timer_context(cx),
+                                                |body, context| body.child(context.mb(px(12.))),
+                                            )
+                                        })
+                                        .child(if let Some(session) = &self.completed {
+                                            self.completed_panel(session, compact, cx)
+                                                .into_any_element()
+                                        } else if !self.preparing
+                                            && let Some(session) = self.current_session()
+                                        {
+                                            self.running_panel(session, compact, cx)
+                                                .into_any_element()
+                                        } else {
+                                            self.prepare_panel(cx).into_any_element()
+                                        }),
+                                )
+                                .child(scroll_rail(
+                                    "focus-operation-scrollbar",
+                                    &self.panel_scroll[0],
+                                )),
                         )
                         .child(self.task_list(cx)),
                 )
@@ -604,175 +621,191 @@ impl ForceView {
             )
             .child(
                 div()
-                    .id("task-list-scroll")
-                    .debug_selector(|| "task-list-scroll".into())
+                    .debug_selector(|| "task-list-viewport".into())
+                    .relative()
                     .flex_1()
                     .min_h_0()
-                    .overflow_y_scroll()
-                    .flex()
-                    .flex_col()
-                    .when(tasks.is_empty() && standalone.is_empty(), |list| {
-                        list.child(
-                            div()
-                                .py(px(16.))
-                                .text_size(px(13.))
-                                .text_color(rgb(MUTED))
-                                .child("还没有任务"),
-                        )
-                    })
-                    .children(tasks.into_iter().map(|task| {
-                        let id = task.id;
-                        let selected = self.selected_task == Some(id);
-                        let active = self
-                            .active
-                            .iter()
-                            .find(|session| session.task_id == Some(id));
-                        let running = active.is_some_and(Session::is_running);
-                        let status = active.map_or_else(
-                            || {
-                                if task.total_seconds == 0 {
-                                    "未开始".to_owned()
-                                } else {
-                                    format!("累计 {}", short_time(task.total_seconds))
-                                }
-                            },
-                            |session| {
-                                format!(
-                                    "{} · 本次 {}",
-                                    if session.is_running() {
-                                        "计时中"
-                                    } else {
-                                        "已暂停"
-                                    },
-                                    short_time(session.elapsed_at(self.now))
+                    .child(
+                        div()
+                            .id("task-list-scroll")
+                            .debug_selector(|| "task-list-scroll".into())
+                            .size_full()
+                            .track_scroll(&self.task_scroll)
+                            .overflow_y_scroll()
+                            .flex()
+                            .flex_col()
+                            .when(tasks.is_empty() && standalone.is_empty(), |list| {
+                                list.child(
+                                    div()
+                                        .py(px(16.))
+                                        .text_size(px(13.))
+                                        .text_color(rgb(MUTED))
+                                        .child("还没有任务"),
                                 )
-                            },
-                        );
-                        let status = activity_status(&task.tag_name, &task.title, &status);
-                        choice_button(("task-row", id as u64), selected, SURFACE, cx)
-                            .debug_selector(move || format!("task-row-{id}"))
-                            .w_full()
-                            .h(px(64.))
-                            .px(px(12.))
-                            .rounded(px(0.))
-                            .border_0()
-                            .border_b_1()
-                            .border_color(rgb(LINE))
-                            .justify_start()
-                            .flex_shrink_0()
-                            .tooltip(activity_title(&task.tag_name, &task.title))
-                            .child(
-                                div()
-                                    .debug_selector(move || format!("task-column-{id}"))
-                                    .w(px(TASK_TEXT_WIDTH))
-                                    .relative()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(4.))
-                                    .when(selected, |column| {
-                                        column.child(
-                                            div()
-                                                .absolute()
-                                                .left(px(-12.))
-                                                .top(px(4.))
-                                                .bottom(px(4.))
-                                                .w(px(2.))
-                                                .bg(rgb(INK)),
-                                        )
-                                    })
-                                    .child(
-                                        single_line(task.title.clone(), 14.)
-                                            .debug_selector(move || format!("task-title-{id}"))
-                                            .font_weight(if selected {
-                                                FontWeight::MEDIUM
-                                            } else {
-                                                FontWeight::NORMAL
-                                            })
-                                            .text_color(rgb(INK)),
-                                    )
-                                    .child(
-                                        single_line(status, 13.)
-                                            .debug_selector(move || format!("task-status-{id}"))
-                                            .text_color(rgb(if running { INK } else { MUTED }))
-                                            .when(running, |line| {
-                                                line.font_weight(FontWeight::MEDIUM)
-                                            }),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_task(id, window, cx)
-                            }))
-                    }))
-                    .children(standalone.into_iter().map(|session| {
-                        let id = session.id;
-                        let selected = self.selected_session == Some(id);
-                        choice_button(("standalone-task", id as u64), selected, SURFACE, cx)
-                            .w_full()
-                            .h(px(64.))
-                            .px(px(12.))
-                            .rounded(px(0.))
-                            .border_0()
-                            .border_b_1()
-                            .border_color(rgb(LINE))
-                            .justify_start()
-                            .flex_shrink_0()
-                            .tooltip(activity_title(&session.tag_name, &session.title))
-                            .child(
-                                div()
-                                    .w(px(TASK_TEXT_WIDTH))
-                                    .relative()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(4.))
-                                    .when(selected, |column| {
-                                        column.child(
-                                            div()
-                                                .absolute()
-                                                .left(px(-12.))
-                                                .top(px(4.))
-                                                .bottom(px(4.))
-                                                .w(px(2.))
-                                                .bg(rgb(INK)),
-                                        )
-                                    })
-                                    .child(
-                                        single_line(session.title.clone(), 14.)
-                                            .font_weight(if selected {
-                                                FontWeight::MEDIUM
-                                            } else {
-                                                FontWeight::NORMAL
-                                            })
-                                            .text_color(rgb(INK)),
-                                    )
-                                    .child(
-                                        single_line(
-                                            activity_status(
-                                                &session.tag_name,
-                                                &session.title,
-                                                if session.is_running() {
-                                                    "计时中"
-                                                } else {
-                                                    "已暂停"
-                                                },
-                                            ),
-                                            13.,
-                                        )
-                                        .text_color(rgb(if session.is_running() {
-                                            INK
+                            })
+                            .children(tasks.into_iter().map(|task| {
+                                let id = task.id;
+                                let selected = self.selected_task == Some(id);
+                                let active = self
+                                    .active
+                                    .iter()
+                                    .find(|session| session.task_id == Some(id));
+                                let running = active.is_some_and(Session::is_running);
+                                let status = active.map_or_else(
+                                    || {
+                                        if task.total_seconds == 0 {
+                                            "未开始".to_owned()
                                         } else {
-                                            MUTED
-                                        }))
-                                        .when(session.is_running(), |line| {
-                                            line.font_weight(FontWeight::MEDIUM)
-                                        }),
-                                    ),
-                            )
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.select_session(id, window, cx)
+                                            format!("累计 {}", short_time(task.total_seconds))
+                                        }
+                                    },
+                                    |session| {
+                                        format!(
+                                            "{} · 本次 {}",
+                                            if session.is_running() {
+                                                "计时中"
+                                            } else {
+                                                "已暂停"
+                                            },
+                                            short_time(session.elapsed_at(self.now))
+                                        )
+                                    },
+                                );
+                                let status = activity_status(&task.tag_name, &task.title, &status);
+                                choice_button(("task-row", id as u64), selected, SURFACE, cx)
+                                    .debug_selector(move || format!("task-row-{id}"))
+                                    .w_full()
+                                    .h(px(64.))
+                                    .px(px(12.))
+                                    .rounded(px(0.))
+                                    .border_0()
+                                    .border_b_1()
+                                    .border_color(rgb(LINE))
+                                    .justify_start()
+                                    .flex_shrink_0()
+                                    .tooltip(activity_title(&task.tag_name, &task.title))
+                                    .child(
+                                        div()
+                                            .debug_selector(move || format!("task-column-{id}"))
+                                            .w(px(TASK_TEXT_WIDTH))
+                                            .relative()
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(4.))
+                                            .when(selected, |column| {
+                                                column.child(
+                                                    div()
+                                                        .absolute()
+                                                        .left(px(-12.))
+                                                        .top(px(4.))
+                                                        .bottom(px(4.))
+                                                        .w(px(2.))
+                                                        .bg(rgb(INK)),
+                                                )
+                                            })
+                                            .child(
+                                                single_line(task.title.clone(), 14.)
+                                                    .debug_selector(move || {
+                                                        format!("task-title-{id}")
+                                                    })
+                                                    .font_weight(if selected {
+                                                        FontWeight::MEDIUM
+                                                    } else {
+                                                        FontWeight::NORMAL
+                                                    })
+                                                    .text_color(rgb(INK)),
+                                            )
+                                            .child(
+                                                single_line(status, 13.)
+                                                    .debug_selector(move || {
+                                                        format!("task-status-{id}")
+                                                    })
+                                                    .text_color(rgb(if running {
+                                                        INK
+                                                    } else {
+                                                        MUTED
+                                                    }))
+                                                    .when(running, |line| {
+                                                        line.font_weight(FontWeight::MEDIUM)
+                                                    }),
+                                            ),
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.select_task(id, window, cx)
+                                    }))
                             }))
-                    })),
+                            .children(standalone.into_iter().map(|session| {
+                                let id = session.id;
+                                let selected = self.selected_session == Some(id);
+                                choice_button(("standalone-task", id as u64), selected, SURFACE, cx)
+                                    .w_full()
+                                    .h(px(64.))
+                                    .px(px(12.))
+                                    .rounded(px(0.))
+                                    .border_0()
+                                    .border_b_1()
+                                    .border_color(rgb(LINE))
+                                    .justify_start()
+                                    .flex_shrink_0()
+                                    .tooltip(activity_title(&session.tag_name, &session.title))
+                                    .child(
+                                        div()
+                                            .w(px(TASK_TEXT_WIDTH))
+                                            .relative()
+                                            .flex_shrink_0()
+                                            .flex()
+                                            .flex_col()
+                                            .gap(px(4.))
+                                            .when(selected, |column| {
+                                                column.child(
+                                                    div()
+                                                        .absolute()
+                                                        .left(px(-12.))
+                                                        .top(px(4.))
+                                                        .bottom(px(4.))
+                                                        .w(px(2.))
+                                                        .bg(rgb(INK)),
+                                                )
+                                            })
+                                            .child(
+                                                single_line(session.title.clone(), 14.)
+                                                    .font_weight(if selected {
+                                                        FontWeight::MEDIUM
+                                                    } else {
+                                                        FontWeight::NORMAL
+                                                    })
+                                                    .text_color(rgb(INK)),
+                                            )
+                                            .child(
+                                                single_line(
+                                                    activity_status(
+                                                        &session.tag_name,
+                                                        &session.title,
+                                                        if session.is_running() {
+                                                            "计时中"
+                                                        } else {
+                                                            "已暂停"
+                                                        },
+                                                    ),
+                                                    13.,
+                                                )
+                                                .text_color(rgb(if session.is_running() {
+                                                    INK
+                                                } else {
+                                                    MUTED
+                                                }))
+                                                .when(session.is_running(), |line| {
+                                                    line.font_weight(FontWeight::MEDIUM)
+                                                }),
+                                            ),
+                                    )
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.select_session(id, window, cx)
+                                    }))
+                            })),
+                    )
+                    .child(scroll_rail("task-list-scrollbar", &self.task_scroll)),
             )
     }
 
@@ -1361,4 +1394,18 @@ fn activity_status(activity: &str, description: &str, status: &str) -> String {
         // Keep running/paused visible even when the activity name is long.
         format!("{status} · {activity}")
     }
+}
+
+// Keep each rail in the existing column gutter, outside the moving content.
+// The sidebar retains its full text width and its heading stays fixed.
+fn scroll_rail(selector: &'static str, handle: &ScrollHandle) -> Stateful<Div> {
+    div()
+        .id(selector)
+        .debug_selector(move || selector.into())
+        .absolute()
+        .top_0()
+        .bottom_0()
+        .left_0()
+        .right(px(-12.))
+        .child(Scrollbar::vertical(handle).scrollbar_show(ScrollbarShow::Hover))
 }

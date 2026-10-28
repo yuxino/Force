@@ -2,7 +2,7 @@
 
 use chrono::{Days, Local, NaiveDate, TimeZone};
 use force_core::{DailyAnalysis, Store};
-use gpui::Context;
+use gpui::{Context, Window};
 
 use crate::model::{ForceView, Page, day_bounds};
 
@@ -99,6 +99,24 @@ pub(crate) fn load_analysis(
 }
 
 impl ForceView {
+    pub(crate) fn open_analysis_day(
+        &mut self,
+        date: NaiveDate,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if self.analysis.error
+            || date > Local::now().date_naive()
+            || !self.analysis.days.iter().any(|day| day.date == date)
+        {
+            return;
+        }
+        // Keep date changes consistent with the records calendar, including its
+        // search/filter state. Normal navigation preserves suspended editors.
+        self.select_record_date(date, cx);
+        self.navigate(Page::Records, window, cx);
+    }
+
     pub(crate) fn select_analysis_period(
         &mut self,
         period: AnalysisPeriod,
