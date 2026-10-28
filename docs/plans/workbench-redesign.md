@@ -28,7 +28,8 @@ keep errors and meaningful distinctions visible.
   high, fields 40–44 and most corner radii 4–6. Hover, keyboard focus and disabled
   contrast remain visible.
 - Put brand, primary navigation, the single 新任务 action and secondary settings
-  into one 68-point header. 新任务 and Cmd/Ctrl+N open the task form without
+  into one 68-point header. Give 新任务 a compact dark primary button; keep
+  calendar 安排日程 outlined with a calendar icon. 新任务 and Cmd/Ctrl+N open the task form without
   requiring a calendar plan. Repeated requests focus the same draft; changed
   calendar drafts remain suspended and recoverable. Keep page headings and
   settings content on the same reading axes.
@@ -42,7 +43,10 @@ and action row. Countdown progress may use a restrained functional scale;
 stopwatch time must not imply an invented target. Round setup separates countdown
 and stopwatch modes. Countdown has an always
 visible minute input and compact 25/45/60 shortcuts; arbitrary durations do not
-require a separate custom mode. Task metadata stays above this group. New drafts
+require a separate custom mode. Task metadata stays above this group. Setup uses a 24-point heading and
+40-point fields, a compact 168-point tag picker, and aligned 80-point setting
+labels. Timing mode and duration share one group with a segmented mode control
+and bordered duration presets. New drafts
 can be saved for later without starting. Primary actions have compact fixed
 widths; keep task completion separate from the save position. Running shows
 剩余时间 / 已用时间 before the digits, an ending estimate while running, and
@@ -54,7 +58,7 @@ The task list uses continuous 64-point rows, subtle rules and a left selection
 mark. Running status remains independent of selection. Preserve actual title and
 status widths, tooltips, safe truncation and independent scrolling. Keep task
 creation in the header rather than duplicating it in the sidebar; 保存任务 is a
-secondary action that saves without starting a timer. Calendar 添加安排 remains
+secondary action that saves without starting a timer. Calendar 安排日程 remains
 secondary and separate from task creation.
 
 The clock shows time inside the cream-colored Siamese cat. Clicking the cat expands a single
@@ -98,3 +102,16 @@ existing deployment target and canonical caches. Do not launch or activate a
 native window while the user's no-interruption instruction remains in force.
 Native glyphs, hover, automatic scroll targeting, IME and OS window behavior
 remain a separate acceptance boundary.
+
+## Task creation refinement
+
+The title-first entry and compact metadata grouping take cues from
+[Reminders](https://support.apple.com/en-ca/guide/reminders/remndc729e28/mac);
+[Calendar](https://support.apple.com/en-gb/guide/calendar/icalwr13-events/mac)
+provides the reference for date-context creation. Force keeps its own neutral
+visual language and two distinct operations: 新任务 opens an unscheduled task
+draft, while 安排日程 opens the selected date’s existing plan editor.
+Saving a task does not start timing. Mode changes retain custom minutes;
+closing or changing views preserves the existing task/calendar draft rules.
+The refinement changes control grouping and visual hierarchy, not persistence,
+native window behavior, or timer routing.

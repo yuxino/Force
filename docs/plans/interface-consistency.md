@@ -46,10 +46,12 @@ Use spacing between columns without a full-height dividing line.
 - Setup, running and completion replace only the left operation area. Its
   content fills the left column and keeps the same left edge and width in all
   three states, aligned with the heading above. Setup keeps
-  task name first, then equal-width tag and timing-mode fields on one row.
-  The round duration sits below them, and whitespace groups Start and Save beneath the fields. Use compact
-  倒计时 / 正计时 choices; countdown always exposes one editable minute field
-  with 25/45/60 shortcuts beside it. Mode switches retain that input. New task
+  task name first, followed by a compact tag row. Setting labels share an
+  80-point column and a 12-point gap; the tag picker is 168 points wide. Group
+  timing mode and duration below a fine rule. Use one 168-point segmented
+  倒计时 / 正计时 control, and an editable minute field with bordered 25/45/60
+  shortcuts beside it. Keep the 24-point setup heading and 40-point fields;
+  group Start and the outlined Save action beneath the settings. Mode switches retain that input. New task
   drafts offer 保存任务 beside 开始计时; saving creates no timer. Keep compact
   primary actions rather than stretching them across the column. Running uses a
   left-aligned tabular timer up to 104 points (80 in
@@ -75,8 +77,10 @@ Use spacing between columns without a full-height dividing line.
   single-line labels against final bounds with fresh text runs; GPUI 0.2.2
   built-in ellipsis can keep shortened runs from an earlier width measurement.
   Complete titles remain available in tooltips; two-line operation headings wrap.
-- The header always offers 新任务 (Cmd/Ctrl+N), without requiring a calendar plan.
-  Opening it preserves task drafts and suspends any changed calendar draft.
+- The header always offers a compact dark 新任务 button (Cmd/Ctrl+N), without
+  requiring a calendar plan. Calendar creation uses a secondary outlined
+  安排日程 button with a calendar icon, including day and popover views.
+  Opening 新任务 preserves task drafts and suspends any changed calendar draft.
 - The task sidebar contains selection only; do not duplicate the header entry.
   Repeated menu/shortcut requests focus the same draft without clearing its fields.
   Selected inactive tasks can be removed from the list while retaining their records. Ending a round
@@ -290,8 +294,8 @@ White canvas, #fafafa navigation/outside-month surfaces, #e8e8e8 dividers,
 #c9c9c9 control boundaries, #f7f7f7 selected rows, #f2f2f2 hover and #e7e7e7
 press states have separate roles. Secondary operations are white outlined
 buttons without a shadow; quiet actions share a custom neutral variant instead
-of the library Ghost's fixed darkening. Timing mode selection uses an ink border
-on white, while duration presets use an underline. Neither resembles disabled
+of the library Ghost's fixed darkening. Timing mode selection uses a white selected segment inside a neutral group;
+duration presets use compact bordered choices with a clear selected state. Neither resembles disabled
 Start. The task sidebar heading is subordinate at 14 points.
 
 Calendar editors reserve two lines for validation so bottom-snapped title and
