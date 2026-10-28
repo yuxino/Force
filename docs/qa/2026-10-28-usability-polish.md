@@ -45,3 +45,11 @@ through build, test execution and bundle copying. Cargo's individual build lock
 does not protect a test executable or binary after another checkout rebuilds
 the same target. The integrating chat owns the shared target and final signed
 installation after this branch's preview exits.
+
+## Production packaging verification
+
+`--production` must force release mode: debug binaries intentionally select the
+development data directory, even inside a bundle named Force.app. A signed bundle
+and matching identifier alone do not establish a production build. Verify the
+running executable opens the production database and restores its active session
+after installation.
