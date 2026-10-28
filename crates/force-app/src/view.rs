@@ -234,72 +234,86 @@ impl ForceView {
             Page::Settings => 2,
         }];
         div()
-            .id("manager-scroll")
+            .debug_selector(|| "manager-viewport".into())
             .flex_1()
             .min_h_0()
-            .overflow_y_scroll()
-            .track_scroll(scroll)
             .relative()
             .child(
                 div()
-                    .debug_selector(|| "manager-content".into())
-                    .w_full()
-                    .max_w(px(976.))
-                    .mx_auto()
-                    .px(px(40.))
-                    .pt(px(28.))
-                    .pb(px(48.))
+                    .id("manager-scroll")
+                    .size_full()
+                    .overflow_y_scroll()
+                    .track_scroll(scroll)
                     .child(
                         div()
-                            .debug_selector(|| "page-heading".into())
-                            .mb(px(24.))
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .child(page_heading(match self.page {
-                                Page::Agenda => "日历",
-                                Page::Focus => "计时",
-                                Page::Records => "记录",
-                                Page::Settings => "设置",
-                            }))
-                            .when(self.page == Page::Records, |row| {
-                                row.child(
-                                    button("export-records")
-                                        .debug_selector(|| "export-records".into())
-                                        .custom(crate::view::quiet_variant(cx))
-                                        .h(px(36.))
-                                        .icon(control_icon(
-                                            Icon::new(IconName::ArrowDown).size(px(14.)),
-                                            MUTED,
-                                        ))
-                                        .unavailable(self.export_busy || self.storage_failed)
-                                        .child(control_label(
-                                            if self.export_busy {
-                                                "正在导出…"
-                                            } else {
-                                                "导出全部"
-                                            },
-                                            MUTED,
-                                        ))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            this.export(window, cx)
-                                        })),
-                                )
+                            .debug_selector(|| "manager-content".into())
+                            .w_full()
+                            .max_w(px(976.))
+                            .mx_auto()
+                            .px(px(40.))
+                            .pt(px(28.))
+                            .pb(px(48.))
+                            .child(
+                                div()
+                                    .debug_selector(|| "page-heading".into())
+                                    .mb(px(24.))
+                                    .flex()
+                                    .items_center()
+                                    .justify_between()
+                                    .child(page_heading(match self.page {
+                                        Page::Agenda => "日历",
+                                        Page::Focus => "计时",
+                                        Page::Records => "记录",
+                                        Page::Settings => "设置",
+                                    }))
+                                    .when(self.page == Page::Records, |row| {
+                                        row.child(
+                                            button("export-records")
+                                                .debug_selector(|| "export-records".into())
+                                                .custom(crate::view::quiet_variant(cx))
+                                                .h(px(36.))
+                                                .icon(control_icon(
+                                                    Icon::new(IconName::ArrowDown).size(px(14.)),
+                                                    MUTED,
+                                                ))
+                                                .unavailable(
+                                                    self.export_busy || self.storage_failed,
+                                                )
+                                                .child(control_label(
+                                                    if self.export_busy {
+                                                        "正在导出…"
+                                                    } else {
+                                                        "导出全部"
+                                                    },
+                                                    MUTED,
+                                                ))
+                                                .on_click(cx.listener(|this, _, window, cx| {
+                                                    this.export(window, cx)
+                                                })),
+                                        )
+                                    }),
+                            )
+                            .when(self.storage_failed, |body| {
+                                body.child(self.storage_notice(cx))
+                            })
+                            .when(!self.storage_failed, |body| {
+                                body.child(match self.page {
+                                    Page::Agenda => {
+                                        self.agenda_panel(window, cx).into_any_element()
+                                    }
+                                    Page::Focus => self.focus_panel(compact, cx).into_any_element(),
+                                    Page::Records => {
+                                        self.records_panel(window, cx).into_any_element()
+                                    }
+                                    Page::Settings => self
+                                        .settings_panel(
+                                            window.viewport_size().width >= px(920.),
+                                            cx,
+                                        )
+                                        .into_any_element(),
+                                })
                             }),
-                    )
-                    .when(self.storage_failed, |body| {
-                        body.child(self.storage_notice(cx))
-                    })
-                    .when(!self.storage_failed, |body| {
-                        body.child(match self.page {
-                            Page::Agenda => self.agenda_panel(window, cx).into_any_element(),
-                            Page::Focus => self.focus_panel(compact, cx).into_any_element(),
-                            Page::Records => self.records_panel(window, cx).into_any_element(),
-                            Page::Settings => self
-                                .settings_panel(window.viewport_size().width >= px(920.), cx)
-                                .into_any_element(),
-                        })
-                    }),
+                    ),
             )
             .vertical_scrollbar(scroll)
             .into_any_element()

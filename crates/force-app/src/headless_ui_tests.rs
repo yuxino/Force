@@ -92,6 +92,10 @@ impl ManagerHarness {
 
     pub(crate) fn scroll(&mut self, selector: &'static str, amount: f32) {
         let position = self.bounds(selector).center();
+        self.scroll_at(position, amount);
+    }
+
+    pub(crate) fn scroll_at(&mut self, position: Point<Pixels>, amount: f32) {
         self.cx
             .simulate_mouse_move(position, None, Modifiers::default());
         self.cx.simulate_event(ScrollWheelEvent {
@@ -3259,6 +3263,152 @@ fn headless_ui_empty_record_search_clears_and_returns_keyboard_focus(cx: &mut Te
     manager.cx.simulate_input("Visible");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert_eq!(view.record_search.read(cx).value(), "Visible")
+    });
+}
+
+fn add_tag_scroll_fixture(manager: &mut ManagerHarness) {
+    manager.view.update(&mut manager.cx, |view, cx| {
+        for ix in view.tags.len()..13 {
+            view.store
+                .as_mut()
+                .unwrap()
+                .create_tag(&format!("Scroll tag {ix}"), force_core::TagKind::Focus)
+                .unwrap();
+        }
+        view.refresh(cx);
+        assert_eq!(view.tags.len(), 13);
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_tag_list_scrolls_independently_and_hands_off_at_both_edges(cx: &mut TestAppContext) {
+    for width in [1040., 780.] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, 620., Page::Settings);
+        add_tag_scroll_fixture(&mut manager);
+        // At the narrow window, reveal the whole list through the page gutter.
+        let bottom = manager.bounds("settings-tags").bottom();
+        if bottom > px(596.) {
+            manager.scroll_at(point(px(8.), px(400.)), f32::from(px(596.) - bottom));
+        }
+        let viewport = manager.bounds("settings-tag-viewport");
+        assert_eq!(viewport.size.height, px(240.));
+        assert!(viewport.top() >= px(68.) && viewport.bottom() <= px(620.));
+        let remove = manager.bounds("remove-tag-1");
+        assert!(
+            remove.right() <= viewport.right() - px(20.),
+            "delete action must stay clear of the scrollbar hit area"
+        );
+        let outer_before = manager
+            .view
+            .read_with(&manager.cx, |view, _| view.panel_scroll[2].offset());
+        let first_row = manager.bounds("tag-row-1");
+
+        manager.scroll("settings-tags", -80.);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.tag_scroll.offset().y, px(-80.));
+            assert_eq!(view.panel_scroll[2].offset(), outer_before);
+        });
+        assert_same_bounds(manager.bounds("settings-tag-viewport"), viewport);
+        assert_eq!(manager.bounds("tag-row-1").top(), first_row.top() - px(80.));
+
+        // A wheel event that reaches the edge belongs to the list; the next
+        // event at that edge can continue through the surrounding page.
+        manager.scroll("settings-tags", -10_000.);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(
+                view.tag_scroll.offset().y,
+                -view.tag_scroll.max_offset().height
+            );
+            assert_eq!(view.panel_scroll[2].offset(), outer_before);
+            assert!(view.panel_scroll[2].max_offset().height > -outer_before.y + px(24.));
+        });
+        let last_row = manager.bounds("tag-row-13");
+        assert!(last_row.top() >= viewport.top() && last_row.bottom() <= viewport.bottom());
+        manager.scroll("settings-tags", -24.);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(
+                view.tag_scroll.offset().y,
+                -view.tag_scroll.max_offset().height
+            );
+            assert_eq!(view.panel_scroll[2].offset().y, outer_before.y - px(24.));
+        });
+
+        manager.scroll("settings-tags", 10_000.);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.tag_scroll.offset().y, px(0.));
+            assert_eq!(view.panel_scroll[2].offset().y, outer_before.y - px(24.));
+        });
+        manager.scroll("settings-tags", 24.);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.tag_scroll.offset().y, px(0.));
+            assert_eq!(view.panel_scroll[2].offset(), outer_before);
+        });
+    }
+}
+
+#[gpui::test]
+fn headless_ui_settings_scrollbar_tracks_stay_clickable_after_scrolling(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 620., Page::Settings);
+    add_tag_scroll_fixture(&mut manager);
+    let tag_viewport = manager.bounds("settings-tag-viewport");
+    manager.scroll("settings-tags", -80.);
+    // Clicking the original bottom of the track must still reach the final
+    // tags. A scrollbar attached to the scrolling content moves out of reach.
+    manager.cx.simulate_click(
+        point(
+            tag_viewport.right() - px(8.),
+            tag_viewport.bottom() - px(8.),
+        ),
+        Modifiers::default(),
+    );
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(
+            view.tag_scroll.offset().y,
+            -view.tag_scroll.max_offset().height
+        );
+        assert_eq!(view.panel_scroll[2].offset().y, px(0.));
+    });
+    assert_same_bounds(manager.bounds("settings-tag-viewport"), tag_viewport);
+
+    let page_viewport = manager.bounds("manager-viewport");
+    manager.scroll_at(point(px(8.), px(400.)), -40.);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.panel_scroll[2].offset().y, px(-40.));
+        assert!(view.panel_scroll[2].max_offset().height > px(40.));
+    });
+    manager.cx.simulate_click(
+        point(
+            page_viewport.right() - px(8.),
+            page_viewport.bottom() - px(8.),
+        ),
+        Modifiers::default(),
+    );
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(
+            view.panel_scroll[2].offset().y,
+            -view.panel_scroll[2].max_offset().height,
+        );
+    });
+    assert_same_bounds(manager.bounds("manager-viewport"), page_viewport);
+}
+
+#[gpui::test]
+fn headless_ui_short_tag_list_passes_wheel_events_to_the_settings_page(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 620., Page::Settings);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.tag_scroll.max_offset().height, px(0.));
+        assert!(view.panel_scroll[2].max_offset().height > px(24.));
+    });
+    manager.scroll("settings-tags", -24.);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.tag_scroll.offset().y, px(0.));
+        assert_eq!(view.panel_scroll[2].offset().y, px(-24.));
     });
 }
 

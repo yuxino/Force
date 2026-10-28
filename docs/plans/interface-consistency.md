@@ -296,6 +296,12 @@ callbacks are not exercised by ordinary headless refreshes. Use simulated wheel
 events to check viewport bounds and controls; verify automatic scroll targeting
 natively instead of changing production behavior to satisfy this test limitation.
 
+Keep scrollbar layers outside the content whose scroll offset is applied; a
+scrollbar inside that content moves and clips with its rows. The settings tag
+list keeps a 240-point viewport and a separate 20-point action gutter. Wheel
+input moves that list alone until its edge, then continues through the page.
+Exercise both boundaries and click the original track position after scrolling.
+
 ## Visual roles and stable editing
 
 White canvas, #fafafa navigation/outside-month surfaces, #e8e8e8 dividers,
