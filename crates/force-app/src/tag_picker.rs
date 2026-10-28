@@ -220,18 +220,19 @@ impl TagPicker {
 impl EventEmitter<TagPicked> for TagPicker {}
 
 impl Render for TagPicker {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let selected_option = self
             .options
             .iter()
             .find(|option| Some(option.id) == self.selected);
         let title = selected_option
-            .map_or("选择标签", |option| option.name.as_str())
+            .map_or("选择活动", |option| option.name.as_str())
             .to_owned();
         let color = selected_option
             .and_then(|option| option.color.as_deref())
             .and_then(crate::settings_view::tag_color_rgb);
         let view = cx.entity();
+        let focused = self.focus_handle.is_focused(window);
         div()
             .id("focus-tag-picker")
             .debug_selector(|| "focus-tag-picker".into())
@@ -239,6 +240,21 @@ impl Render for TagPicker {
             .size_full()
             .track_focus(&self.focus_handle)
             .tab_stop(false)
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                let key = event.keystroke.key.as_str();
+                let plain = !event.keystroke.modifiers.platform
+                    && !event.keystroke.modifiers.control
+                    && !event.keystroke.modifiers.alt;
+                if plain
+                    && this.menu.is_none()
+                    && (key == "down"
+                        || (this.focus_handle.is_focused(window)
+                            && matches!(key, "enter" | "space" | " ")))
+                {
+                    this.open(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, _, _| {
                 if event.button == MouseButton::Left {
                     this.trigger_was_open = this.menu.is_some();
@@ -253,7 +269,7 @@ impl Render for TagPicker {
                         ButtonCustomVariant::new(cx)
                             .color(rgb(0xffffff).into())
                             .foreground(rgb(INK).into())
-                            .border(rgb(CONTROL_LINE).into())
+                            .border(rgb(if focused { INK } else { CONTROL_LINE }).into())
                             .hover(rgb(HOVER).into())
                             .active(rgb(PRESSED).into()),
                     )
@@ -311,5 +327,11 @@ impl Render for TagPicker {
                     )
                 })
             })
+    }
+}
+
+impl Focusable for TagPicker {
+    fn focus_handle(&self, _: &App) -> FocusHandle {
+        self.focus_handle.clone()
     }
 }

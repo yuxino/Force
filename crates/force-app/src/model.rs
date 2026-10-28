@@ -52,6 +52,13 @@ struct UntitledTaskDraft {
     timer_minutes: u32,
 }
 
+struct TaskTitleBaseline {
+    task_id: i64,
+    tag_id: i64,
+    title: String,
+    description: String,
+}
+
 #[derive(Clone, Copy)]
 enum TagDestination {
     Edit(i64),
@@ -64,6 +71,7 @@ pub(crate) struct ForceView {
     pub(crate) time_picker: Entity<crate::time_picker::TimePicker>,
     pub(crate) agenda: crate::agenda_model::AgendaState,
     pub(crate) moments: crate::moment_model::MomentState,
+    pub(crate) record_editor: crate::record_editor_model::RecordEditorState,
     pub(crate) record_moments: Vec<force_core::Moment>,
     pub(crate) store: Option<Store>,
     pub(crate) data_dir: PathBuf,
@@ -100,6 +108,7 @@ pub(crate) struct ForceView {
     pub(crate) strip_window: Option<WindowHandle<Root>>,
     pub(crate) preparing: bool,
     untitled_tag_baseline: i64,
+    task_title_baseline: Option<TaskTitleBaseline>,
     suspended_untitled_task: Option<UntitledTaskDraft>,
     discarding_untitled_task: bool,
     restored_tag_needs_reselection: bool,
@@ -142,8 +151,8 @@ pub(crate) struct ForceView {
 
 impl ForceView {
     pub(crate) fn new(data_dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Self {
-        let task_input = cx.new(|cx| InputState::new(window, cx).placeholder("任务名称"));
-        let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("新标签名称"));
+        let task_input = cx.new(|cx| InputState::new(window, cx).placeholder("补充说明（可选）"));
+        let tag_input = cx.new(|cx| InputState::new(window, cx).placeholder("新活动名称"));
         let tag_color_input = cx.new(|cx| InputState::new(window, cx).placeholder("#RRGGBB"));
         let goal_input = cx.new(|cx| InputState::new(window, cx).placeholder("每日目标（分钟）"));
         let timer_input = cx.new(|cx| InputState::new(window, cx).default_value("25"));
@@ -176,7 +185,7 @@ impl ForceView {
                     this.restored_tag_needs_reselection = false;
                     cx.notify();
                 } else {
-                    this.notify("这个计时标签已变更，请重新选择。", cx);
+                    this.notify("这个活动已变更，请重新选择。", cx);
                 }
             });
         let subscription = cx.subscribe_in(
@@ -299,6 +308,7 @@ impl ForceView {
         });
         let agenda = crate::agenda_model::AgendaState::new(window, cx);
         let moments = crate::moment_model::MomentState::new(window, cx);
+        let record_editor = crate::record_editor_model::RecordEditorState::new(window, cx);
         let classification = crate::classification_model::ClassificationState::new(window, cx);
         let time_picker = cx.new(crate::time_picker::TimePicker::new);
         let panel_scroll: [gpui::ScrollHandle; 4] = std::array::from_fn(|_| Default::default());
@@ -306,6 +316,7 @@ impl ForceView {
         let mut view = Self {
             agenda,
             moments,
+            record_editor,
             record_moments: Vec::new(),
             store: None,
             data_dir,
@@ -345,6 +356,7 @@ impl ForceView {
             strip_window: None,
             preparing: false,
             untitled_tag_baseline: 0,
+            task_title_baseline: None,
             suspended_untitled_task: None,
             discarding_untitled_task: false,
             restored_tag_needs_reselection: false,
@@ -372,7 +384,7 @@ impl ForceView {
             update_state: crate::updates::UpdateState::Idle,
             now: Local::now().timestamp(),
             timer_minutes: 25,
-            countdown: true,
+            countdown: false,
             sound_enabled: true,
             focus_handle: cx.focus_handle(),
             panel_scroll,
@@ -454,8 +466,14 @@ impl ForceView {
                 view.return_task = session.task_id;
                 view.return_target_seconds = session.target_seconds;
             }
-            view.task_input
-                .update(cx, |input, cx| input.set_value(session.title, window, cx));
+            view.load_task_description(
+                session.task_id,
+                session.tag_id,
+                &session.title,
+                &session.tag_name,
+                window,
+                cx,
+            );
         } else {
             // The initial empty workspace is also a new-task form, so edits
             // receive the same protection as drafts opened with New.
@@ -620,17 +638,17 @@ impl ForceView {
                 self.record_stats = record_stats;
                 self.activity_days = activity_days;
                 self.storage_failed = false;
-                let preserve_task_tag = self.preparing
-                    && (self.selected_task.is_some() || self.restored_tag_needs_reselection);
-                let selected_tag_available = self.tags.iter().any(|tag| {
-                    tag.id == self.selected_tag && (!self.preparing || tag.kind == TagKind::Focus)
-                });
-                if !(preserve_task_tag || selected_tag_available) {
-                    self.selected_tag = self
+                // Activity selection is explicit. A removed activity keeps its
+                // identity so a draft can request reselection without silently
+                // moving the task to the first available activity.
+                if self.preparing
+                    && self.selected_tag != 0
+                    && !self
                         .tags
                         .iter()
-                        .find(|tag| tag.kind == TagKind::Focus)
-                        .map_or(0, |tag| tag.id);
+                        .any(|tag| tag.id == self.selected_tag && tag.kind == TagKind::Focus)
+                {
+                    self.restored_tag_needs_reselection = true;
                 }
                 if !self.preparing
                     && !self
@@ -740,7 +758,7 @@ impl ForceView {
                     }
                     force_core::Error::NotFound => "记录已变更，请刷新后重试。".to_owned(),
                     force_core::Error::ArchivedTag => {
-                        "原标签已移除，请为这件事重新选择标签。".to_owned()
+                        "原活动已移除，请为这件事重新选择活动。".to_owned()
                     }
                     force_core::Error::InvalidTransition => {
                         "当前状态无法执行此操作，请检查系统时间后重试。".to_owned()
@@ -759,22 +777,96 @@ impl ForceView {
         }
     }
 
+    pub(crate) fn selected_activity_name(&self) -> Option<&str> {
+        self.tags
+            .iter()
+            .find(|tag| tag.id == self.selected_tag)
+            .map(|tag| tag.name.as_str())
+            .or_else(|| {
+                self.selected_task
+                    .and_then(|id| self.tasks.iter().find(|task| task.id == id))
+                    .filter(|task| task.tag_id == self.selected_tag)
+                    .map(|task| task.tag_name.as_str())
+            })
+            .or_else(|| {
+                self.selected_session
+                    .and_then(|id| self.active.iter().find(|session| session.id == id))
+                    .filter(|session| session.tag_id == self.selected_tag)
+                    .map(|session| session.tag_name.as_str())
+            })
+    }
+
+    /// Storage always receives a valid title; the interface only asks for a
+    /// description when it adds information beyond the chosen activity.
+    pub(crate) fn resolved_task_title(&self, cx: &gpui::App) -> String {
+        let description = self.task_input.read(cx).value();
+        let description = description.trim();
+        // Activity renames change the picker label, not an existing task's
+        // title. Keep the loaded meaning of an unchanged optional description.
+        if let Some(baseline) = self.task_title_baseline.as_ref().filter(|baseline| {
+            self.selected_task == Some(baseline.task_id)
+                && self.selected_tag == baseline.tag_id
+                && description == baseline.description
+        }) {
+            return baseline.title.clone();
+        }
+        if description.is_empty() {
+            self.selected_activity_name().unwrap_or_default().to_owned()
+        } else {
+            description.to_owned()
+        }
+    }
+
+    fn load_task_description(
+        &mut self,
+        task_id: Option<i64>,
+        tag_id: i64,
+        title: &str,
+        activity: &str,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let description = optional_task_description(title, activity);
+        self.task_title_baseline = task_id.map(|task_id| TaskTitleBaseline {
+            task_id,
+            tag_id,
+            title: title.to_owned(),
+            description: description.clone(),
+        });
+        self.task_input
+            .update(cx, |input, cx| input.set_value(description, window, cx));
+    }
+
+    pub(crate) fn new_task_has_draft(&self, cx: &gpui::App) -> bool {
+        self.is_new_task_form()
+            && (!self.task_input.read(cx).value().is_empty()
+                || self.selected_tag != self.untitled_tag_baseline
+                || self.countdown
+                || parse_goal_draft(self.timer_input.read(cx).value().as_ref()) != Some(25))
+    }
+
+    fn focus_task_setup(&self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.task_tag_error().is_some() {
+            self.tag_picker.read(cx).focus_handle(cx).focus(window);
+        } else if self.timer_duration_error(cx).is_some() {
+            self.timer_input.read(cx).focus_handle(cx).focus(window);
+        } else {
+            self.task_input.read(cx).focus_handle(cx).focus(window);
+        }
+    }
+
     pub(crate) fn task_has_unsaved_changes(&self, cx: &gpui::App) -> bool {
         self.preparing
             && self
                 .selected_task
                 .and_then(|id| self.tasks.iter().find(|t| t.id == id))
                 .is_some_and(|task| {
-                    task.title != self.task_input.read(cx).value().trim()
-                        || task.tag_id != self.selected_tag
+                    task.title != self.resolved_task_title(cx) || task.tag_id != self.selected_tag
                 })
     }
 
     pub(crate) fn task_title_error(&self, cx: &gpui::App) -> Option<&'static str> {
-        task_title_error_for(
-            self.task_input.read(cx).value().as_ref(),
-            self.selected_task.is_some(),
-        )
+        task_title_error_for(self.task_input.read(cx).value().as_ref(), false)
     }
 
     pub(crate) fn task_tag_error(&self) -> Option<&'static str> {
@@ -785,18 +877,19 @@ impl ForceView {
         {
             None
         } else if !self.tags.iter().any(|tag| tag.kind == TagKind::Focus) {
-            Some("请先添加计时标签。")
-        } else if self.selected_tag != 0 && !self.tags.iter().any(|tag| tag.id == self.selected_tag)
+            Some("请先添加活动。")
+        } else if self.restored_tag_needs_reselection
+            || (self.selected_tag != 0 && !self.tags.iter().any(|tag| tag.id == self.selected_tag))
         {
-            Some("原标签已移除，请重新选择。")
+            Some("原活动已移除，请重新选择。")
         } else {
-            Some("请选择可用的计时标签。")
+            Some("请选择活动。")
         }
     }
 
     fn task_form_error(&self, cx: &gpui::App) -> Option<&'static str> {
-        task_title_error_for(self.task_input.read(cx).value().as_ref(), true)
-            .or_else(|| self.task_tag_error())
+        self.task_tag_error()
+            .or_else(|| task_title_error_for(&self.resolved_task_title(cx), true))
     }
 
     pub(crate) fn can_save_task(&self, cx: &gpui::App) -> bool {
@@ -831,11 +924,7 @@ impl ForceView {
             return;
         }
         let timer_value = self.timer_input.read(cx).value().to_string();
-        let changed = !title.is_empty()
-            || self.selected_tag != self.untitled_tag_baseline
-            || !self.countdown
-            || parse_goal_draft(&timer_value) != Some(25);
-        if changed {
+        if self.new_task_has_draft(cx) {
             self.suspended_untitled_task = Some(UntitledTaskDraft {
                 title,
                 tag: self.selected_tag,
@@ -975,8 +1064,14 @@ impl ForceView {
             .cloned()
         {
             self.selected_tag = task.tag_id;
-            self.task_input
-                .update(cx, |input, cx| input.set_value(task.title, window, cx));
+            self.load_task_description(
+                Some(task.id),
+                task.tag_id,
+                &task.title,
+                &task.tag_name,
+                window,
+                cx,
+            );
             cx.notify();
         }
     }
@@ -993,7 +1088,7 @@ impl ForceView {
             return false;
         }
         let mut saved_id = self.selected_task;
-        let title = self.task_input.read(cx).value().trim().to_owned();
+        let title = self.resolved_task_title(cx);
         let tag = self.selected_tag;
         if self.write(
             |store| {
@@ -1007,6 +1102,12 @@ impl ForceView {
             cx,
         ) {
             self.selected_task = saved_id;
+            self.task_title_baseline = saved_id.map(|task_id| TaskTitleBaseline {
+                task_id,
+                tag_id: tag,
+                title,
+                description: self.task_input.read(cx).value().trim().to_owned(),
+            });
             self.toast = None;
             cx.notify();
             true
@@ -1109,7 +1210,7 @@ impl ForceView {
             self.timer_minutes =
                 parse_goal_draft(self.timer_input.read(cx).value().as_ref()).unwrap_or(25);
         }
-        let title = self.task_input.read(cx).value().trim().to_owned();
+        let title = self.resolved_task_title(cx);
         let tag = self.selected_tag;
         let selected = self.selected_task;
         let target = self.countdown.then_some(i64::from(self.timer_minutes) * 60);
@@ -1133,6 +1234,9 @@ impl ForceView {
             cx,
         );
         if saved && let Some(session) = started {
+            // This exact setup has just been consumed. Other entry points such
+            // as starting a break still suspend a separate activity draft.
+            self.preparing = false;
             self.accept_started(session, window, cx);
         }
     }
@@ -1172,9 +1276,14 @@ impl ForceView {
         self.preparing = false;
         self.apply_session_selection(&session);
         self.reset_focus_scroll();
-        self.task_input.update(cx, |input, cx| {
-            input.set_value(session.title.clone(), window, cx)
-        });
+        self.load_task_description(
+            session.task_id,
+            session.tag_id,
+            &session.title,
+            &session.tag_name,
+            window,
+            cx,
+        );
         self.completed = None;
         self.page = Page::Focus;
         self.toast = None;
@@ -1229,6 +1338,8 @@ impl ForceView {
         }
         if self.time_picker.read(cx).is_open() {
             self.time_picker.focus_handle(cx).focus(window);
+        } else if self.record_editor.visible {
+            self.focus_record_editor(window, cx);
         } else if self.moments.visible {
             self.moments
                 .content
@@ -1245,6 +1356,9 @@ impl ForceView {
     }
 
     pub(crate) fn hide_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.record_editor
+            .picker
+            .update(cx, |picker, cx| picker.dismiss(window, false, cx));
         self.time_picker
             .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.agenda
@@ -1290,6 +1404,7 @@ impl ForceView {
             return;
         };
         self.suspend_moment(window, cx);
+        self.suspend_record_editor(window, cx);
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
@@ -1301,8 +1416,14 @@ impl ForceView {
         self.page = Page::Focus;
         self.apply_session_selection(&session);
         self.reset_focus_scroll();
-        self.task_input
-            .update(cx, |input, cx| input.set_value(session.title, window, cx));
+        self.load_task_description(
+            session.task_id,
+            session.tag_id,
+            &session.title,
+            &session.tag_name,
+            window,
+            cx,
+        );
         self.remember_selected_session(cx);
         cx.notify();
     }
@@ -1319,6 +1440,7 @@ impl ForceView {
             return;
         };
         self.suspend_moment(window, cx);
+        self.suspend_record_editor(window, cx);
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
@@ -1346,22 +1468,28 @@ impl ForceView {
         self.reset_focus_scroll();
         self.completed = None;
         self.page = Page::Focus;
-        self.task_input
-            .update(cx, |input, cx| input.set_value(task.title, window, cx));
+        self.load_task_description(
+            Some(task.id),
+            task.tag_id,
+            &task.title,
+            &task.tag_name,
+            window,
+            cx,
+        );
         self.remember_selected_session(cx);
         self.set_expanded(true, window, cx);
     }
 
     pub(crate) fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.suspend_moment(window, cx);
+        self.suspend_record_editor(window, cx);
         if self.is_new_task_form() {
             if self.page == Page::Agenda {
                 self.suspend_agenda_popup(window, cx);
             }
             self.page = Page::Focus;
             self.show_manager(window, cx);
-            self.task_input
-                .update(cx, |input, cx| input.focus(window, cx));
+            self.focus_task_setup(window, cx);
             return;
         }
         if self.confirm_task_changes(TaskDestination::New, window, cx) {
@@ -1373,12 +1501,13 @@ impl ForceView {
         self.refresh(cx);
         self.panel_scroll[0].set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
         self.selected_task = None;
+        self.task_title_baseline = None;
         self.preparing = true;
         self.selected_session = None;
         self.completed = None;
         self.page = Page::Focus;
         let suspended = self.suspended_untitled_task.take();
-        self.countdown = suspended.as_ref().is_none_or(|draft| draft.countdown);
+        self.countdown = suspended.as_ref().is_some_and(|draft| draft.countdown);
         self.timer_minutes = suspended.as_ref().map_or(25, |draft| draft.timer_minutes);
         let timer_value = suspended
             .as_ref()
@@ -1386,28 +1515,19 @@ impl ForceView {
         self.timer_input
             .update(cx, |input, cx| input.set_value(timer_value, window, cx));
         self.editing_duration = None;
-        if !self
-            .tags
-            .iter()
-            .any(|tag| tag.id == self.selected_tag && tag.kind == TagKind::Focus)
-        {
-            self.selected_tag = self
-                .tags
-                .iter()
-                .find(|tag| tag.kind == TagKind::Focus)
-                .map_or(0, |tag| tag.id);
-        }
+        self.selected_tag = 0;
         self.restored_tag_needs_reselection = false;
         if let Some(draft) = &suspended {
             self.selected_tag = draft.tag;
             self.untitled_tag_baseline = draft.tag_baseline;
-            if !self
-                .tags
-                .iter()
-                .any(|tag| tag.id == draft.tag && tag.kind == TagKind::Focus)
+            if draft.tag != 0
+                && !self
+                    .tags
+                    .iter()
+                    .any(|tag| tag.id == draft.tag && tag.kind == TagKind::Focus)
             {
                 self.restored_tag_needs_reselection = true;
-                self.notify("原标签已不可用，请重新选择标签。", cx);
+                self.notify("原活动已不可用，请重新选择活动。", cx);
             }
         } else {
             self.untitled_tag_baseline = self.selected_tag;
@@ -1420,9 +1540,9 @@ impl ForceView {
                 window,
                 cx,
             );
-            input.focus(window, cx);
         });
         self.set_expanded(true, window, cx);
+        self.focus_task_setup(window, cx);
     }
 
     pub(crate) fn strip_session(&self) -> Option<&Session> {
@@ -1431,21 +1551,14 @@ impl ForceView {
 
     /// Open the task already represented by the cat, preserving its draft.
     pub(crate) fn show_strip_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_record_editor(window, cx);
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
         self.page = Page::Focus;
         self.show_manager(window, cx);
         if self.preparing && !self.storage_failed {
-            let title_invalid = self.task_input.read(cx).value().trim().is_empty()
-                || self.task_title_error(cx).is_some();
-            if !title_invalid && self.timer_duration_error(cx).is_some() {
-                self.timer_input
-                    .update(cx, |input, cx| input.focus(window, cx));
-            } else {
-                self.task_input
-                    .update(cx, |input, cx| input.focus(window, cx));
-            }
+            self.focus_task_setup(window, cx);
         }
     }
 
@@ -1486,7 +1599,7 @@ impl ForceView {
             })
         {
             self.toggle_pause(id, cx);
-        } else if !self.task_input.read(cx).value().trim().is_empty() {
+        } else if self.can_start_task(cx) {
             self.start(window, cx);
         } else {
             self.new_task(window, cx);
@@ -1698,7 +1811,7 @@ impl ForceView {
             return;
         }
         let Some(tag) = self.tags.iter().find(|tag| tag.id == id) else {
-            self.notify("这个标签已变更，请刷新后重试。", cx);
+            self.notify("这个活动已变更，请刷新后重试。", cx);
             return;
         };
         let name = tag.name.clone();
@@ -1775,9 +1888,9 @@ impl ForceView {
         let answer = window.prompt(
             PromptLevel::Info,
             if editing.is_some() {
-                "保存标签修改？"
+                "保存活动修改？"
             } else {
-                "保存新标签？"
+                "保存新活动？"
             },
             None,
             &[
@@ -1814,7 +1927,7 @@ impl ForceView {
             }
             Ok(_) => {}
             Err(_) => {
-                let _ = this.update(cx, |this, cx| this.notify("无法确认标签修改，请重试。", cx));
+                let _ = this.update(cx, |this, cx| this.notify("无法确认活动修改，请重试。", cx));
             }
         })
         .detach();
@@ -1856,7 +1969,7 @@ impl ForceView {
         }
         if !self.can_save_tag(cx) {
             if name.trim().is_empty() {
-                self.notify("请输入 1–40 字的标签名称。", cx);
+                self.notify("请输入 1–40 字的活动名称。", cx);
             }
             return false;
         }
@@ -1902,9 +2015,9 @@ impl ForceView {
             self.cancel_tag_edit(window, cx);
             self.notify(
                 if editing.is_some() {
-                    "标签已更新。"
+                    "活动已更新。"
                 } else {
-                    "标签已添加。"
+                    "活动已添加。"
                 },
                 cx,
             );
@@ -2037,6 +2150,7 @@ impl ForceView {
         self.time_picker
             .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.suspend_moment(window, cx);
+        self.suspend_record_editor(window, cx);
         if page == Page::Agenda && !self.prepare_agenda_overview(window, cx) {
             return;
         }
@@ -2058,6 +2172,12 @@ impl ForceView {
         if self.time_picker.read(cx).is_open() {
             self.time_picker
                 .update(cx, |picker, cx| picker.dismiss(window, cx));
+        } else if self.record_editor.visible && self.record_editor.picker.read(cx).is_open() {
+            self.record_editor
+                .picker
+                .update(cx, |picker, cx| picker.dismiss(window, true, cx));
+        } else if self.record_editor.visible {
+            self.suspend_record_editor(window, cx);
         } else if self.moments.visible {
             self.suspend_moment(window, cx);
         } else if self.page == Page::Agenda && self.agenda.tag_picker.read(cx).is_open() {
@@ -2207,8 +2327,8 @@ impl ForceView {
     pub(crate) fn delete_tag(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         let answer = window.prompt(
             PromptLevel::Warning,
-            "删除这个标签？",
-            Some("已有记录会保留原来的标签，之后不能再选择这个标签。"),
+            "删除这个活动？",
+            Some("已有记录会保留原来的活动，之后不能再选择这个活动。"),
             &[PromptButton::cancel("取消"), PromptButton::new("删除")],
             cx,
         );
@@ -2220,7 +2340,7 @@ impl ForceView {
                             if this.editing_tag == Some(id) {
                                 this.cancel_tag_edit(window, cx);
                             }
-                            this.notify("标签已删除。", cx);
+                            this.notify("活动已删除。", cx);
                         }
                     });
                 });
@@ -2616,14 +2736,22 @@ fn goal_draft_has_unsaved_changes(value: &str, saved: u32) -> bool {
     parse_goal_draft(value) != Some(saved)
 }
 
+fn optional_task_description(title: &str, activity: &str) -> String {
+    if title == activity {
+        String::new()
+    } else {
+        title.to_owned()
+    }
+}
+
 fn task_title_error_for(value: &str, required: bool) -> Option<&'static str> {
     let title = value.trim();
     if required && title.is_empty() {
-        Some("请输入任务名称。")
+        Some("请选择活动。")
     } else if title.contains('\0') {
-        Some("任务名称包含无效字符。")
+        Some("说明包含无效字符。")
     } else if title.chars().count() > 200 {
-        Some("任务名称最多 200 字。")
+        Some("说明最多 200 字。")
     } else {
         None
     }
@@ -2631,24 +2759,24 @@ fn task_title_error_for(value: &str, required: bool) -> Option<&'static str> {
 
 fn tag_draft_error_for(value: &str, editing: Option<i64>, tags: &[Tag]) -> Option<&'static str> {
     if editing.is_some_and(|id| !tags.iter().any(|tag| tag.id == id)) {
-        return Some("这个标签已被移除，请取消后重新选择。");
+        return Some("这个活动已被移除，请取消后重新选择。");
     }
     let name = value.trim();
     if editing.is_some() && name.is_empty() {
-        return Some("请输入标签名称。");
+        return Some("请输入活动名称。");
     }
     if name.contains('\0') {
-        return Some("标签名称包含无效字符。");
+        return Some("活动名称包含无效字符。");
     }
     if name.chars().count() > 40 {
-        return Some("标签名称最多 40 字。");
+        return Some("活动名称最多 40 字。");
     }
     if !name.is_empty()
         && tags
             .iter()
             .any(|tag| Some(tag.id) != editing && tag.name.eq_ignore_ascii_case(name))
     {
-        return Some("这个标签名称已存在，请换一个。");
+        return Some("这个活动名称已存在，请换一个。");
     }
     None
 }
@@ -2675,8 +2803,8 @@ fn parse_tag_color(value: &str) -> Result<Option<String>, &'static str> {
 fn validation_message(message: &str) -> &'static str {
     match message {
         "Enter a task title of 1–200 characters" => "请输入 1–200 字的任务名称。",
-        "Enter a tag name of 1–40 characters" => "请输入 1–40 字的标签名称。",
-        "A tag with that name already exists" => "这个标签名称已存在，请换一个。",
+        "Enter a tag name of 1–40 characters" => "请输入 1–40 字的活动名称。",
+        "A tag with that name already exists" => "这个活动名称已存在，请换一个。",
         "Daily goal must be between 1 and 1440 minutes" => "每日目标应在 1–1440 分钟之间。",
         "Timer duration must be between 1 minute and 24 hours" => {
             "倒计时时长应在 1–1440 分钟之间。"

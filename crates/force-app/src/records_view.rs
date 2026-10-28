@@ -77,6 +77,16 @@ impl ForceView {
                         })),
                 )
             })
+            .child(
+                crate::view::outlined_button("record-add-entry")
+                    .debug_selector(|| "record-add-entry".into())
+                    .h(px(32.))
+                    .px(px(10.))
+                    .child(control_label("补记", INK))
+                    .on_click(
+                        cx.listener(|this, _, window, cx| this.begin_record_entry(window, cx)),
+                    ),
+            )
     }
 
     fn clear_record_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -154,7 +164,7 @@ impl ForceView {
             .when(self.record_help_open, |body| body.child(
                 div().pl(px(12.)).border_l_2().border_color(rgb(LINE))
                     .text_size(px(13.)).text_color(rgb(MUTED)).whitespace_normal()
-                    .child("专注标签的正向、负向及原有未分类记录计入专注；休息、中性和休闲不计入。暂停不计时，重叠时段只计一次，跨日按天统计。搜索和分类只筛选列表。"),
+                    .child("专注活动的正向、负向及原有未分类记录计入专注；休息、中性和休闲不计入。暂停不计时，重叠时段只计一次，跨日按天统计。搜索和分类只筛选列表。"),
             ))
             .child(
                 div().flex().flex_col()
@@ -296,6 +306,7 @@ impl ForceView {
 
     fn record_row(&self, session: &Session, cx: &mut Context<Self>) -> Div {
         let id = session.id;
+        let editable_record = session.clone();
         let filter_key = self
             .record_class_filter
             .map_or("all", crate::settings_view::tag_class_key);
@@ -512,21 +523,41 @@ impl ForceView {
                             .flex()
                             .justify_end()
                             .when(session.finished_at.is_some(), |actions| {
-                                actions.child(
-                                    destructive_button(("delete-record", id as u64))
-                                        .custom(crate::view::quiet_variant(cx))
-                                        .size(px(28.))
-                                        .icon(control_icon(
-                                            Icon::default()
-                                                .path("force-icons/trash.svg")
-                                                .size(px(14.)),
-                                            MUTED,
-                                        ))
-                                        .tooltip("删除整段记录（包括所有日期）")
-                                        .on_click(cx.listener(move |this, _, window, cx| {
-                                            this.delete_record(id, window, cx)
-                                        })),
-                                )
+                                actions
+                                    .child(
+                                        button(("edit-record", id as u64))
+                                            .debug_selector(move || format!("edit-record-{id}"))
+                                            .custom(crate::view::quiet_variant(cx))
+                                            .size(px(28.))
+                                            .icon(control_icon(
+                                                crate::view::action_icon("pencil"),
+                                                MUTED,
+                                            ))
+                                            .tooltip("编辑记录")
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.edit_record(
+                                                    editable_record.clone(),
+                                                    window,
+                                                    cx,
+                                                )
+                                            })),
+                                    )
+                                    .child(
+                                        destructive_button(("delete-record", id as u64))
+                                            .custom(crate::view::quiet_variant(cx))
+                                            .size(px(28.))
+                                            .icon(control_icon(
+                                                Icon::default()
+                                                    .path("force-icons/trash.svg")
+                                                    .size(px(14.)),
+                                                MUTED,
+                                            ))
+                                            .debug_selector(move || format!("delete-record-{id}"))
+                                            .tooltip("删除整段记录（包括所有日期）")
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.delete_record(id, window, cx)
+                                            })),
+                                    )
                             })
                             .when(session.finished_at.is_none(), |actions| {
                                 actions.child(
@@ -534,6 +565,7 @@ impl ForceView {
                                         .custom(crate::view::quiet_variant(cx))
                                         .h(px(32.))
                                         .px(px(8.))
+                                        .tooltip("请先结束计时，再编辑记录")
                                         .child(control_label("查看计时", INK))
                                         .on_click(cx.listener(move |this, _, window, cx| {
                                             this.select_session(id, window, cx)
@@ -552,7 +584,7 @@ impl ForceView {
                         .flex_col()
                         .gap(px(8.))
                         .child(
-                            record_detail("标签", session.tag_name.clone())
+                            record_detail("活动", session.tag_name.clone())
                                 .debug_selector(move || format!("record-detail-tag-{id}")),
                         )
                         .child(record_detail(

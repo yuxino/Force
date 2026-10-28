@@ -1601,6 +1601,7 @@ fn agenda_ui_starting_a_plan_saves_a_focus_draft_and_resumes_the_original_round(
             view.task_input.update(cx, |input, cx| {
                 input.set_value("A separate unfinished draft", window, cx)
             });
+            view.selected_tag = 1;
             view.navigate(Page::Agenda, window, cx);
             view.agenda.month_overview = false;
             view.select_plan(1, window, cx);

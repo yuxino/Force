@@ -19,11 +19,13 @@ mod agenda;
 mod analysis;
 mod classification;
 mod moment;
+mod record_edit;
 mod task;
 pub use agenda::{PlanDraft, PlanEntry};
 pub use analysis::{DailyAnalysis, PeriodAnalysis};
 pub use classification::ClassColors;
 pub use moment::{MOMENT_CONTENT_LIMIT, Moment};
+pub use record_edit::{RecordEditSnapshot, RecordIntervalEdit};
 pub use task::Task;
 
 pub type Result<T> = std::result::Result<T, Error>;
