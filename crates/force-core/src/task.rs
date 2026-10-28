@@ -44,7 +44,7 @@ pub(super) fn migrate_v2(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch(SCHEMA)?;
             transaction.pragma_update(None, "user_version", 3)?;
         }
-        3 | 4 | 5 | SCHEMA_VERSION => (),
+        3 | 4 | 5 | 6 | 7 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;

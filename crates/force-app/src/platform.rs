@@ -801,6 +801,53 @@ pub(crate) fn write_private_state(
     result
 }
 
+/// The dial's optional feedback is a short bundled mechanical tick, never an alarm.
+pub(crate) fn time_tick_supported() -> bool {
+    cfg!(any(target_os = "macos", target_os = "windows"))
+}
+
+pub(crate) fn play_time_tick() {
+    #[cfg(all(target_os = "macos", not(test)))]
+    {
+        use objc2::{class, msg_send, rc::Retained, runtime::AnyObject};
+        thread_local! {
+            static SOUND: std::cell::RefCell<Option<Retained<AnyObject>>> = const { std::cell::RefCell::new(None) };
+        }
+        SOUND.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            // AppKit and NSData copy the embedded PCM bytes; the retained sound
+            // lives on the UI thread for the complete asynchronous playback.
+            unsafe {
+                if slot.is_none() {
+                    let bytes = include_bytes!("../../../assets/time-tick.wav");
+                    let data: Retained<AnyObject> = msg_send![class!(NSData), dataWithBytes: bytes.as_ptr().cast::<std::ffi::c_void>(), length: bytes.len()];
+                    let allocated: *mut AnyObject = msg_send![class!(NSSound), alloc];
+                    let initialized: *mut AnyObject = msg_send![allocated, initWithData: &*data];
+                    *slot = Retained::from_raw(initialized);
+                }
+                if let Some(sound) = slot.as_ref() {
+                    let _: () = msg_send![sound, setVolume: 0.35f32];
+                    let _: bool = msg_send![sound, play];
+                }
+            }
+        });
+    }
+    #[cfg(all(target_os = "windows", not(test)))]
+    unsafe {
+        // SND_MEMORY keeps a pointer after returning, so the bytes are static.
+        #[link(name = "winmm")]
+        unsafe extern "system" {
+            fn PlaySoundW(sound: *const u16, module: *mut std::ffi::c_void, flags: u32) -> i32;
+        }
+        let bytes = include_bytes!("../../../assets/time-tick.wav");
+        let _ = PlaySoundW(
+            bytes.as_ptr().cast(),
+            std::ptr::null_mut(),
+            0x0001 | 0x0002 | 0x0004 | 0x0010,
+        );
+    }
+}
+
 #[cfg(test)]
 mod floating_geometry_tests {
     use super::{DockEdge, dock_edge_for_bounds, floating_geometry};

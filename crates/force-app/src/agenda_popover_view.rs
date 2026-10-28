@@ -5,7 +5,6 @@ use gpui::{prelude::*, *};
 use gpui_component::{IconName, button::ButtonVariants};
 
 use crate::{
-    agenda_model::agenda_tag_color,
     label::single_line,
     model::{ForceView, day_bounds},
     settings_view::{tag_color_rgb, tag_text_color},
@@ -85,7 +84,9 @@ impl ForceView {
             .on_mouse_down_out(cx.listener(|this, _, window, cx| {
                 // The tag menu is independently deferred above this popup.
                 // Its clicks must not suspend the editor beneath it.
-                if !this.agenda.tag_picker.read(cx).is_open() {
+                if !this.agenda.tag_picker.read(cx).is_open()
+                    && !this.time_picker.read(cx).is_open()
+                {
                     this.suspend_agenda_popup(window, cx);
                 }
             }))
@@ -171,6 +172,18 @@ impl ForceView {
                                         this.open_agenda_timeline(window, cx)
                                     })),
                             )
+                            .child(
+                                button("agenda-moment-add")
+                                    .debug_selector(|| "agenda-moment-add".into())
+                                    .custom(crate::view::quiet_variant(cx))
+                                    .h(px(34.))
+                                    .px(px(8.))
+                                    .unavailable(self.storage_failed)
+                                    .child(control_label("随手记", INK))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.begin_moment(Some(this.agenda.date), window, cx)
+                                    })),
+                            )
                             .child(if selected_detail {
                                 button("agenda-popover-day")
                                     .custom(crate::view::quiet_variant(cx))
@@ -233,15 +246,56 @@ impl ForceView {
                     .child(
                         editor_field("开始时间").flex_1().min_w_0().child(
                             div()
-                                .debug_selector(|| "agenda-start-input".into())
-                                .child(field(&self.agenda.start_input)),
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .debug_selector(|| "agenda-start-input".into())
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(field(&self.agenda.start_input)),
+                                )
+                                .child(
+                                    crate::time_picker::trigger("agenda-start-picker", cx)
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            let input = this.agenda.start_input.clone();
+                                            this.time_picker.update(cx, |picker, cx| {
+                                                picker.open_for(
+                                                    input,
+                                                    "开始时间",
+                                                    false,
+                                                    window,
+                                                    cx,
+                                                )
+                                            });
+                                        })),
+                                ),
                         ),
                     )
                     .child(
                         editor_field("结束时间").flex_1().min_w_0().child(
                             div()
-                                .debug_selector(|| "agenda-end-input".into())
-                                .child(field(&self.agenda.end_input)),
+                                .flex()
+                                .items_center()
+                                .gap(px(4.))
+                                .child(
+                                    div()
+                                        .debug_selector(|| "agenda-end-input".into())
+                                        .flex_1()
+                                        .min_w_0()
+                                        .child(field(&self.agenda.end_input)),
+                                )
+                                .child(
+                                    crate::time_picker::trigger("agenda-end-picker", cx).on_click(
+                                        cx.listener(|this, _, window, cx| {
+                                            let input = this.agenda.end_input.clone();
+                                            this.time_picker.update(cx, |picker, cx| {
+                                                picker.open_for(input, "结束时间", true, window, cx)
+                                            });
+                                        }),
+                                    ),
+                                ),
                         ),
                     ),
             )
@@ -377,7 +431,7 @@ impl ForceView {
                     cx,
                     format!("agenda-summary-record-{id}"),
                     &record.title,
-                    agenda_tag_color(&self.tags, Some(record.tag_id), record.tag_color.as_deref()),
+                    self.display_session_color(record),
                     format!(
                         "{} · {}{}",
                         self.agenda_record_status(record).description(false),
@@ -407,7 +461,7 @@ impl ForceView {
                     cx,
                     format!("agenda-summary-completion-{id}"),
                     &task.title,
-                    agenda_tag_color(&self.tags, Some(task.tag_id), None),
+                    self.display_color(Some(task.tag_id), force_core::TagClass::Legacy, None),
                     "已完成 · 未计时".to_owned(),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -419,16 +473,25 @@ impl ForceView {
             .flex()
             .flex_col()
             .gap(px(2.))
-            .when(rows.is_empty(), |body| {
-                body.child(
-                    div()
-                        .py(px(12.))
-                        .text_size(px(14.))
-                        .text_color(rgb(MUTED))
-                        .child("这一天还没有安排或记录。"),
-                )
-            })
+            .when(
+                rows.is_empty() && self.agenda.day_moments.is_empty(),
+                |body| {
+                    body.child(
+                        div()
+                            .py(px(12.))
+                            .text_size(px(14.))
+                            .text_color(rgb(MUTED))
+                            .child("这一天还没有安排或记录。"),
+                    )
+                },
+            )
             .children(rows)
+            .children(
+                self.agenda
+                    .day_moments
+                    .iter()
+                    .map(|moment| self.moment_row(moment, cx)),
+            )
     }
 }
 

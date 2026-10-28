@@ -10,8 +10,8 @@ use crate::tag_picker::{FocusTagOption, TagPicked, TagPicker};
 use chrono::{Datelike, Days, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeDelta, TimeZone};
 use force_core::{MAX_GOAL_MINUTES, Session, Stats, Store, Tag, TagClass, TagKind, Task};
 use gpui::{
-    AppContext as _, Context, Entity, FocusHandle, PromptButton, PromptLevel, Subscription, Window,
-    WindowHandle,
+    AppContext as _, Context, Entity, FocusHandle, Focusable as _, PromptButton, PromptLevel,
+    Subscription, Window, WindowHandle,
 };
 use gpui_component::{
     Root,
@@ -23,6 +23,7 @@ pub(crate) enum Page {
     Agenda,
     Focus,
     Records,
+    Analysis,
     Settings,
 }
 
@@ -58,7 +59,12 @@ enum TagDestination {
 }
 
 pub(crate) struct ForceView {
+    pub(crate) analysis: crate::analysis_model::AnalysisState,
+    pub(crate) classification: crate::classification_model::ClassificationState,
+    pub(crate) time_picker: Entity<crate::time_picker::TimePicker>,
     pub(crate) agenda: crate::agenda_model::AgendaState,
+    pub(crate) moments: crate::moment_model::MomentState,
+    pub(crate) record_moments: Vec<force_core::Moment>,
     pub(crate) store: Option<Store>,
     pub(crate) data_dir: PathBuf,
     pub(crate) storage_failed: bool,
@@ -124,7 +130,7 @@ pub(crate) struct ForceView {
     pub(crate) countdown: bool,
     pub(crate) sound_enabled: bool,
     pub(crate) focus_handle: FocusHandle,
-    pub(crate) panel_scroll: [gpui::ScrollHandle; 3],
+    pub(crate) panel_scroll: [gpui::ScrollHandle; 4],
     pub(crate) tag_scroll: gpui::ScrollHandle,
     pub(crate) tag_form_anchor: gpui::ScrollAnchor,
     data_version: i64,
@@ -142,7 +148,7 @@ impl ForceView {
         let goal_input = cx.new(|cx| InputState::new(window, cx).placeholder("每日目标（分钟）"));
         let timer_input = cx.new(|cx| InputState::new(window, cx).default_value("25"));
         let duration_input = cx.new(|cx| InputState::new(window, cx));
-        let record_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索任务或标签"));
+        let record_search = cx.new(|cx| InputState::new(window, cx).placeholder("搜索记录"));
         let tag_picker = cx.new(TagPicker::new);
         let activity_focus = cx.focus_handle().tab_index(0).tab_stop(true);
         let activity_focus_subscription = cx.on_focus(&activity_focus, window, |this, _, cx| {
@@ -292,12 +298,20 @@ impl ForceView {
             })
         });
         let agenda = crate::agenda_model::AgendaState::new(window, cx);
-        let panel_scroll: [gpui::ScrollHandle; 3] = std::array::from_fn(|_| Default::default());
+        let moments = crate::moment_model::MomentState::new(window, cx);
+        let classification = crate::classification_model::ClassificationState::new(window, cx);
+        let time_picker = cx.new(crate::time_picker::TimePicker::new);
+        let panel_scroll: [gpui::ScrollHandle; 4] = std::array::from_fn(|_| Default::default());
         let tag_form_anchor = gpui::ScrollAnchor::for_handle(panel_scroll[2].clone());
         let mut view = Self {
             agenda,
+            moments,
+            record_moments: Vec::new(),
             store: None,
             data_dir,
+            analysis: Default::default(),
+            classification,
+            time_picker,
             storage_failed: false,
             tags: Vec::new(),
             tasks: Vec::new(),
@@ -468,7 +482,7 @@ impl ForceView {
             .map(|tag| FocusTagOption {
                 id: tag.id,
                 name: tag.name.clone(),
-                color: tag.color.clone(),
+                color: self.display_tag_color(tag).map(str::to_owned),
             })
             .collect();
         let selected = options
@@ -548,8 +562,10 @@ impl ForceView {
             let (start, end) = day_bounds(self.record_date);
             Ok::<_, force_core::Error>((
                 store.tags()?,
+                store.class_colors()?,
                 active,
                 store.sessions_overlapping(start, end, self.now)?,
+                store.moments_between(start, end)?,
                 store.goal_minutes()?,
                 load_stats(store, self.record_date, self.now)?,
                 completed,
@@ -566,8 +582,10 @@ impl ForceView {
         match snapshot {
             Ok((
                 tags,
+                class_colors,
                 active,
                 history,
+                record_moments,
                 goal,
                 (today, record_stats),
                 completed,
@@ -578,10 +596,12 @@ impl ForceView {
             )) => {
                 self.data_version = version;
                 self.tags = tags;
+                self.classification.colors = class_colors;
                 self.tasks = tasks;
                 self.sound_enabled = sound_enabled;
                 self.active = active;
                 self.history = history;
+                self.record_moments = record_moments;
                 if self.editing_duration.is_some_and(|id| {
                     self.preparing
                         || self.selected_session != Some(id)
@@ -640,6 +660,7 @@ impl ForceView {
                     }
                 }
                 self.refresh_agenda(cx);
+                self.refresh_analysis(cx);
                 cx.notify();
             }
             Err(_) => {
@@ -1206,7 +1227,17 @@ impl ForceView {
                 });
             }
         }
-        if self.page == Page::Settings && self.tag_form_open {
+        if self.time_picker.read(cx).is_open() {
+            self.time_picker.focus_handle(cx).focus(window);
+        } else if self.moments.visible {
+            self.moments
+                .content
+                .update(cx, |input, cx| input.focus(window, cx));
+        } else if self.page == Page::Settings && self.classification.editing.is_some() {
+            self.classification
+                .input
+                .update(cx, |input, cx| input.focus(window, cx));
+        } else if self.page == Page::Settings && self.tag_form_open {
             self.tag_input
                 .update(cx, |input, cx| input.focus(window, cx));
         }
@@ -1214,6 +1245,8 @@ impl ForceView {
     }
 
     pub(crate) fn hide_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.time_picker
+            .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.agenda
             .tag_picker
             .update(cx, |picker, cx| picker.dismiss(window, false, cx));
@@ -1256,9 +1289,11 @@ impl ForceView {
             self.notify("这项计时已结束，请刷新后重试。", cx);
             return;
         };
+        self.suspend_moment(window, cx);
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
+        window.focus(&self.focus_handle);
         self.suspend_untitled_task(cx);
         self.restored_tag_needs_reselection = false;
         self.preparing = false;
@@ -1283,6 +1318,11 @@ impl ForceView {
             self.notify("这件事已变更，请刷新后重试。", cx);
             return;
         };
+        self.suspend_moment(window, cx);
+        if self.page == Page::Agenda {
+            self.suspend_agenda_popup(window, cx);
+        }
+        window.focus(&self.focus_handle);
         self.suspend_untitled_task(cx);
         self.restored_tag_needs_reselection = false;
         self.editing_duration = None;
@@ -1313,6 +1353,7 @@ impl ForceView {
     }
 
     pub(crate) fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_moment(window, cx);
         if self.is_new_task_form() {
             if self.page == Page::Agenda {
                 self.suspend_agenda_popup(window, cx);
@@ -1993,6 +2034,9 @@ impl ForceView {
     }
 
     pub(crate) fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        self.time_picker
+            .update(cx, |picker, cx| picker.dismiss(window, cx));
+        self.suspend_moment(window, cx);
         if page == Page::Agenda && !self.prepare_agenda_overview(window, cx) {
             return;
         }
@@ -2011,7 +2055,12 @@ impl ForceView {
         if self.compact {
             return;
         }
-        if self.page == Page::Agenda && self.agenda.tag_picker.read(cx).is_open() {
+        if self.time_picker.read(cx).is_open() {
+            self.time_picker
+                .update(cx, |picker, cx| picker.dismiss(window, cx));
+        } else if self.moments.visible {
+            self.suspend_moment(window, cx);
+        } else if self.page == Page::Agenda && self.agenda.tag_picker.read(cx).is_open() {
             self.agenda
                 .tag_picker
                 .update(cx, |picker, cx| picker.dismiss(window, true, cx));
@@ -2023,6 +2072,8 @@ impl ForceView {
             || self.page == Page::Focus
         {
             self.navigate(Page::Agenda, window, cx);
+        } else if self.page == Page::Settings && self.classification.editing.is_some() {
+            self.cancel_class_color_edit(window, cx);
         } else if self.page == Page::Settings && self.tag_form_open {
             self.cancel_tag_edit(window, cx);
         } else if self.page == Page::Records && self.record_details.is_some() {
@@ -2270,6 +2321,13 @@ impl ForceView {
                 }
                 None => {}
             }
+        }
+        if self.page == Page::Analysis
+            && !self.compact
+            && !self.storage_failed
+            && self.active.iter().any(Session::is_running)
+        {
+            self.update_analysis_today(cx);
         }
         if self.page == Page::Agenda
             && !self.compact

@@ -47,6 +47,7 @@ fn agenda_ui_month_overview_shows_task_titles_and_overflow_inside_each_day(
                     .map(|index| AgendaMonthItem {
                         title: format!("复习操作系统与整理当天的学习记录 {index}"),
                         tag_id: None,
+                        tag_class: force_core::TagClass::Legacy,
                         tag_color: Some("#B56F67".into()),
                         status: if index == 0 {
                             AgendaItemStatus::Completed
@@ -2256,5 +2257,78 @@ fn agenda_ui_resumed_note_draft_reveals_the_focused_editor_field(cx: &mut TestAp
             manager.bounds("agenda-note-input"),
             manager.bounds("agenda-editor-fields"),
         );
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_moments_appear_as_points_without_creating_tasks_or_timer_totals(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let date = Local::now().date_naive();
+        let stamp = day_bounds(date).0 + 9 * 3600 + 30 * 60;
+        let mut moment_id = 0;
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            moment_id = view
+                .store
+                .as_mut()
+                .unwrap()
+                .create_moment("突然想到一个小点子，先记下来\n稍后再整理", stamp, view.now)
+                .unwrap()
+                .id;
+            view.refresh(cx);
+            view.open_agenda_day(date, window, cx);
+            assert_eq!(view.agenda.day_moments.len(), 1);
+            assert!(view.agenda.actual_days.contains(&date));
+            assert_eq!(view.agenda.stats.focus_seconds, 0);
+            assert!(view.agenda.records.is_empty());
+            assert!(view.tasks.is_empty());
+            let items = &view.agenda.month_days[&date];
+            assert_eq!(items.len(), 1);
+            assert_eq!(
+                items[0].status,
+                crate::agenda_model::AgendaItemStatus::Moment
+            );
+            assert_eq!(items[0].seconds, 0);
+            view.refresh_agenda_actuals(cx);
+            assert_eq!(
+                view.agenda.month_days[&date].len(),
+                1,
+                "timer ticks must not duplicate notes"
+            );
+        });
+        settle(&mut manager);
+        let viewport = Bounds::new(Point::default(), size(px(width), px(height)));
+        let popup = manager.bounds("agenda-popover");
+        assert_inside(popup, viewport);
+        assert_inside(manager.bounds("agenda-moment-add"), popup);
+        manager.click("agenda-popover-timeline");
+        let marker_selector: &'static str =
+            Box::leak(format!("agenda-moment-{moment_id}").into_boxed_str());
+        let title_selector: &'static str =
+            Box::leak(format!("agenda-moment-title-{moment_id}").into_boxed_str());
+        // Like plan selection above, reach the marker with actual wheel input.
+        // The platform's initial on-next-frame scroll is native acceptance;
+        // merely scheduling it does not move TestPlatform's visible hit area.
+        let marker = manager.bounds(marker_selector);
+        let grid = manager.bounds("agenda-day-grid");
+        if marker.top() < grid.top() || marker.bottom() > grid.bottom() {
+            manager.scroll(
+                "agenda-day-grid",
+                f32::from(grid.center().y - marker.center().y),
+            );
+        }
+        let marker = manager.bounds(marker_selector);
+        let title = manager.bounds(title_selector);
+        assert_eq!(marker.size.height, px(28.));
+        assert_inside(title, marker);
+        assert_inside(marker, manager.bounds("agenda-day-grid"));
+        manager.click(marker_selector);
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(view.moments.visible, "a point marker must open its editor");
+            assert_eq!(view.moments.editing, Some(moment_id));
+        });
+        assert_inside(manager.bounds("moment-editor"), viewport);
     }
 }

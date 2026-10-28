@@ -65,7 +65,7 @@ pub(super) fn migrate_v4(connection: &mut Connection) -> Result<()> {
             transaction.prepare(SELECT_PLAN)?;
             transaction.pragma_update(None, "user_version", 5)?;
         }
-        5 | SCHEMA_VERSION => (),
+        5 | 6 | 7 | SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;

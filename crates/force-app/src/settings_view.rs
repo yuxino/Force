@@ -47,6 +47,10 @@ impl ForceView {
                             .min_w_0()
                             .when(wide, |column| column.flex_1())
                             .when(!wide, |column| column.w_full())
+                            .flex()
+                            .flex_col()
+                            .gap(px(24.))
+                            .child(self.settings_classifications(cx))
                             .child(self.settings_tags(cx)),
                     ),
             )
@@ -297,7 +301,12 @@ impl ForceView {
                                 let id = tag.id;
                                 let help_name = tag.name.clone();
                                 let editing = self.editing_tag == Some(id);
-                                let color = tag.color.as_deref().and_then(tag_text_color);
+                                let color = self.display_tag_color(tag).and_then(tag_text_color);
+                                let class_color = self
+                                    .classification
+                                    .colors
+                                    .color(tag.class)
+                                    .and_then(tag_text_color);
                                 div()
                                     .debug_selector(move || {
                                         if editing {
@@ -315,7 +324,7 @@ impl ForceView {
                                     .border_b_1()
                                     .border_color(rgb(LINE))
                                     .when_some(
-                                        tag.color.as_deref().and_then(tag_color_rgb),
+                                        self.display_tag_color(tag).and_then(tag_color_rgb),
                                         |row, color| {
                                             row.child(
                                                 div()
@@ -339,7 +348,7 @@ impl ForceView {
                                     .child(
                                         div()
                                             .text_size(px(13.))
-                                            .text_color(rgb(color.unwrap_or(MUTED)))
+                                            .text_color(rgb(class_color.unwrap_or(MUTED)))
                                             .flex_shrink_0()
                                             .child(tag_class_label(tag.class)),
                                     )
@@ -456,9 +465,12 @@ impl ForceView {
                         .enumerate()
                         .map(|(index, class)| {
                             let selected = self.new_tag_class == class;
-                            let foreground =
-                                tag_text_color(self.tag_color_input.read(cx).value().trim())
-                                    .unwrap_or(INK);
+                            let foreground = self
+                                .classification
+                                .colors
+                                .color(class)
+                                .and_then(tag_text_color)
+                                .unwrap_or(if selected { INK } else { MUTED });
                             button(("tag-class", index as u64))
                                 .debug_selector(move || {
                                     format!("tag-class-{}", tag_class_key(class))
@@ -471,10 +483,7 @@ impl ForceView {
                                 .px(px(10.))
                                 .border_1()
                                 .border_color(rgb(if selected { INK } else { LINE }))
-                                .child(control_label(
-                                    tag_class_label(class),
-                                    if selected { foreground } else { MUTED },
-                                ))
+                                .child(control_label(tag_class_label(class), foreground))
                                 .on_click(cx.listener(move |this, _, _, cx| {
                                     this.new_tag_class = class;
                                     cx.notify();
@@ -514,16 +523,17 @@ impl ForceView {
                                         crate::view::quiet_variant(cx)
                                             .border(rgb(if selected { INK } else { LINE }).into()),
                                     )
-                                    .size(px(28.))
+                                    .h(px(28.))
+                                    .w(px(if value.is_empty() { 76. } else { 28. }))
                                     .border_1()
                                     .border_color(rgb(if selected { INK } else { LINE }))
                                     .tooltip(if value.is_empty() {
-                                        "不设置颜色".to_owned()
+                                        "跟随分类颜色".to_owned()
                                     } else {
                                         format!("{label} {value}")
                                     })
                                     .when(value.is_empty(), |button| {
-                                        button.child(control_label("无", MUTED))
+                                        button.child(control_label("跟随分类", MUTED))
                                     })
                                     .when_some(tag_color_rgb(value), |button, color| {
                                         button.child(
@@ -732,8 +742,8 @@ fn tag_luminance(channels: [u32; 3]) -> f64 {
     linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
 }
 
-const TAG_COLORS: [(&str, &str); 7] = [
-    ("无", ""),
+pub(crate) const TAG_COLORS: [(&str, &str); 7] = [
+    ("跟随分类", ""),
     ("灰", "#858585"),
     ("陶", "#B56F67"),
     ("琥珀", "#B58A4A"),

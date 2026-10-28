@@ -123,6 +123,7 @@ impl ForceView {
                                 [
                                     ("agenda-tab", "日历", Page::Agenda),
                                     ("records-tab", "记录", Page::Records),
+                                    ("analysis-tab", "分析", Page::Analysis),
                                 ]
                                 .into_iter()
                                 .map(|(id, label, page)| {
@@ -146,6 +147,20 @@ impl ForceView {
                             ),
                     )
                     .child(div().flex_1())
+                    .child(
+                        button("global-new-moment")
+                            .debug_selector(|| "global-new-moment".into())
+                            .custom(quiet_variant(cx))
+                            .h(px(36.))
+                            .px(px(10.))
+                            .mr(px(8.))
+                            .flex_shrink_0()
+                            .child(control_label("随手记", INK))
+                            .tooltip(shortcut("随手记", "Shift+N", "Shift+N"))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.begin_moment(None, window, cx)
+                            })),
+                    )
                     .child(
                         primary_button("global-new-task")
                             .debug_selector(|| "global-new-task".into())
@@ -232,6 +247,7 @@ impl ForceView {
             Page::Agenda | Page::Focus => 0,
             Page::Records => 1,
             Page::Settings => 2,
+            Page::Analysis => 3,
         }];
         div()
             .debug_selector(|| "manager-viewport".into())
@@ -265,6 +281,7 @@ impl ForceView {
                                         Page::Focus => "计时",
                                         Page::Records => "记录",
                                         Page::Settings => "设置",
+                                        Page::Analysis => "分析",
                                     }))
                                     .when(self.page == Page::Records, |row| {
                                         row.child(
@@ -283,7 +300,7 @@ impl ForceView {
                                                     if self.export_busy {
                                                         "正在导出…"
                                                     } else {
-                                                        "导出全部"
+                                                        "导出计时"
                                                     },
                                                     MUTED,
                                                 ))
@@ -304,6 +321,9 @@ impl ForceView {
                                     Page::Focus => self.focus_panel(compact, cx).into_any_element(),
                                     Page::Records => {
                                         self.records_panel(window, cx).into_any_element()
+                                    }
+                                    Page::Analysis => {
+                                        self.analysis_panel(window, cx).into_any_element()
                                     }
                                     Page::Settings => self
                                         .settings_panel(
@@ -345,6 +365,12 @@ impl Render for ForceView {
             .child(self.management_page(compact, window, cx))
             .when_some(self.toast.as_ref(), |body, (message, _)| {
                 body.child(self.feedback_toast(message, cx))
+            })
+            .when(self.moments.visible, |body| {
+                body.child(self.moment_editor(window, cx))
+            })
+            .when(self.time_picker.read(cx).is_open(), |body| {
+                body.child(self.time_picker.clone())
             })
     }
 }
@@ -617,7 +643,7 @@ pub(crate) fn task_heading(title: &str) -> impl IntoElement {
         .child(label)
 }
 
-fn shortcut(label: &str, mac: &str, other: &str) -> String {
+pub(crate) fn shortcut(label: &str, mac: &str, other: &str) -> String {
     if cfg!(target_os = "macos") {
         format!("{label} · ⌘{mac}")
     } else {

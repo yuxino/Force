@@ -418,11 +418,11 @@ impl FloatingStrip {
         } else if face.seconds >= 3_600 && readout.chars().count() >= 6 {
             10.
         } else if face.seconds >= 3_600 && readout.chars().count() == 5 {
-            12.5
+            10.5
         } else {
             match readout.chars().count() {
-                0..=5 => 14.,
-                6..=7 => 11.,
+                0..=5 => 11.5,
+                6..=7 => 10.,
                 8 => 9.5,
                 _ => 8.,
             }
