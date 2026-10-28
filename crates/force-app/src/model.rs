@@ -112,6 +112,7 @@ pub(crate) struct ForceView {
     pub(crate) new_tag_kind: TagKind,
     pub(crate) new_tag_class: TagClass,
     pub(crate) editing_tag: Option<i64>,
+    pub(crate) tag_form_open: bool,
     tag_edit_original: Option<String>,
     tag_edit_original_class: TagClass,
     tag_edit_original_color: Option<String>,
@@ -202,6 +203,7 @@ impl ForceView {
                 } else if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Settings
+                    && this.tag_form_open
                 {
                     this.save_tag(window, cx);
                 }
@@ -216,6 +218,7 @@ impl ForceView {
                 } else if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Settings
+                    && this.tag_form_open
                 {
                     this.save_tag(window, cx);
                 }
@@ -346,6 +349,7 @@ impl ForceView {
             new_tag_kind: TagKind::Focus,
             new_tag_class: TagClass::Positive,
             editing_tag: None,
+            tag_form_open: false,
             tag_edit_original: None,
             tag_edit_original_class: TagClass::Positive,
             tag_edit_original_color: None,
@@ -1202,6 +1206,10 @@ impl ForceView {
                 });
             }
         }
+        if self.page == Page::Settings && self.tag_form_open {
+            self.tag_input
+                .update(cx, |input, cx| input.focus(window, cx));
+        }
         cx.notify();
     }
 
@@ -1642,9 +1650,7 @@ impl ForceView {
 
     pub(crate) fn begin_edit_tag(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         if self.editing_tag == Some(id) {
-            self.tag_input
-                .update(cx, |input, cx| input.focus(window, cx));
-            self.tag_form_anchor.scroll_to(window, cx);
+            self.reveal_tag_form(window, cx);
             return;
         }
         if self.confirm_tag_changes(TagDestination::Edit(id), window, cx) {
@@ -1665,11 +1671,32 @@ impl ForceView {
         self.tag_color_input.update(cx, |input, cx| {
             input.set_value(color, window, cx);
         });
-        self.tag_input.update(cx, |input, cx| {
-            input.set_value(name, window, cx);
-            input.focus(window, cx);
+        self.tag_input
+            .update(cx, |input, cx| input.set_value(name, window, cx));
+        self.reveal_tag_form(window, cx);
+    }
+
+    fn reveal_tag_form(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tag_form_open = true;
+        self.tag_input
+            .update(cx, |input, cx| input.focus(window, cx));
+        let view = cx.entity().downgrade();
+        let editing = self.editing_tag;
+        // The conditional form needs a layout before its anchor can be used.
+        window.on_next_frame(move |window, cx| {
+            let _ = view.update(cx, |view, cx| {
+                if view.tag_form_open
+                    && view.editing_tag == editing
+                    && view.page == Page::Settings
+                    && !view.compact
+                {
+                    view.tag_form_anchor.scroll_to(window, cx);
+                    // This callback runs outside paint; animation requests require
+                    // a current painted view and panic in debug native builds.
+                    window.refresh();
+                }
+            });
         });
-        self.tag_form_anchor.scroll_to(window, cx);
         cx.notify();
     }
 
@@ -1847,6 +1874,7 @@ impl ForceView {
     }
 
     pub(crate) fn cancel_tag_edit(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.tag_form_open = false;
         self.editing_tag = None;
         self.tag_edit_original = None;
         self.new_tag_kind = TagKind::Focus;
@@ -1855,10 +1883,9 @@ impl ForceView {
         self.tag_edit_original_color = None;
         self.tag_color_input
             .update(cx, |input, cx| input.set_value("", window, cx));
-        self.tag_input.update(cx, |input, cx| {
-            input.set_value("", window, cx);
-            input.focus(window, cx);
-        });
+        self.tag_input
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        window.focus(&self.focus_handle);
         cx.notify();
     }
 
@@ -1871,15 +1898,7 @@ impl ForceView {
             self.cancel_tag_edit(window, cx);
         }
         self.new_tag_kind = TagKind::Focus;
-        // Let the settings form lay out before seeking its scroll anchor.
-        let anchor = self.tag_form_anchor.clone();
-        window.on_next_frame(move |window, cx| {
-            anchor.scroll_to(window, cx);
-            window.request_animation_frame();
-        });
-        self.tag_input
-            .update(cx, |input, cx| input.focus(window, cx));
-        cx.notify();
+        self.reveal_tag_form(window, cx);
     }
 
     pub(crate) fn toggle_pause(&mut self, id: i64, cx: &mut Context<Self>) {
@@ -2004,7 +2023,7 @@ impl ForceView {
             || self.page == Page::Focus
         {
             self.navigate(Page::Agenda, window, cx);
-        } else if self.page == Page::Settings && self.editing_tag.is_some() {
+        } else if self.page == Page::Settings && self.tag_form_open {
             self.cancel_tag_edit(window, cx);
         } else if self.page == Page::Records && self.record_details.is_some() {
             self.record_details = None;

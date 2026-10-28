@@ -2,7 +2,7 @@
 use std::{cell::Cell, collections::BTreeMap};
 
 use chrono::{Datelike, Days, Local, Months, NaiveDate, Timelike};
-use force_core::{PlanDraft, PlanEntry, Session, Stats, TagKind, Task};
+use force_core::{PlanDraft, PlanEntry, Session, Stats, Tag, TagKind, Task};
 use gpui::{
     AppContext as _, Context, Entity, FocusHandle, Focusable as _, Pixels, Point, PromptButton,
     PromptLevel, ScrollHandle, Subscription, Window,
@@ -47,11 +47,75 @@ struct PlanInputSnapshot {
     tag: i64,
 }
 
+/// A display state derived from existing task, occurrence and timer data.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum AgendaItemStatus {
+    Running,
+    Paused,
+    Completed,
+    Recorded,
+    Pending,
+    Moved,
+}
+
+impl AgendaItemStatus {
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            Self::Running => "计时",
+            Self::Paused => "暂停",
+            Self::Completed => "完成",
+            Self::Recorded => "记录",
+            Self::Pending => "待办",
+            Self::Moved => "顺延",
+        }
+    }
+
+    pub(crate) fn description(self, planned: bool) -> &'static str {
+        match self {
+            Self::Running => "计时中",
+            Self::Paused => "已暂停",
+            Self::Completed if planned => "本次安排已完成",
+            Self::Completed => "任务已完成",
+            Self::Recorded => "已记录",
+            Self::Pending => "待办安排",
+            Self::Moved => "已顺延，原安排保留",
+        }
+    }
+}
+
+/// A cleared live color is intentional; only a deleted tag uses its snapshot.
+pub(crate) fn agenda_tag_color<'a>(
+    tags: &'a [Tag],
+    tag_id: Option<i64>,
+    snapshot: Option<&'a str>,
+) -> Option<&'a str> {
+    match tag_id.and_then(|id| tags.iter().find(|tag| tag.id == id)) {
+        Some(tag) => tag.color.as_deref(),
+        None => snapshot,
+    }
+}
+
+fn record_status(record: &Session, day: NaiveDate, now: i64) -> AgendaItemStatus {
+    let (start, end) = day_bounds(day);
+    if now >= start && now < end {
+        if record.is_running() {
+            return AgendaItemStatus::Running;
+        }
+        if record.is_paused() {
+            return AgendaItemStatus::Paused;
+        }
+    }
+    AgendaItemStatus::Recorded
+}
+
 /// One real task (or unassociated legacy round) shown directly in a month day.
 /// Planned duration is never treated as actual investment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct AgendaMonthItem {
     pub(crate) title: String,
+    pub(crate) tag_id: Option<i64>,
+    pub(crate) tag_color: Option<String>,
+    pub(crate) status: AgendaItemStatus,
     pub(crate) seconds: i64,
     pub(crate) planned: bool,
     pub(crate) completed: bool,
@@ -299,6 +363,8 @@ impl ForceView {
                     &month_records,
                     &month_completions,
                     &month_plans,
+                    &self.tasks,
+                    &self.active,
                     self.now,
                 );
                 self.agenda.month_records = month_records;
@@ -365,6 +431,8 @@ impl ForceView {
             &self.agenda.month_records,
             &self.agenda.month_completions,
             &self.agenda.month_plans,
+            &self.tasks,
+            &self.active,
             self.now,
         );
         if visible_dates.contains(&today)
@@ -1123,6 +1191,63 @@ impl ForceView {
         cx.notify();
     }
 
+    pub(crate) fn agenda_task_tag_id(&self, task_id: i64) -> Option<i64> {
+        self.tasks
+            .iter()
+            .chain(&self.agenda.completed_tasks)
+            .find(|task| task.id == task_id)
+            .map(|task| task.tag_id)
+            .or_else(|| {
+                self.agenda
+                    .records
+                    .iter()
+                    .chain(&self.active)
+                    .find(|record| record.task_id == Some(task_id))
+                    .map(|record| record.tag_id)
+            })
+    }
+
+    pub(crate) fn agenda_task_color(&self, task_id: i64) -> Option<&str> {
+        agenda_tag_color(
+            &self.tags,
+            self.agenda_task_tag_id(task_id),
+            self.agenda
+                .records
+                .iter()
+                .chain(&self.active)
+                .find(|record| record.task_id == Some(task_id))
+                .and_then(|record| record.tag_color.as_deref()),
+        )
+    }
+
+    pub(crate) fn agenda_record_status(&self, record: &Session) -> AgendaItemStatus {
+        if record
+            .task_id
+            .is_some_and(|id| self.agenda.completed_tasks.iter().any(|task| task.id == id))
+        {
+            AgendaItemStatus::Completed
+        } else {
+            record_status(record, self.agenda.date, self.now)
+        }
+    }
+
+    pub(crate) fn agenda_plan_status(&self, plan: &PlanEntry) -> AgendaItemStatus {
+        if plan.moved_to.is_some() {
+            AgendaItemStatus::Moved
+        } else if self.agenda_plan_is_done(plan) {
+            AgendaItemStatus::Completed
+        } else {
+            self.active
+                .iter()
+                .find(|record| record.task_id == Some(plan.task_id))
+                .map(|record| record_status(record, self.agenda.date, self.now))
+                .filter(|status| {
+                    matches!(status, AgendaItemStatus::Running | AgendaItemStatus::Paused)
+                })
+                .unwrap_or(AgendaItemStatus::Pending)
+        }
+    }
+
     pub(crate) fn agenda_plan_is_done(&self, plan: &PlanEntry) -> bool {
         plan.completed_at.is_some()
             || self
@@ -1397,6 +1522,8 @@ fn agenda_month_days(
     records: &[Session],
     completed: &[Task],
     plans: &[PlanEntry],
+    tasks: &[Task],
+    active: &[Session],
     now: i64,
 ) -> BTreeMap<NaiveDate, Vec<AgendaMonthItem>> {
     dates
@@ -1414,12 +1541,22 @@ fn agenda_month_days(
                     .unwrap_or(MonthItemIdentity::Session(record.id));
                 let item = items.entry(identity).or_insert_with(|| AgendaMonthItem {
                     title: record.title.clone(),
+                    tag_id: Some(record.tag_id),
+                    tag_color: record.tag_color.clone(),
+                    status: AgendaItemStatus::Recorded,
                     seconds: 0,
                     planned: false,
                     completed: false,
                     rest: record.tag_kind == TagKind::Rest,
                     moved: false,
                 });
+                let status = record_status(record, *day, now);
+                if status == AgendaItemStatus::Running
+                    || status == AgendaItemStatus::Paused
+                        && item.status != AgendaItemStatus::Running
+                {
+                    item.status = status;
+                }
                 item.seconds = item
                     .seconds
                     .saturating_add(record.elapsed_between(start, end, now));
@@ -1432,6 +1569,9 @@ fn agenda_month_days(
                     .entry(MonthItemIdentity::Task(task.id))
                     .or_insert_with(|| AgendaMonthItem {
                         title: task.title.clone(),
+                        tag_id: Some(task.tag_id),
+                        tag_color: None,
+                        status: AgendaItemStatus::Completed,
                         seconds: 0,
                         planned: false,
                         completed: false,
@@ -1439,6 +1579,7 @@ fn agenda_month_days(
                         moved: false,
                     });
                 item.completed = true;
+                item.status = AgendaItemStatus::Completed;
             }
             for plan in plans.iter().filter(|plan| plan.day == *day) {
                 let moved = plan.moved_to.is_some();
@@ -1459,6 +1600,35 @@ fn agenda_month_days(
                     })
                     .or_insert_with(|| AgendaMonthItem {
                         title: plan.title.clone(),
+                        tag_id: tasks
+                            .iter()
+                            .chain(completed)
+                            .find(|task| task.id == plan.task_id)
+                            .map(|task| task.tag_id)
+                            .or_else(|| {
+                                records
+                                    .iter()
+                                    .chain(active)
+                                    .find(|record| record.task_id == Some(plan.task_id))
+                                    .map(|record| record.tag_id)
+                            }),
+                        tag_color: records
+                            .iter()
+                            .chain(active)
+                            .find(|record| record.task_id == Some(plan.task_id))
+                            .and_then(|record| record.tag_color.clone()),
+                        status: records
+                            .iter()
+                            .chain(active)
+                            .filter(|record| record.task_id == Some(plan.task_id))
+                            .map(|record| record_status(record, *day, now))
+                            .find(|status| {
+                                matches!(
+                                    status,
+                                    AgendaItemStatus::Running | AgendaItemStatus::Paused
+                                )
+                            })
+                            .unwrap_or(AgendaItemStatus::Pending),
                         seconds: 0,
                         planned: true,
                         completed: plan.completed_at.is_some(),
@@ -1467,6 +1637,13 @@ fn agenda_month_days(
                     });
             }
             let mut items: Vec<_> = items.into_values().collect();
+            for item in &mut items {
+                if item.moved {
+                    item.status = AgendaItemStatus::Moved;
+                } else if item.planned && item.completed {
+                    item.status = AgendaItemStatus::Completed;
+                }
+            }
             // Actual work remains first even when a task has no timer minutes.
             // Within it, the most substantial work is immediately visible.
             items.sort_by(|left, right| {
@@ -1546,12 +1723,13 @@ fn validate_plan_fields(draft: &PlanInputSnapshot) -> Result<(NaiveDate, u16, u1
 #[cfg(test)]
 mod tests {
     use super::{
-        PlanInputSnapshot, agenda_actual_dates, agenda_clock, agenda_month_days,
-        agenda_visible_dates, merge_active_records, parse_plan_time, validate_plan_fields,
+        AgendaItemStatus, PlanInputSnapshot, agenda_actual_dates, agenda_clock, agenda_month_days,
+        agenda_tag_color, agenda_visible_dates, merge_active_records, parse_plan_time,
+        record_status, validate_plan_fields,
     };
     use crate::model::day_bounds;
     use chrono::{Datelike, Days, NaiveDate};
-    use force_core::{Interval, PlanEntry, Session, TagKind, Task};
+    use force_core::{Interval, PlanEntry, Session, Tag, TagClass, TagKind, Task};
     fn draft() -> PlanInputSnapshot {
         PlanInputSnapshot {
             title: "Read".into(),
@@ -1796,6 +1974,8 @@ mod tests {
             &[across, paused],
             &[],
             &[],
+            &[],
+            &[],
             end + 300,
         );
         assert_eq!(
@@ -1833,7 +2013,15 @@ mod tests {
             session_count: 2,
         };
         let plans = [month_plan(1, 1, day), month_plan(2, 1, day)];
-        let days = agenda_month_days(&[day], &records, &[completed], &plans, start + 4000);
+        let days = agenda_month_days(
+            &[day],
+            &records,
+            &[completed],
+            &plans,
+            &[],
+            &[],
+            start + 4000,
+        );
         let items = &days[&day];
         assert_eq!(items.len(), 4);
         assert_eq!(items[0].seconds, 300);
@@ -1862,7 +2050,7 @@ mod tests {
         let mut moved = month_plan(1, 1, day);
         moved.moved_to = Some(2);
         let plans = [moved, month_plan(3, 3, day)];
-        let days = agenda_month_days(&[day], &[], &[completed], &plans, start + 120);
+        let days = agenda_month_days(&[day], &[], &[completed], &plans, &[], &[], start + 120);
         let items = &days[&day];
         assert_eq!(items.len(), 3);
         assert!(items.iter().all(|item| item.seconds == 0));
@@ -1879,10 +2067,10 @@ mod tests {
         let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
         let start = day_bounds(day).0;
         let records = [month_record(1, Some(1), start - 60, None)];
-        let at_midnight = agenda_month_days(&[day], &records, &[], &[], start);
+        let at_midnight = agenda_month_days(&[day], &records, &[], &[], &[], &[], start);
         assert_eq!(at_midnight[&day].len(), 1);
         assert_eq!(at_midnight[&day][0].seconds, 0);
-        let later = agenda_month_days(&[day], &records, &[], &[], start + 90);
+        let later = agenda_month_days(&[day], &records, &[], &[], &[], &[], start + 90);
         assert_eq!(later[&day][0].seconds, 90);
         assert!(!later[&day][0].planned);
     }
@@ -1902,6 +2090,8 @@ mod tests {
             &[],
             &[],
             &[done.clone(), pending.clone(), moved.clone()],
+            &[],
+            &[],
             start + 300,
         );
         assert_eq!(days[&day].len(), 2);
@@ -1911,7 +2101,15 @@ mod tests {
         assert!(days[&day][1].completed);
 
         pending.completed_at = Some(start + 120);
-        let all_done = agenda_month_days(&[day], &[], &[], &[done.clone(), pending], start + 300);
+        let all_done = agenda_month_days(
+            &[day],
+            &[],
+            &[],
+            &[done.clone(), pending],
+            &[],
+            &[],
+            start + 300,
+        );
         assert!(all_done[&day][0].completed);
 
         let actual = agenda_month_days(
@@ -1919,11 +2117,155 @@ mod tests {
             &[month_record(1, Some(1), start, Some(start + 120))],
             &[],
             &[done, moved],
+            &[],
+            &[],
             start + 300,
         );
         assert!(!actual[&day][0].planned);
         assert!(!actual[&day][0].completed);
         assert!(actual[&day][1].moved);
         assert!(actual[&day][1].completed);
+    }
+
+    #[test]
+    fn calendar_tag_color_uses_current_color_including_clear_and_deleted_snapshot_fallback() {
+        let mut tags = vec![Tag {
+            id: 1,
+            name: "Work".into(),
+            kind: TagKind::Focus,
+            class: TagClass::Positive,
+            color: Some("#688BA5".into()),
+        }];
+        let snapshot = Some("#B56F67");
+        assert_eq!(agenda_tag_color(&tags, Some(1), snapshot), Some("#688BA5"));
+        tags[0].color = None;
+        assert_eq!(agenda_tag_color(&tags, Some(1), snapshot), None);
+        tags.clear();
+        assert_eq!(agenda_tag_color(&tags, Some(1), snapshot), snapshot);
+        assert_eq!(agenda_tag_color(&tags, None, None), None);
+    }
+
+    #[test]
+    fn calendar_status_distinguishes_finished_rounds_and_today_clock_without_rewriting_history() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let previous = day.pred_opt().unwrap();
+        let now = day_bounds(day).0 + 600;
+        let mut running = month_record(1, Some(1), now - 900, None);
+        running.tag_color = Some("#B56F67".into());
+        let mut paused = running.clone();
+        paused.id = 2;
+        paused.task_id = Some(2);
+        paused.intervals[0].end = Some(now - 60);
+        let finished = month_record(3, Some(3), now - 300, Some(now - 30));
+        assert_eq!(
+            record_status(&finished, day, now),
+            AgendaItemStatus::Recorded
+        );
+        assert_eq!(
+            record_status(&running, previous, now),
+            AgendaItemStatus::Recorded
+        );
+        assert_eq!(
+            record_status(&paused, previous, now),
+            AgendaItemStatus::Recorded
+        );
+        let days = agenda_month_days(
+            &[previous, day],
+            &[running, paused, finished],
+            &[],
+            &[],
+            &[],
+            &[],
+            now,
+        );
+        let items = &days[&day];
+        assert!(
+            items
+                .iter()
+                .any(|item| item.status == AgendaItemStatus::Running)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.status == AgendaItemStatus::Paused)
+        );
+        assert!(
+            items
+                .iter()
+                .any(|item| item.status == AgendaItemStatus::Recorded)
+        );
+        assert!(items.iter().all(|item| !item.completed));
+        let running = items
+            .iter()
+            .find(|item| item.status == AgendaItemStatus::Running)
+            .unwrap();
+        assert_eq!(running.tag_id, Some(1));
+        assert_eq!(running.tag_color.as_deref(), Some("#B56F67"));
+        assert!(
+            days[&previous]
+                .iter()
+                .all(|item| item.status == AgendaItemStatus::Recorded)
+        );
+    }
+
+    #[test]
+    fn month_plan_color_uses_existing_task_tag_and_completion_stays_occurrence_specific() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let start = day_bounds(day).0;
+        let task = Task {
+            id: 1,
+            title: "Task".into(),
+            tag_id: 42,
+            tag_name: "Work".into(),
+            tag_kind: TagKind::Focus,
+            created_at: start,
+            completed_at: None,
+            total_seconds: 0,
+            session_count: 0,
+        };
+        let mut done = month_plan(1, 1, day);
+        done.completed_at = Some(start + 60);
+        let mut moved = month_plan(2, 1, day);
+        moved.moved_to = Some(3);
+        let days = agenda_month_days(&[day], &[], &[], &[done, moved], &[task], &[], start + 120);
+        assert!(days[&day].iter().all(|item| item.tag_id == Some(42)));
+        assert_eq!(days[&day][0].status, AgendaItemStatus::Completed);
+        assert_eq!(days[&day][0].status.description(true), "本次安排已完成");
+        assert_eq!(days[&day][1].status, AgendaItemStatus::Moved);
+        assert!(
+            days[&day]
+                .iter()
+                .all(|item| item.planned && item.seconds == 0)
+        );
+    }
+
+    #[test]
+    fn month_plans_use_old_paused_clock_without_adding_historical_intervals_or_minutes() {
+        let day = NaiveDate::from_ymd_opt(2026, 10, 25).unwrap();
+        let previous = day.pred_opt().unwrap();
+        let old_start = day_bounds(day.checked_sub_days(Days::new(50)).unwrap()).0;
+        let now = day_bounds(day).0 + 600;
+        let mut paused = month_record(1, Some(1), old_start, None);
+        paused.intervals[0].end = Some(old_start + 120);
+        paused.tag_color = Some("#688BA5".into());
+        let days = agenda_month_days(
+            &[previous, day],
+            &[],
+            &[],
+            &[month_plan(1, 1, previous), month_plan(2, 1, day)],
+            &[],
+            &[paused],
+            now,
+        );
+        assert_eq!(days[&day].len(), 1);
+        assert_eq!(days[&day][0].status, AgendaItemStatus::Paused);
+        assert_eq!(days[&previous][0].status, AgendaItemStatus::Pending);
+        assert_eq!(days[&day][0].tag_id, Some(1));
+        assert_eq!(days[&day][0].tag_color.as_deref(), Some("#688BA5"));
+        assert!(
+            days.values()
+                .flatten()
+                .all(|item| item.planned && item.seconds == 0)
+        );
     }
 }

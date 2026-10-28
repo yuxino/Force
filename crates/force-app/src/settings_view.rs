@@ -1,16 +1,16 @@
 use force_core::{TagClass, TagKind};
 use gpui::{prelude::*, *};
 use gpui_component::{
-    Disableable, Icon, Sizable, button::ButtonVariants, scroll::ScrollableElement, switch::Switch,
-    tooltip::Tooltip,
+    Disableable, Icon, IconName, Sizable, button::ButtonVariants, scroll::ScrollableElement,
+    switch::Switch, tooltip::Tooltip,
 };
 
 use crate::{
     label::single_line,
     model::ForceView,
     view::{
-        ControlState, DESTRUCTIVE, INK, LINE, MUTED, SURFACE, button, control_icon, control_label,
-        field, field_label, outlined_button, section_heading,
+        ControlState, DESTRUCTIVE, INK, LINE, MUTED, PAPER, SURFACE, button, control_icon,
+        control_label, field, field_label, outlined_button, primary_button, section_heading,
     },
 };
 
@@ -216,368 +216,384 @@ impl ForceView {
     }
 
     fn settings_tags(&self, cx: &mut Context<Self>) -> Div {
-        settings_section(
-            "标签",
-            div()
-                .flex()
-                .flex_col()
-                .gap(px(16.))
-                .child(
-                    // The scrollbar must stay outside the translated scroll content.
-                    div()
-                        .debug_selector(|| "settings-tag-viewport".into())
-                        .relative()
-                        .child(
-                            div()
-                                .id("settings-tags")
-                                .debug_selector(|| "settings-tags".into())
-                                .max_h(px(240.))
-                                .overflow_hidden()
-                                .pr(px(20.))
-                                .track_scroll(&self.tag_scroll)
-                                // GPUI scroll containers otherwise also scroll their parents.
-                                .on_scroll_wheel(cx.listener(
-                                    |this, event: &ScrollWheelEvent, window, cx| {
-                                        let old = this.tag_scroll.offset();
-                                        let delta = event.delta.pixel_delta(window.line_height()).y;
-                                        let next = (old.y + delta)
-                                            .clamp(-this.tag_scroll.max_offset().height, px(0.));
-                                        if next != old.y {
-                                            this.tag_scroll.set_offset(point(old.x, next));
-                                            cx.notify();
-                                            cx.stop_propagation();
-                                        }
-                                    },
-                                ))
-                                .when(self.tags.is_empty(), |list| {
-                                    list.child(
-                                        div()
-                                            .h(px(40.))
-                                            .flex()
-                                            .items_center()
-                                            .text_size(px(14.))
-                                            .text_color(rgb(MUTED))
-                                            .child("暂无标签"),
-                                    )
-                                })
-                                .children(self.tags.iter().map(|tag| {
-                                    let id = tag.id;
-                                    let help_name = tag.name.clone();
-                                    let editing = self.editing_tag == Some(id);
-                                    let color = tag.color.as_deref().and_then(tag_text_color);
+        div()
+            .w_full()
+            .pt(px(16.))
+            .border_t_1()
+            .border_color(rgb(LINE))
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .child(
+                div()
+                    .min_h(px(32.))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(section_heading("标签"))
+                    .when(
+                        !self.tag_form_open || self.editing_tag.is_some(),
+                        |header| {
+                            header.child(
+                                button("new-tag")
+                                    .debug_selector(|| "new-tag".into())
+                                    .custom(crate::view::quiet_variant(cx))
+                                    .h(px(32.))
+                                    .px(px(8.))
+                                    .icon(control_icon(
+                                        Icon::new(IconName::Plus).size(px(14.)),
+                                        INK,
+                                    ))
+                                    .child(control_label("新标签", INK))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_tag_settings(window, cx)
+                                    })),
+                            )
+                        },
+                    ),
+            )
+            .when(self.tag_form_open, |section| {
+                section.child(self.tag_editor(cx))
+            })
+            .child(
+                // The scrollbar must stay outside the translated scroll content.
+                div()
+                    .debug_selector(|| "settings-tag-viewport".into())
+                    .relative()
+                    .child(
+                        div()
+                            .id("settings-tags")
+                            .debug_selector(|| "settings-tags".into())
+                            .max_h(px(240.))
+                            .overflow_hidden()
+                            .pr(px(20.))
+                            .track_scroll(&self.tag_scroll)
+                            // GPUI scroll containers otherwise also scroll their parents.
+                            .on_scroll_wheel(cx.listener(
+                                |this, event: &ScrollWheelEvent, window, cx| {
+                                    let old = this.tag_scroll.offset();
+                                    let delta = event.delta.pixel_delta(window.line_height()).y;
+                                    let next = (old.y + delta)
+                                        .clamp(-this.tag_scroll.max_offset().height, px(0.));
+                                    if next != old.y {
+                                        this.tag_scroll.set_offset(point(old.x, next));
+                                        cx.notify();
+                                        cx.stop_propagation();
+                                    }
+                                },
+                            ))
+                            .when(self.tags.is_empty(), |list| {
+                                list.child(
                                     div()
-                                        .debug_selector(move || {
-                                            if editing {
-                                                format!("editing-tag-row-{id}")
-                                            } else {
-                                                format!("tag-row-{id}")
-                                            }
-                                        })
                                         .h(px(40.))
-                                        .flex_shrink_0()
-                                        .when(editing, |row| row.bg(rgb(SURFACE)))
                                         .flex()
                                         .items_center()
-                                        .gap(px(12.))
-                                        .border_b_1()
-                                        .border_color(rgb(LINE))
-                                        .when_some(
-                                            tag.color.as_deref().and_then(tag_color_rgb),
-                                            |row, color| {
-                                                row.child(
-                                                    div()
-                                                        .size(px(8.))
-                                                        .flex_shrink_0()
-                                                        .rounded_full()
-                                                        .bg(rgb(color)),
-                                                )
-                                            },
-                                        )
-                                        .child(
-                                            single_line(tag.name.clone(), 14.)
-                                                .id(("tag-name", id as u64))
-                                                .text_color(rgb(color.unwrap_or(INK)))
-                                                .flex_1()
-                                                .min_w_0()
-                                                .tooltip(move |window, cx| {
-                                                    Tooltip::new(help_name.clone())
-                                                        .build(window, cx)
-                                                }),
-                                        )
-                                        .child(
+                                        .text_size(px(14.))
+                                        .text_color(rgb(MUTED))
+                                        .child("暂无标签"),
+                                )
+                            })
+                            .children(self.tags.iter().map(|tag| {
+                                let id = tag.id;
+                                let help_name = tag.name.clone();
+                                let editing = self.editing_tag == Some(id);
+                                let color = tag.color.as_deref().and_then(tag_text_color);
+                                div()
+                                    .debug_selector(move || {
+                                        if editing {
+                                            format!("editing-tag-row-{id}")
+                                        } else {
+                                            format!("tag-row-{id}")
+                                        }
+                                    })
+                                    .h(px(40.))
+                                    .flex_shrink_0()
+                                    .when(editing, |row| row.bg(rgb(SURFACE)))
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(12.))
+                                    .border_b_1()
+                                    .border_color(rgb(LINE))
+                                    .when_some(
+                                        tag.color.as_deref().and_then(tag_color_rgb),
+                                        |row, color| {
+                                            row.child(
+                                                div()
+                                                    .size(px(8.))
+                                                    .flex_shrink_0()
+                                                    .rounded_full()
+                                                    .bg(rgb(color)),
+                                            )
+                                        },
+                                    )
+                                    .child(
+                                        single_line(tag.name.clone(), 14.)
+                                            .id(("tag-name", id as u64))
+                                            .text_color(rgb(color.unwrap_or(INK)))
+                                            .flex_1()
+                                            .min_w_0()
+                                            .tooltip(move |window, cx| {
+                                                Tooltip::new(help_name.clone()).build(window, cx)
+                                            }),
+                                    )
+                                    .child(
+                                        div()
+                                            .text_size(px(13.))
+                                            .text_color(rgb(color.unwrap_or(MUTED)))
+                                            .flex_shrink_0()
+                                            .child(tag_class_label(tag.class)),
+                                    )
+                                    .when(tag.kind == TagKind::Rest && tag.name != "休息", |row| {
+                                        row.child(
                                             div()
-                                                .text_size(px(13.))
-                                                .text_color(rgb(color.unwrap_or(MUTED)))
+                                                .w(px(32.))
                                                 .flex_shrink_0()
-                                                .child(tag_class_label(tag.class)),
+                                                .text_size(px(14.))
+                                                .text_color(rgb(MUTED))
+                                                .child("休息"),
                                         )
-                                        .when(
-                                            tag.kind == TagKind::Rest && tag.name != "休息",
-                                            |row| {
-                                                row.child(
-                                                    div()
-                                                        .w(px(32.))
-                                                        .flex_shrink_0()
-                                                        .text_size(px(14.))
-                                                        .text_color(rgb(MUTED))
-                                                        .child("休息"),
-                                                )
-                                            },
-                                        )
-                                        .child(
-                                            button(("edit-tag", id as u64))
-                                                .debug_selector(move || format!("edit-tag-{id}"))
-                                                .custom(crate::view::quiet_variant(cx))
-                                                .size(px(32.))
-                                                .icon(control_icon(
-                                                    Icon::default()
-                                                        .path("force-icons/pencil.svg")
-                                                        .size(px(15.)),
-                                                    if editing { INK } else { MUTED },
-                                                ))
-                                                .tooltip("编辑标签")
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.begin_edit_tag(id, window, cx)
-                                                    },
-                                                )),
-                                        )
-                                        .child(
-                                            button(("remove-tag", id as u64))
-                                                .debug_selector(move || format!("remove-tag-{id}"))
-                                                .custom(crate::view::quiet_variant(cx))
-                                                .size(px(32.))
-                                                .icon(control_icon(
-                                                    Icon::default()
-                                                        .path("force-icons/trash.svg")
-                                                        .size(px(15.)),
-                                                    MUTED,
-                                                ))
-                                                .tooltip("移除标签")
-                                                .on_click(cx.listener(
-                                                    move |this, _, window, cx| {
-                                                        this.delete_tag(id, window, cx)
-                                                    },
-                                                )),
-                                        )
-                                })),
-                        )
-                        .vertical_scrollbar(&self.tag_scroll),
-                )
-                .child(
-                    div()
-                        .id("tag-form")
-                        .debug_selector(|| "settings-form".into())
-                        .anchor_scroll(Some(self.tag_form_anchor.clone()))
-                        .pt(px(4.))
-                        .flex()
-                        .flex_col()
-                        .gap(px(10.))
-                        .child(
-                            field_label(if self.editing_tag.is_some() {
+                                    })
+                                    .child(
+                                        button(("edit-tag", id as u64))
+                                            .debug_selector(move || format!("edit-tag-{id}"))
+                                            .custom(crate::view::quiet_variant(cx))
+                                            .size(px(32.))
+                                            .icon(control_icon(
+                                                Icon::default()
+                                                    .path("force-icons/pencil.svg")
+                                                    .size(px(15.)),
+                                                if editing { INK } else { MUTED },
+                                            ))
+                                            .tooltip("编辑标签")
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.begin_edit_tag(id, window, cx)
+                                            })),
+                                    )
+                                    .child(
+                                        button(("remove-tag", id as u64))
+                                            .debug_selector(move || format!("remove-tag-{id}"))
+                                            .custom(crate::view::quiet_variant(cx))
+                                            .size(px(32.))
+                                            .icon(control_icon(
+                                                Icon::default()
+                                                    .path("force-icons/trash.svg")
+                                                    .size(px(15.)),
+                                                MUTED,
+                                            ))
+                                            .tooltip("移除标签")
+                                            .on_click(cx.listener(move |this, _, window, cx| {
+                                                this.delete_tag(id, window, cx)
+                                            })),
+                                    )
+                            })),
+                    )
+                    .vertical_scrollbar(&self.tag_scroll),
+            )
+    }
+
+    fn tag_editor(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let can_save = self.can_save_tag(cx);
+        div()
+            .id("tag-form")
+            .debug_selector(|| "settings-form".into())
+            .anchor_scroll(Some(self.tag_form_anchor.clone()))
+            .w_full()
+            .max_w(px(480.))
+            .pb(px(16.))
+            .border_b_1()
+            .border_color(rgb(LINE))
+            .flex()
+            .flex_col()
+            .gap(px(10.))
+            .child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap(px(6.))
+                    .child(
+                        div()
+                            .text_size(px(14.))
+                            .font_weight(FontWeight::MEDIUM)
+                            .child(if self.editing_tag.is_some() {
                                 "编辑标签"
                             } else {
                                 "新标签"
-                            })
-                            .text_size(px(14.)),
+                            }),
+                    )
+                    .when(self.editing_tag.is_some(), |heading| {
+                        heading.child(
+                            button("tag-edit-help")
+                                .custom(crate::view::quiet_variant(cx))
+                                .size(px(24.))
+                                .icon(control_icon(Icon::new(IconName::Info).size(px(13.)), MUTED))
+                                .tooltip("名称和分类影响未完成及之后的记录；日历颜色同步更新。"),
                         )
-                        .when(self.editing_tag.is_some(), |form| {
-                            form.child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .child("修改影响未完成和之后的记录，已完成记录保持原样。"),
-                            )
-                        })
-                        .child(
-                            div().flex().items_center().gap(px(8.)).child(
-                                div()
-                                    .debug_selector(|| "tag-input".into())
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(gpui::Styled::h(field(&self.tag_input), px(40.))),
-                            ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(8.))
-                                .child(field_label("分类"))
-                                .child(
-                                    div().flex().flex_wrap().gap(px(8.)).children(
-                                        [
-                                            TagClass::Positive,
-                                            TagClass::Neutral,
-                                            TagClass::Negative,
-                                            TagClass::Leisure,
-                                        ]
-                                        .into_iter()
-                                        .enumerate()
-                                        .map(
-                                            |(index, class)| {
-                                                let selected = self.new_tag_class == class;
-                                                let foreground = tag_text_color(
-                                                    self.tag_color_input.read(cx).value().trim(),
-                                                )
-                                                .unwrap_or(INK);
-                                                button(("tag-class", index as u64))
-                                                    .debug_selector(move || {
-                                                        format!(
-                                                            "tag-class-{}",
-                                                            tag_class_key(class)
-                                                        )
-                                                    })
-                                                    .custom(crate::view::quiet_variant(cx))
-                                                    .h(px(32.))
-                                                    .px(px(12.))
-                                                    .border_1()
-                                                    .border_color(rgb(if selected {
-                                                        INK
-                                                    } else {
-                                                        LINE
-                                                    }))
-                                                    .child(control_label(
-                                                        tag_class_label(class),
-                                                        if selected { foreground } else { MUTED },
-                                                    ))
-                                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                                        this.new_tag_class = class;
-                                                        cx.notify();
-                                                    }))
-                                            },
-                                        ),
-                                    ),
-                                )
-                                .child(
-                                    div().text_size(px(12.)).text_color(rgb(MUTED)).child(
-                                        "专注标签的正向和负向计入专注，中性和休闲保留记录。",
-                                    ),
-                                ),
-                        )
-                        .child(
-                            div()
-                                .flex()
-                                .flex_col()
-                                .gap(px(8.))
-                                .child(field_label("颜色（可选）"))
-                                .child(
-                                    div()
-                                        .flex()
-                                        .flex_wrap()
-                                        .items_center()
-                                        .gap(px(8.))
-                                        .children(TAG_COLORS.into_iter().enumerate().map(
-                                            |(index, (label, value))| {
-                                                let selected = self
-                                                    .tag_color_input
-                                                    .read(cx)
-                                                    .value()
-                                                    .trim()
-                                                    .eq_ignore_ascii_case(value);
-                                                button(("tag-color", index as u64))
-                                                    .debug_selector(move || {
-                                                        format!("tag-color-{label}")
-                                                    })
-                                                    .custom(crate::view::quiet_variant(cx))
-                                                    .size(px(32.))
-                                                    .border_1()
-                                                    .border_color(rgb(if selected {
-                                                        INK
-                                                    } else {
-                                                        LINE
-                                                    }))
-                                                    .tooltip(if value.is_empty() {
-                                                        "不设置颜色".to_owned()
-                                                    } else {
-                                                        format!("{label} {value}")
-                                                    })
-                                                    .when(value.is_empty(), |b| {
-                                                        b.child(control_label("无", MUTED))
-                                                    })
-                                                    .when_some(tag_color_rgb(value), |b, color| {
-                                                        b.child(
-                                                            div()
-                                                                .size(px(14.))
-                                                                .rounded_full()
-                                                                .bg(rgb(color)),
-                                                        )
-                                                    })
-                                                    .on_click(cx.listener(
-                                                        move |this, _, window, cx| {
-                                                            this.tag_color_input.update(
-                                                                cx,
-                                                                |input, cx| {
-                                                                    input.set_value(
-                                                                        value, window, cx,
-                                                                    )
-                                                                },
-                                                            );
-                                                            cx.notify();
-                                                        },
-                                                    ))
-                                            },
-                                        ))
-                                        .child(div().w(px(112.)).child(gpui::Styled::h(
-                                            field(&self.tag_color_input),
-                                            px(32.),
-                                        ))),
-                                ),
-                        )
-                        .when_some(self.tag_draft_error(cx), |form, message| {
-                            form.child(
-                                div()
-                                    .debug_selector(|| "tag-draft-error".into())
-                                    .text_size(px(14.))
-                                    .text_color(rgb(DESTRUCTIVE))
-                                    .child(message),
-                            )
-                        })
-                        .child(
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_end()
-                                .gap(px(8.))
-                                .when(self.editing_tag.is_some(), |row| {
-                                    row.child(
-                                        button("cancel-tag-edit")
-                                            .debug_selector(|| "cancel-tag-edit".into())
-                                            .custom(crate::view::quiet_variant(cx))
-                                            .h(px(40.))
-                                            .w(px(56.))
-                                            .px(px(8.))
-                                            .child(control_label("取消", MUTED))
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.cancel_tag_edit(window, cx)
-                                            })),
-                                    )
+                    }),
+            )
+            .child(tag_form_row(
+                "名称",
+                div()
+                    .debug_selector(|| "tag-input".into())
+                    .w_full()
+                    .child(gpui::Styled::h(field(&self.tag_input), px(36.))),
+            ))
+            .child(tag_form_row(
+                "分类",
+                div()
+                    .debug_selector(|| "tag-class-options".into())
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(6.))
+                    .children(
+                        [
+                            TagClass::Positive,
+                            TagClass::Neutral,
+                            TagClass::Negative,
+                            TagClass::Leisure,
+                        ]
+                        .into_iter()
+                        .enumerate()
+                        .map(|(index, class)| {
+                            let selected = self.new_tag_class == class;
+                            let foreground =
+                                tag_text_color(self.tag_color_input.read(cx).value().trim())
+                                    .unwrap_or(INK);
+                            button(("tag-class", index as u64))
+                                .debug_selector(move || {
+                                    format!("tag-class-{}", tag_class_key(class))
                                 })
-                                .child(
-                                    outlined_button("save-tag")
-                                        .debug_selector(|| "save-tag".into())
-                                        .h(px(40.))
-                                        .w(px(64.))
-                                        .px(px(12.))
-                                        .unavailable(!self.can_save_tag(cx))
-                                        .child(control_label(
-                                            if self.editing_tag.is_some() {
-                                                "保存"
-                                            } else {
-                                                "添加"
-                                            },
-                                            if self.can_save_tag(cx) { INK } else { MUTED },
-                                        ))
-                                        .on_click(cx.listener(|this, _, window, cx| {
-                                            if this.editing_tag.is_none() {
-                                                this.new_tag_kind = TagKind::Focus;
-                                            }
-                                            this.save_tag(window, cx)
-                                        })),
-                                ),
-                        ),
-                ),
-        )
+                                .custom(
+                                    crate::view::quiet_variant(cx)
+                                        .border(rgb(if selected { INK } else { LINE }).into()),
+                                )
+                                .h(px(32.))
+                                .px(px(10.))
+                                .border_1()
+                                .border_color(rgb(if selected { INK } else { LINE }))
+                                .child(control_label(
+                                    tag_class_label(class),
+                                    if selected { foreground } else { MUTED },
+                                ))
+                                .on_click(cx.listener(move |this, _, _, cx| {
+                                    this.new_tag_class = class;
+                                    cx.notify();
+                                }))
+                        }),
+                    )
+                    .child(
+                        button("tag-class-help")
+                            .custom(crate::view::quiet_variant(cx))
+                            .size(px(24.))
+                            .icon(control_icon(Icon::new(IconName::Info).size(px(13.)), MUTED))
+                            .tooltip("专注标签的正向和负向计入专注，中性和休闲保留记录。"),
+                    ),
+            ))
+            .child(tag_form_row(
+                "颜色",
+                div()
+                    .debug_selector(|| "tag-color-options".into())
+                    .flex()
+                    .flex_wrap()
+                    .items_center()
+                    .gap(px(6.))
+                    .children(
+                        TAG_COLORS
+                            .into_iter()
+                            .enumerate()
+                            .map(|(index, (label, value))| {
+                                let selected = self
+                                    .tag_color_input
+                                    .read(cx)
+                                    .value()
+                                    .trim()
+                                    .eq_ignore_ascii_case(value);
+                                button(("tag-color", index as u64))
+                                    .debug_selector(move || format!("tag-color-{label}"))
+                                    .custom(
+                                        crate::view::quiet_variant(cx)
+                                            .border(rgb(if selected { INK } else { LINE }).into()),
+                                    )
+                                    .size(px(28.))
+                                    .border_1()
+                                    .border_color(rgb(if selected { INK } else { LINE }))
+                                    .tooltip(if value.is_empty() {
+                                        "不设置颜色".to_owned()
+                                    } else {
+                                        format!("{label} {value}")
+                                    })
+                                    .when(value.is_empty(), |button| {
+                                        button.child(control_label("无", MUTED))
+                                    })
+                                    .when_some(tag_color_rgb(value), |button, color| {
+                                        button.child(
+                                            div().size(px(12.)).rounded_full().bg(rgb(color)),
+                                        )
+                                    })
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.tag_color_input.update(cx, |input, cx| {
+                                            input.set_value(value, window, cx)
+                                        });
+                                        cx.notify();
+                                    }))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w(px(104.))
+                            .child(gpui::Styled::h(field(&self.tag_color_input), px(32.))),
+                    ),
+            ))
+            .when_some(self.tag_draft_error(cx), |form, message| {
+                form.child(
+                    div()
+                        .debug_selector(|| "tag-draft-error".into())
+                        .pl(px(48.))
+                        .text_size(px(13.))
+                        .text_color(rgb(DESTRUCTIVE))
+                        .child(message),
+                )
+            })
+            .child(
+                div()
+                    .debug_selector(|| "tag-form-actions".into())
+                    .pl(px(48.))
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        primary_button("save-tag")
+                            .debug_selector(|| "save-tag".into())
+                            .h(px(36.))
+                            .w(px(72.))
+                            .px(px(12.))
+                            .unavailable(!can_save)
+                            .when(!can_save, |button| {
+                                button.bg(rgb(crate::control_style::DISABLED_START_BACKGROUND))
+                            })
+                            .child(control_label(
+                                if self.editing_tag.is_some() {
+                                    "保存"
+                                } else {
+                                    "添加"
+                                },
+                                if can_save { PAPER } else { MUTED },
+                            ))
+                            .on_click(cx.listener(|this, _, window, cx| this.save_tag(window, cx))),
+                    )
+                    .child(
+                        button("cancel-tag-edit")
+                            .debug_selector(|| "cancel-tag-edit".into())
+                            .custom(crate::view::quiet_variant(cx))
+                            .h(px(36.))
+                            .w(px(56.))
+                            .px(px(8.))
+                            .child(control_label("取消", MUTED))
+                            .on_click(
+                                cx.listener(|this, _, window, cx| this.cancel_tag_edit(window, cx)),
+                            ),
+                    ),
+            )
     }
 
     fn settings_about(&self, cx: &mut Context<Self>) -> Div {
@@ -695,7 +711,7 @@ pub(crate) fn tag_color_rgb(value: &str) -> Option<u32> {
 
 // Preserve the chosen hue while keeping small text legible on white and on
 // neutral selected, hovered and pressed surfaces. Swatches retain the exact saved color.
-fn tag_text_color(value: &str) -> Option<u32> {
+pub(crate) fn tag_text_color(value: &str) -> Option<u32> {
     let color = tag_color_rgb(value)?;
     let mut channels = [(color >> 16) & 255, (color >> 8) & 255, color & 255];
     while tag_luminance(channels) > 0.138 {
@@ -737,6 +753,22 @@ fn settings_section(title: &'static str, content: impl IntoElement) -> Div {
         .gap(px(8.))
         .child(section_heading(title))
         .child(div().w_full().min_w_0().child(content))
+}
+
+fn tag_form_row(label: &'static str, content: impl IntoElement) -> Div {
+    div()
+        .flex()
+        .items_start()
+        .gap(px(12.))
+        .child(
+            field_label(label)
+                .w(px(36.))
+                .h(px(32.))
+                .flex_shrink_0()
+                .flex()
+                .items_center(),
+        )
+        .child(div().flex_1().min_w_0().child(content))
 }
 
 fn settings_row() -> Div {
