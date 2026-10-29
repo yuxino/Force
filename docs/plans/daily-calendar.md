@@ -92,7 +92,6 @@ restrictions and preserving independent or edited task drafts. Core tests cover
 atomic activity updates, stale baselines, rollback, finished classifications and
 exact intervals.
 
-See [the arrangement-editor acceptance record](../qa/2026-10-29-arrangement-
-editor.md) for this change's checks and native evidence limits. TestPlatform
+See [the arrangement-editor acceptance record](../qa/2026-10-29-arrangement-editor.md) for this change's checks and native evidence limits. TestPlatform
 establishes layout bounds and dispatched events; it does not establish native
 pixels, IME composition or Windows/Linux interaction.
