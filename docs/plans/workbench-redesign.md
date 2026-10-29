@@ -61,15 +61,26 @@ creation in the header rather than duplicating it in the sidebar; 保存任务 i
 secondary action that saves without starting a timer. Calendar 安排日程 remains
 secondary and separate from task creation.
 
-The clock shows time inside the cream-colored Siamese cat. Clicking the cat expands a single
-black panel with its task title, status and primary action. Show 结束 only for an
-active or paused session; do not reserve an empty action slot. Clicking the task
-title opens the corresponding task detail or completion receipt, preserving
-unsaved edits. Clicking the cat again collapses the panel without changing timing or
-management visibility. Keep the clock free of hover tooltips and a separate open
-button. Native dragging near the left or right screen edge docks it on
-macOS/Windows; Linux retains free movement and resizing. Preserve model routing,
-running-session priority and visible error feedback across all clock shapes.
+The compact clock places a neutral readout below the Siamese cat's paws. Show the
+complete clock at a stable baseline and retain the real duration when paused or
+saved. Idle reads 开始; invalid duration reads 设置时长 without a placeholder dash.
+Clicking a prepared or active cat reveals one black panel with the activity,
+state and primary action. Show 结束计时 only for an active or paused session.
+The saved-round action 再计一次 starts a new segment for that same activity;
+clicking its title opens the task detail. Keep other paused tasks unchanged.
+Clicking the cat again collapses the panel without changing timing or management
+visibility. Keep the clock free of hover tooltips and a separate open button.
+Native dragging near either screen edge docks it on macOS/Windows; the dock
+includes 分 or 时 units. Linux retains free movement and resizing. Preserve
+running-session priority and visible errors across all clock shapes.
+
+Calendar actual-record details offer local editing and 删除计时记录. Completion
+markers have a separate editor for their description, activity and time; deleting
+a completion hides its task and arrangements while keeping recorded intervals.
+Existing notes can be deleted from their editor. All confirmation cancellations
+return keyboard focus, and moving a record or completion to a different day
+reveals the saved result there. Ending a timer saves the segment and shows a
+compact receipt, without a new-rest step or an automatic task completion.
 
 Records read from yearly activity to the selected day to individual sessions.
 Keep the real 53-week calendar and existing date/interval arithmetic. Move export

@@ -18,7 +18,7 @@ use gpui_component::{
     input::{InputEvent, InputState},
 };
 
-#[derive(Clone, Copy, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Page {
     Agenda,
     Focus,
@@ -38,7 +38,6 @@ pub(crate) enum TaskDestination {
     New,
     Task(i64),
     Session(i64),
-    GlobalBreak,
     AgendaPlan(i64),
 }
 
@@ -72,6 +71,7 @@ pub(crate) struct ForceView {
     pub(crate) agenda: crate::agenda_model::AgendaState,
     pub(crate) moments: crate::moment_model::MomentState,
     pub(crate) record_editor: crate::record_editor_model::RecordEditorState,
+    pub(crate) completion_editor: crate::completion_editor_model::CompletionEditorState,
     pub(crate) record_moments: Vec<force_core::Moment>,
     pub(crate) store: Option<Store>,
     pub(crate) data_dir: PathBuf,
@@ -310,6 +310,8 @@ impl ForceView {
         let agenda = crate::agenda_model::AgendaState::new(window, cx);
         let moments = crate::moment_model::MomentState::new(window, cx);
         let record_editor = crate::record_editor_model::RecordEditorState::new(window, cx);
+        let completion_editor =
+            crate::completion_editor_model::CompletionEditorState::new(window, cx);
         let classification = crate::classification_model::ClassificationState::new(window, cx);
         let time_picker = cx.new(crate::time_picker::TimePicker::new);
         let panel_scroll: [gpui::ScrollHandle; 4] = std::array::from_fn(|_| Default::default());
@@ -318,6 +320,7 @@ impl ForceView {
             agenda,
             moments,
             record_editor,
+            completion_editor,
             record_moments: Vec::new(),
             store: None,
             data_dir,
@@ -1177,7 +1180,6 @@ impl ForceView {
                             TaskDestination::New => this.new_task(window, cx),
                             TaskDestination::Task(id) => this.select_task(id, window, cx),
                             TaskDestination::Session(id) => this.select_session(id, window, cx),
-                            TaskDestination::GlobalBreak => this.start_global_break(window, cx),
                             TaskDestination::AgendaPlan(id) => {
                                 this.start_plan_timer(id, window, cx)
                             }
@@ -1236,8 +1238,8 @@ impl ForceView {
             cx,
         );
         if saved && let Some(session) = started {
-            // This exact setup has just been consumed. Other entry points such
-            // as starting a break still suspend a separate activity draft.
+            // This exact setup has just been consumed. Selecting another task
+            // still suspends any separate activity draft.
             self.preparing = false;
             self.accept_started(session, window, cx);
         }
@@ -1340,6 +1342,8 @@ impl ForceView {
         }
         if self.time_picker.read(cx).is_open() {
             self.time_picker.focus_handle(cx).focus(window);
+        } else if self.completion_editor.visible {
+            self.focus_completion_editor(window, cx);
         } else if self.record_editor.visible {
             self.focus_record_editor(window, cx);
         } else if self.moments.visible {
@@ -1358,6 +1362,9 @@ impl ForceView {
     }
 
     pub(crate) fn hide_manager(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.completion_editor
+            .picker
+            .update(cx, |picker, cx| picker.dismiss(window, false, cx));
         self.record_editor
             .picker
             .update(cx, |picker, cx| picker.dismiss(window, false, cx));
@@ -1407,6 +1414,7 @@ impl ForceView {
         };
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
+        self.suspend_completion_editor(window, cx);
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
@@ -1443,6 +1451,7 @@ impl ForceView {
         };
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
+        self.suspend_completion_editor(window, cx);
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
@@ -1485,6 +1494,7 @@ impl ForceView {
     pub(crate) fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
+        self.suspend_completion_editor(window, cx);
         if self.is_new_task_form() {
             if self.page == Page::Agenda {
                 self.suspend_agenda_popup(window, cx);
@@ -1553,7 +1563,9 @@ impl ForceView {
 
     /// Open the task already represented by the cat, preserving its draft.
     pub(crate) fn show_strip_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
+        self.suspend_completion_editor(window, cx);
         if self.page == Page::Agenda {
             self.suspend_agenda_popup(window, cx);
         }
@@ -1570,8 +1582,8 @@ impl ForceView {
             self.show_manager(window, cx);
             return;
         }
-        // A completion receipt may coexist with other paused rounds. Its play
-        // action opens the receipt rather than resuming an unseen paused timer.
+        // Restart the activity represented by the saved round, preserving any
+        // other paused timers rather than resuming an unseen task.
         if self.completed.is_some() && running_session(&self.active, self.now).is_none() {
             self.primary_action(window, cx);
         } else if let Some(id) = self.strip_session().map(|session| session.id) {
@@ -1582,7 +1594,13 @@ impl ForceView {
     }
 
     pub(crate) fn primary_action(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.completed.is_some() {
+        if self
+            .completed
+            .as_ref()
+            .is_some_and(|record| record.tag_kind == TagKind::Focus)
+        {
+            self.repeat_completed(window, cx);
+        } else if self.completed.is_some() {
             self.page = Page::Focus;
             self.set_expanded(true, window, cx);
         } else if let Some(id) = self
@@ -1625,65 +1643,6 @@ impl ForceView {
                         completed.target_seconds,
                     )?,
                 });
-                Ok(())
-            },
-            cx,
-        ) && let Some(session) = started
-        {
-            self.accept_started(session, window, cx);
-        }
-    }
-
-    pub(crate) fn start_global_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.confirm_task_changes(TaskDestination::GlobalBreak, window, cx) {
-            return;
-        }
-        if let Some(session) = running_session(&self.active, self.now).cloned() {
-            if session.tag_kind == TagKind::Focus {
-                self.return_task = session.task_id;
-                self.return_target_seconds = session.target_seconds;
-            }
-            self.begin_break(window, cx);
-        } else {
-            self.start_break(window, cx);
-        }
-    }
-
-    pub(crate) fn start_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(focus) = self
-            .completed
-            .as_ref()
-            .filter(|session| session.tag_kind == TagKind::Focus)
-            .or_else(|| {
-                self.active.iter().find(|session| {
-                    Some(session.id) == self.selected_session && session.tag_kind == TagKind::Focus
-                })
-            })
-            .or_else(|| {
-                self.active
-                    .iter()
-                    .find(|session| session.is_running() && session.tag_kind == TagKind::Focus)
-            })
-        {
-            self.return_task = focus.task_id;
-            self.return_target_seconds = focus.target_seconds;
-        }
-        self.begin_break(window, cx);
-    }
-
-    fn begin_break(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if write_return_context(&self.data_dir, self.return_task, self.return_target_seconds)
-            .is_err()
-        {
-            self.notify("无法保存休息后的返回任务，请重试。", cx);
-            return;
-        }
-        let now = Local::now().timestamp();
-        let mut started = None;
-        if self.write(
-            |store| {
-                let tag = rest_tag(store)?;
-                started = Some(store.start_break(tag.id, now, 300)?);
                 Ok(())
             },
             cx,
@@ -2153,6 +2112,7 @@ impl ForceView {
             .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
+        self.suspend_completion_editor(window, cx);
         if page == Page::Agenda && !self.prepare_agenda_overview(window, cx) {
             return;
         }
@@ -2174,6 +2134,13 @@ impl ForceView {
         if self.time_picker.read(cx).is_open() {
             self.time_picker
                 .update(cx, |picker, cx| picker.dismiss(window, cx));
+        } else if self.completion_editor.visible && self.completion_editor.picker.read(cx).is_open()
+        {
+            self.completion_editor
+                .picker
+                .update(cx, |picker, cx| picker.dismiss(window, true, cx));
+        } else if self.completion_editor.visible {
+            self.suspend_completion_editor(window, cx);
         } else if self.record_editor.visible && self.record_editor.picker.read(cx).is_open() {
             self.record_editor
                 .picker
@@ -2303,25 +2270,63 @@ impl ForceView {
             self.notify("请先结束计时，再删除记录。", cx);
             return;
         }
+        let return_focus = window.focused(cx);
         let answer = window.prompt(
             PromptLevel::Warning,
-            "删除这条记录？",
-            Some("整段计时记录（包括跨日部分）将被永久删除，各日期统计也会更新。此操作无法撤销。"),
+            "删除这条计时记录？",
+            Some("整段计时记录（包括跨日部分）将被永久删除，统计会更新。任务和日历安排会保留。此操作无法撤销。"),
             &[PromptButton::cancel("取消"), PromptButton::new("删除")],
             cx,
         );
-        cx.spawn(async move |this, cx| match answer.await {
-            Ok(1) => {
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = answer.await;
+            let _ = cx.update(|window, cx| {
                 let _ = this.update(cx, |this, cx| {
-                    if this.write(|store| store.delete_session(id), cx) {
-                        this.notify("记录已删除。", cx);
+                    if !this.compact {
+                        window.activate_window();
+                        if let Some(focus) = return_focus.as_ref() {
+                            focus.focus(window);
+                        }
+                    }
+                    match choice {
+                        Ok(1) => {
+                            if this.write(|store| store.delete_session(id), cx) {
+                                if this
+                                    .record_editor
+                                    .original
+                                    .as_ref()
+                                    .is_some_and(|record| record.id == id)
+                                {
+                                    this.cancel_record_editor(window, cx);
+                                }
+                                if this
+                                    .completed
+                                    .as_ref()
+                                    .is_some_and(|record| record.id == id)
+                                {
+                                    this.completed = None;
+                                    // The saved-round view was the last thing shown for this
+                                    // unfinished task. Its setup must become editable again.
+                                    if this.selected_session.is_none()
+                                        && this.tasks.iter().any(|task| {
+                                            Some(task.id) == this.selected_task
+                                                && task.completed_at.is_none()
+                                        })
+                                    {
+                                        this.preparing = true;
+                                    }
+                                }
+                                if this.record_details == Some(id) {
+                                    this.record_details = None;
+                                }
+                                this.notify("计时记录已删除。", cx);
+                            }
+                        }
+                        Ok(_) => {}
+                        Err(_) => this.notify("无法确认删除，请重试。", cx),
                     }
                 });
-            }
-            Ok(_) => {}
-            Err(_) => {
-                let _ = this.update(cx, |this, cx| this.notify("无法确认删除，请重试。", cx));
-            }
+            });
         })
         .detach();
     }
@@ -2707,20 +2712,6 @@ fn read_return_context(directory: &Path) -> std::io::Result<Option<(i64, Option<
 }
 
 type DayStatistics = (Stats, Stats);
-
-fn rest_tag(store: &mut Store) -> force_core::Result<Tag> {
-    let tags = store.tags()?;
-    if let Some(tag) = tags.iter().find(|tag| tag.kind == TagKind::Rest) {
-        return Ok(tag.clone());
-    }
-    let mut name = "休息".to_owned();
-    let mut suffix = 2;
-    while tags.iter().any(|tag| tag.name == name) {
-        name = format!("休息 {suffix}");
-        suffix += 1;
-    }
-    store.create_tag(&name, TagKind::Rest)
-}
 
 fn parse_goal_draft(value: &str) -> Option<u32> {
     value
@@ -3409,27 +3400,6 @@ mod tests {
             fs::read_to_string(directory.path().join("focus-context")).unwrap(),
             "v1 42 -1"
         );
-    }
-
-    #[test]
-    fn rest_can_start_when_a_focus_tag_already_has_the_default_rest_name() {
-        let directory = tempfile::tempdir().unwrap();
-        let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
-        for tag in store
-            .tags()
-            .unwrap()
-            .into_iter()
-            .filter(|tag| tag.kind == TagKind::Rest)
-        {
-            store.delete_tag(tag.id).unwrap();
-        }
-        store.create_tag("休息", TagKind::Focus).unwrap();
-        let rest = rest_tag(&mut store).unwrap();
-        assert_eq!(rest.kind, TagKind::Rest);
-        assert_ne!(rest.name, "休息");
-        let session = store.start_timed("休息", rest.id, 100, 300).unwrap();
-        assert_eq!(session.tag_kind, TagKind::Rest);
-        assert_eq!(rest_tag(&mut store).unwrap().id, rest.id);
     }
 
     #[test]

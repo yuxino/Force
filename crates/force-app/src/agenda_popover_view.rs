@@ -462,7 +462,7 @@ impl ForceView {
                     format!("agenda-summary-completion-{id}"),
                     &task.title,
                     self.display_color(Some(task.tag_id), force_core::TagClass::Legacy, None),
-                    "已完成 · 未计时".to_owned(),
+                    "已完成 · 当天未计时".to_owned(),
                 )
                 .on_click(cx.listener(move |this, _, window, cx| {
                     this.select_agenda_completion(id, window, cx)

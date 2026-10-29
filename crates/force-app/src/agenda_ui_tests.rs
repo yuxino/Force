@@ -2,7 +2,7 @@
 //! actual IME composition remain part of signed-app acceptance.
 
 use chrono::{Datelike, Days, Local, NaiveDate};
-use force_core::{PlanDraft, PlanEntry};
+use force_core::{PlanDraft, PlanEntry, RecordIntervalEdit, Session};
 use gpui::{
     Bounds, Focusable as _, KeyBinding, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
     Pixels, Point, TestAppContext, px, size,
@@ -971,7 +971,7 @@ fn agenda_ui_tag_menu_selects_without_dismissing_the_editor(cx: &mut TestAppCont
 }
 
 #[gpui::test]
-fn agenda_ui_actual_receipt_and_untimed_completion_are_read_only_month_context(
+fn agenda_ui_actual_record_and_untimed_completion_open_in_the_same_month_context(
     cx: &mut TestAppContext,
 ) {
     let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
@@ -1027,6 +1027,248 @@ fn agenda_ui_actual_receipt_and_untimed_completion_are_read_only_month_context(
         assert_eq!(view.store.as_ref().unwrap().sessions().unwrap(), before);
         assert!(view.active.is_empty());
     });
+    assert_inside(manager.bounds("agenda-completion-edit"), completion_detail);
+    assert_inside(
+        manager.bounds("agenda-completion-delete"),
+        completion_detail,
+    );
+    manager.click("agenda-completion-edit");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.page, Page::Agenda);
+        assert_eq!(view.agenda.date, date);
+        assert!(view.completion_editor.visible);
+        assert_eq!(view.completion_editor.original.as_ref().unwrap().id, 2);
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.suspend_completion_editor(window, cx);
+        view.select_agenda_completion(2, window, cx);
+    });
+    settle(&mut manager);
+    manager.click("agenda-completion-delete");
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("取消");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.agenda.selected_completion, Some(2));
+        assert!(view.agenda.completed_tasks.iter().any(|task| task.id == 2));
+    });
+    manager.click("agenda-completion-delete");
+    manager.cx.simulate_prompt_answer("删除完成事项");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.page, Page::Agenda);
+        assert_eq!(view.agenda.date, date);
+        assert_eq!(view.agenda.selected_completion, None);
+        assert!(!view.completion_editor.active);
+        assert!(view.agenda.completed_tasks.is_empty());
+        assert_eq!(view.store.as_ref().unwrap().sessions().unwrap(), before);
+    });
+}
+
+fn seed_calendar_record(manager: &mut ManagerHarness, date: NaiveDate) -> (Session, Session) {
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let day_start = day_bounds(date).0;
+        let store = view.store.as_mut().unwrap();
+        let record = store
+            .create_completed_record(
+                "跨日计时",
+                1,
+                &[
+                    RecordIntervalEdit {
+                        start: day_start - 3600 + 17,
+                        end: day_start - 2400 + 17,
+                    },
+                    RecordIntervalEdit {
+                        start: day_start + 9 * 3600 + 29,
+                        end: day_start + 9 * 3600 + 1229,
+                    },
+                ],
+                view.now,
+            )
+            .unwrap();
+        let running = store
+            .create_and_start_task("正在进行的另一件事", 1, view.now - 300, None)
+            .unwrap();
+        view.refresh(cx);
+        view.open_agenda_day(date, window, cx);
+        (record, running)
+    })
+}
+
+#[gpui::test]
+fn agenda_ui_record_edit_stays_on_calendar_and_preserves_intervals_timer_and_plan_draft(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let date = Local::now().date_naive().pred_opt().unwrap();
+        let (record, running) = seed_calendar_record(&mut manager, date);
+        let record_date = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.record_date = date;
+            view.record_search
+                .update(cx, |input, cx| input.set_value("保留记录筛选", window, cx));
+            view.begin_plan(None, window, cx);
+            view.record_date
+        });
+        fill_plan(
+            &mut manager,
+            "尚未保存的安排",
+            date,
+            "14:00",
+            "14:30",
+            "计划备注",
+        );
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.select_agenda_record(record.id, window, cx)
+        });
+        settle(&mut manager);
+        let viewport = Bounds::new(Point::default(), size(px(width), px(height)));
+        let detail = manager.bounds("agenda-record-detail");
+        assert_inside(detail, viewport);
+        assert_inside(manager.bounds("agenda-record-edit"), detail);
+        assert_inside(manager.bounds("agenda-record-delete"), detail);
+        manager.click("agenda-record-edit");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.page, Page::Agenda);
+            assert_eq!(view.agenda.date, date);
+            assert!(view.record_editor.visible);
+            assert_eq!(view.record_editor.original.as_ref(), Some(&record));
+            assert_eq!(view.record_editor.intervals.len(), 2);
+            assert!(view.agenda_has_suspended_draft(cx));
+            assert_eq!(view.agenda.title_input.read(cx).value(), "尚未保存的安排");
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.record_editor
+                .description
+                .update(cx, |input, cx| input.set_value("仅修正说明", window, cx));
+        });
+        manager.click("close-record-editor");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.select_agenda_record(record.id, window, cx)
+        });
+        settle(&mut manager);
+        manager.click("agenda-record-edit");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(
+                view.record_editor.description.read(cx).value(),
+                "仅修正说明"
+            );
+        });
+        manager.click("save-record-editor");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.page, Page::Agenda);
+            assert_eq!(view.agenda.date, date);
+            assert_eq!(view.record_date, record_date);
+            assert_eq!(view.record_search.read(cx).value(), "保留记录筛选");
+            assert!(!view.record_editor.active);
+            assert!(view.agenda_has_suspended_draft(cx));
+            assert_eq!(view.agenda.note_input.read(cx).value(), "计划备注");
+            let store = view.store.as_ref().unwrap();
+            let saved = store.record_edit_snapshot(record.id).unwrap().session;
+            assert_eq!(saved.title, "仅修正说明");
+            assert_eq!(saved.intervals, record.intervals);
+            assert_eq!(saved.started_at, record.started_at);
+            assert_eq!(saved.finished_at, record.finished_at);
+            assert_eq!(store.active_sessions().unwrap(), vec![running.clone()]);
+            assert_eq!(view.agenda.records[0].title, "仅修正说明");
+        });
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_record_delete_confirms_the_whole_record_without_leaving_the_day_or_timer(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let date = Local::now().date_naive().pred_opt().unwrap();
+    let (record, running) = seed_calendar_record(&mut manager, date);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.select_agenda_record(record.id, window, cx)
+    });
+    settle(&mut manager);
+    manager.click("agenda-record-delete");
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("取消");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.page, Page::Agenda);
+        assert_eq!(view.agenda.date, date);
+        assert_eq!(view.agenda.selected_record, Some(record.id));
+        assert_eq!(
+            view.store
+                .as_ref()
+                .unwrap()
+                .record_edit_snapshot(record.id)
+                .unwrap()
+                .session,
+            record
+        );
+    });
+    manager.click("agenda-record-delete");
+    manager.cx.simulate_prompt_answer("删除");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.page, Page::Agenda);
+        assert_eq!(view.agenda.date, date);
+        assert_eq!(view.agenda.selected_record, None);
+        assert!(view.agenda.records.is_empty());
+        let store = view.store.as_ref().unwrap();
+        assert!(store.record_edit_snapshot(record.id).is_err());
+        let (start, end) = day_bounds(date.pred_opt().unwrap());
+        assert!(
+            store
+                .sessions_overlapping(start, end, view.now)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(store.active_sessions().unwrap(), vec![running.clone()]);
+        assert!(
+            view.agenda
+                .completed_tasks
+                .iter()
+                .any(|task| Some(task.id) == record.task_id)
+        );
+    });
+}
+
+#[gpui::test]
+fn agenda_ui_unfinished_records_only_return_to_timer_without_resuming_a_pause(
+    cx: &mut TestAppContext,
+) {
+    for paused in [false, true] {
+        let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+        let date = Local::now().date_naive();
+        let session = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let store = view.store.as_mut().unwrap();
+            let session = store
+                .create_and_start_task("尚未结束", 1, view.now - 300, None)
+                .unwrap();
+            if paused {
+                store.pause(session.id, view.now - 60).unwrap();
+            }
+            view.refresh(cx);
+            view.open_agenda_day(date, window, cx);
+            view.select_agenda_record(session.id, window, cx);
+            view.active
+                .iter()
+                .find(|active| active.id == session.id)
+                .unwrap()
+                .clone()
+        });
+        settle(&mut manager);
+        assert!(manager.cx.debug_bounds("agenda-record-edit").is_none());
+        assert!(manager.cx.debug_bounds("agenda-record-delete").is_none());
+        manager.click("agenda-record-timer");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.page, Page::Focus);
+            assert_eq!(view.selected_session, Some(session.id));
+            assert_eq!(
+                view.store.as_ref().unwrap().active_sessions().unwrap(),
+                vec![session.clone()]
+            );
+            assert!(!view.record_editor.active);
+        });
+    }
 }
 
 fn assert_same_bounds(actual: Bounds<Pixels>, expected: Bounds<Pixels>) {

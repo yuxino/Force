@@ -204,7 +204,25 @@ impl ForceView {
                                     .on_click(cx.listener(|this, _, window, cx| {
                                         this.cancel_moment(window, cx)
                                     })),
-                            ),
+                            )
+                            .when_some(self.moments.editing, |row, id| {
+                                row.child(div().flex_1()).child(
+                                    button("delete-moment-editor")
+                                        .debug_selector(|| "delete-moment-editor".into())
+                                        .custom(crate::view::quiet_variant(cx))
+                                        .h(px(36.))
+                                        .px(px(12.))
+                                        .unavailable(self.storage_failed)
+                                        .child(control_label("删除", DESTRUCTIVE))
+                                        .on_click(cx.listener(
+                                            move |this, event: &ClickEvent, window, cx| {
+                                                if event.click_count() == 1 {
+                                                    this.delete_moment(id, window, cx)
+                                                }
+                                            },
+                                        )),
+                                )
+                            }),
                     ),
             )
     }
