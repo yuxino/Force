@@ -465,12 +465,7 @@ impl ForceView {
                             .debug_selector(|| "agenda-overview-add".into())
                             .on_click(cx.listener(
                                 |this, _, window, cx| {
-                                    if this.agenda.date.month() != this.agenda.month.month()
-                                        || this.agenda.date.year() != this.agenda.month.year()
-                                    {
-                                        this.select_agenda_date(this.agenda.month, window, cx);
-                                    }
-                                    this.begin_plan(None, window, cx);
+                                    this.begin_today_plan(window, cx);
                                 },
                             )),
                         )

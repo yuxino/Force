@@ -371,3 +371,140 @@ fn untitled_draft_survives_starting_a_calendar_arrangement(cx: &mut TestAppConte
         assert_eq!(view.timer_input.read(cx).value(), "0");
     });
 }
+
+#[gpui::test]
+fn arrangement_activity_change_syncs_only_a_pristine_setup_for_the_same_task(
+    cx: &mut TestAppContext,
+) {
+    for dirty_task_draft in [false, true] {
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        let plan = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let draft = force_core::PlanDraft {
+                task_id: None,
+                title: "Shared task".to_owned(),
+                tag_id: 1,
+                day: chrono::Local::now().date_naive(),
+                start_minute: 540,
+                end_minute: 570,
+                note: String::new(),
+            };
+            let plan = view
+                .store
+                .as_mut()
+                .unwrap()
+                .create_plan(&draft, view.now)
+                .unwrap();
+            view.refresh(cx);
+            view.select_task(plan.task_id, window, cx);
+            assert!(view.preparing);
+            assert!(!view.task_has_unsaved_changes(cx));
+            view.timer_input
+                .update(cx, |input, cx| input.set_value("37", window, cx));
+            view.countdown = true;
+            if dirty_task_draft {
+                view.task_input.update(cx, |input, cx| {
+                    input.set_value("Keep my task description draft", window, cx)
+                });
+                view.selected_tag = 3;
+            }
+            view.edit_plan(plan.id, window, cx);
+            plan
+        });
+        manager.cx.run_until_parked();
+        manager.view.update(&mut manager.cx, |view, cx| {
+            assert!(view.preparing);
+            assert_eq!(view.agenda.draft_task, view.selected_task);
+            assert_eq!(
+                view.task_has_unsaved_changes(cx),
+                dirty_task_draft,
+                "task description: {:?}, resolved title: {:?}, activity: {}",
+                view.task_input.read(cx).value(),
+                view.resolved_task_title(cx),
+                view.selected_tag,
+            );
+            view.agenda.tag_picker.update(cx, |_, cx| {
+                cx.emit(crate::tag_picker::TagPicked(2));
+            });
+        });
+        manager.cx.run_until_parked();
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            assert_eq!(view.agenda.draft_tag, 2);
+            view.save_plan(window, cx);
+        });
+        manager.cx.run_until_parked();
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(!view.agenda.editing);
+            assert_eq!(view.selected_task, Some(plan.task_id));
+            assert_eq!(
+                view.store.as_ref().unwrap().tasks(view.now).unwrap()[0].tag_id,
+                2
+            );
+            assert_eq!(view.selected_tag, if dirty_task_draft { 3 } else { 2 });
+            assert_eq!(
+                view.task_input.read(cx).value(),
+                if dirty_task_draft {
+                    "Keep my task description draft"
+                } else {
+                    "Shared task"
+                }
+            );
+            assert_eq!(view.task_has_unsaved_changes(cx), dirty_task_draft);
+            assert_eq!(view.timer_input.read(cx).value(), "37");
+            assert!(view.countdown);
+            assert!(view.active.is_empty());
+        });
+    }
+}
+
+#[gpui::test]
+fn completed_arrangement_keeps_its_activity_picker_disabled_but_allows_note_edits(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new(cx, 1040., 780.);
+    let plan = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        let draft = force_core::PlanDraft {
+            task_id: None,
+            title: "Completed shared task".to_owned(),
+            tag_id: 1,
+            day: chrono::Local::now().date_naive(),
+            start_minute: 540,
+            end_minute: 570,
+            note: String::new(),
+        };
+        let store = view.store.as_mut().unwrap();
+        let plan = store.create_plan(&draft, view.now - 10).unwrap();
+        store.complete_task(plan.task_id, view.now).unwrap();
+        view.refresh(cx);
+        view.edit_plan(plan.id, window, cx);
+        plan
+    });
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(!view.agenda_activity_editable());
+        assert!(!view.agenda.tag_picker.read(cx).is_enabled());
+    });
+    manager.view.update(&mut manager.cx, |view, cx| {
+        view.agenda.tag_picker.update(cx, |_, cx| {
+            cx.emit(crate::tag_picker::TagPicked(2));
+        });
+    });
+    manager.cx.run_until_parked();
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert_eq!(view.agenda.draft_tag, 1);
+        view.agenda.note_input.update(cx, |input, cx| {
+            input.set_value("Correct the occurrence note", window, cx)
+        });
+        view.save_plan(window, cx);
+    });
+    manager.cx.run_until_parked();
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.agenda.editing);
+        assert_eq!(view.agenda.plans[0].id, plan.id);
+        assert_eq!(view.agenda.plans[0].note, "Correct the occurrence note");
+        assert_eq!(
+            view.store.as_ref().unwrap().tasks(view.now).unwrap()[0].tag_id,
+            1
+        );
+        assert!(view.active.is_empty());
+    });
+}

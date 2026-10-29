@@ -495,3 +495,255 @@ fn month_occurrences_validate_rows_and_accept_final_exclusive_boundary() {
         Err(Error::InvalidData)
     ));
 }
+
+#[test]
+fn activity_aware_edit_is_durable_and_preserves_finished_history_and_interval_rows() {
+    let (directory, mut store) = database();
+    let selected = store
+        .update_tag(2, "Selected activity", TagClass::Neutral, Some("#688BA5"))
+        .unwrap();
+    let task = store.create_task("Shared task title", 1, 100).unwrap();
+    let finished = store.start_task(task.id, 110, None).unwrap();
+    store.finish(finished.id, 130).unwrap();
+    let finished = store.sessions().unwrap().remove(0);
+    let running = store.start_task(task.id, 140, Some(3600)).unwrap();
+    store.pause(running.id, 150).unwrap();
+    store.resume(running.id, 170).unwrap();
+    let before = store.active_sessions().unwrap().remove(0);
+    let intervals = stored_interval_rows(&store);
+    let mut value = draft();
+    value.task_id = Some(task.id);
+    let plan = store.create_plan(&value, 180).unwrap();
+    value.title = "Only this occurrence".into();
+    value.tag_id = 2;
+    value.start_minute = 12 * 60;
+    value.end_minute = 13 * 60;
+    let saved = store
+        .update_plan_with_activity_if_unchanged(plan.id, &value, &plan, 1)
+        .unwrap()
+        .unwrap();
+    let updated_task = store.tasks(190).unwrap().remove(0);
+    assert_eq!(updated_task.id, task.id);
+    assert_eq!(updated_task.title, task.title);
+    assert_eq!(updated_task.tag_id, 2);
+    assert_eq!(saved.title, value.title);
+    let active = store.active_sessions().unwrap().remove(0);
+    assert_eq!(active.id, before.id);
+    assert_eq!(active.title, task.title);
+    assert_eq!(active.tag_id, 2);
+    assert_eq!(active.tag_name, selected.name);
+    assert_eq!(active.tag_class, selected.class);
+    assert_eq!(active.tag_color, selected.color);
+    assert_eq!(active.intervals, before.intervals);
+    assert_eq!(active.started_at, before.started_at);
+    assert_eq!(active.target_seconds, before.target_seconds);
+    assert_eq!(active.finished_at, before.finished_at);
+    assert_eq!(active.elapsed_at(190), before.elapsed_at(190));
+    assert_eq!(stored_interval_rows(&store), intervals);
+    assert_eq!(store.sessions().unwrap(), vec![finished.clone()]);
+    drop(store);
+    let store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+    assert_eq!(store.plans_for_day(day()).unwrap(), vec![saved]);
+    assert_eq!(store.tasks(190).unwrap()[0].tag_id, 2);
+    assert_eq!(store.active_sessions().unwrap(), vec![active]);
+    assert_eq!(store.sessions().unwrap(), vec![finished]);
+    assert_eq!(stored_interval_rows(&store), intervals);
+}
+
+#[test]
+fn activity_aware_edit_rolls_back_task_and_session_changes_if_occurrence_write_fails() {
+    let (_directory, mut store) = database();
+    let plan = store.create_plan(&draft(), 100).unwrap();
+    store.start_task(plan.task_id, 110, None).unwrap();
+    let tasks = store.tasks(120).unwrap();
+    let active = store.active_sessions().unwrap();
+    let intervals = stored_interval_rows(&store);
+    store.connection.execute_batch("CREATE TRIGGER fail_activity_plan_update BEFORE UPDATE ON agenda_entries BEGIN SELECT RAISE(ABORT, 'fixture'); END;").unwrap();
+    let mut value = draft();
+    value.task_id = Some(plan.task_id);
+    value.tag_id = 2;
+    value.note = "Must roll back together".into();
+    assert!(matches!(
+        store.update_plan_with_activity_if_unchanged(plan.id, &value, &plan, 1),
+        Err(Error::Database(_))
+    ));
+    assert_eq!(store.plans_for_day(day()).unwrap(), vec![plan]);
+    assert_eq!(store.tasks(120).unwrap(), tasks);
+    assert_eq!(store.active_sessions().unwrap(), active);
+    assert_eq!(stored_interval_rows(&store), intervals);
+}
+
+#[test]
+fn activity_aware_edit_detects_stale_occurrence_and_activity_before_writing() {
+    let (directory, mut first) = database();
+    let plan = first.create_plan(&draft(), 100).unwrap();
+    let mut second = Store::open(directory.path().join("force.sqlite3")).unwrap();
+    let mut ours = draft();
+    ours.task_id = Some(plan.task_id);
+    ours.tag_id = 3;
+    ours.note = "Unsaved draft".into();
+    second
+        .update_task(plan.task_id, "External task title", 2)
+        .unwrap();
+    assert_eq!(
+        first
+            .update_plan_with_activity_if_unchanged(plan.id, &ours, &plan, 1)
+            .unwrap(),
+        None
+    );
+    assert_eq!(first.plans_for_day(day()).unwrap(), vec![plan.clone()]);
+    assert_eq!(first.tasks(120).unwrap()[0].tag_id, 2);
+    assert_eq!(first.tasks(120).unwrap()[0].title, "External task title");
+    let mut theirs = draft();
+    theirs.task_id = Some(plan.task_id);
+    theirs.note = "External occurrence edit".into();
+    let external = second.update_plan(plan.id, &theirs).unwrap();
+    assert_eq!(
+        first
+            .update_plan_with_activity_if_unchanged(plan.id, &ours, &plan, 2)
+            .unwrap(),
+        None
+    );
+    assert_eq!(first.plans_for_day(day()).unwrap(), vec![external]);
+    assert_eq!(first.tasks(120).unwrap()[0].tag_id, 2);
+}
+
+#[test]
+fn activity_aware_edit_keeps_completed_archived_activity_when_unchanged() {
+    let (_directory, mut store) = database();
+    let plan = store.create_plan(&draft(), 100).unwrap();
+    store.complete_task(plan.task_id, 110).unwrap();
+    store.delete_tag(1).unwrap();
+    let tasks = store.tasks(120).unwrap();
+    let mut value = draft();
+    value.task_id = Some(plan.task_id);
+    value.note = "A schedule correction only".into();
+    let saved = store
+        .update_plan_with_activity_if_unchanged(plan.id, &value, &plan, 1)
+        .unwrap()
+        .unwrap();
+    assert_eq!(saved.note, value.note);
+    assert_eq!(store.tasks(120).unwrap(), tasks);
+    value.tag_id = 2;
+    assert!(matches!(
+        store.update_plan_with_activity_if_unchanged(plan.id, &value, &saved, 1),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(store.plans_for_day(day()).unwrap(), vec![saved]);
+    assert_eq!(store.tasks(120).unwrap(), tasks);
+}
+
+#[test]
+fn activity_aware_creation_retags_linked_task_without_changing_its_title_or_history() {
+    let (directory, mut store) = database();
+    let task = store.create_task("Shared task", 1, 100).unwrap();
+    let finished = store.start_task(task.id, 110, None).unwrap();
+    store.finish(finished.id, 130).unwrap();
+    let history = store.sessions().unwrap();
+    let mut value = draft();
+    value.task_id = Some(task.id);
+    value.title = "Independent occurrence title".into();
+    value.tag_id = 2;
+    let plan = store
+        .create_plan_with_activity(&value, 140, Some(1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(plan.task_id, task.id);
+    assert_eq!(plan.title, value.title);
+    assert_eq!(store.tasks(150).unwrap()[0].title, task.title);
+    assert_eq!(store.tasks(150).unwrap()[0].tag_id, 2);
+    assert_eq!(store.sessions().unwrap(), history);
+    assert!(store.active_sessions().unwrap().is_empty());
+    drop(store);
+    let store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+    assert_eq!(store.plans_for_day(day()).unwrap(), vec![plan]);
+    assert_eq!(store.tasks(150).unwrap()[0].tag_id, 2);
+    assert_eq!(store.sessions().unwrap(), history);
+}
+
+#[test]
+fn activity_aware_creation_detects_stale_activity_and_rolls_back_failed_insert() {
+    let (_directory, mut store) = database();
+    let task = store.create_task("Shared task", 1, 100).unwrap();
+    store.start_task(task.id, 110, None).unwrap();
+    let mut value = draft();
+    value.task_id = Some(task.id);
+    value.tag_id = 3;
+    store.update_task(task.id, &task.title, 2).unwrap();
+    assert_eq!(
+        store
+            .create_plan_with_activity(&value, 120, Some(1))
+            .unwrap(),
+        None
+    );
+    assert!(store.plans_for_day(day()).unwrap().is_empty());
+    assert_eq!(store.tasks(120).unwrap()[0].tag_id, 2);
+    let tasks = store.tasks(120).unwrap();
+    let active = store.active_sessions().unwrap();
+    store.connection.execute_batch("CREATE TRIGGER fail_activity_plan_insert BEFORE INSERT ON agenda_entries BEGIN SELECT RAISE(ABORT, 'fixture'); END;").unwrap();
+    assert!(matches!(
+        store.create_plan_with_activity(&value, 120, Some(2)),
+        Err(Error::Database(_))
+    ));
+    assert!(store.plans_for_day(day()).unwrap().is_empty());
+    assert_eq!(store.tasks(120).unwrap(), tasks);
+    assert_eq!(store.active_sessions().unwrap(), active);
+}
+
+#[test]
+fn activity_aware_creation_without_linked_task_creates_one_task_and_no_timer() {
+    let (_directory, mut store) = database();
+    let plan = store
+        .create_plan_with_activity(&draft(), 100, None)
+        .unwrap()
+        .unwrap();
+    let tasks = store.tasks(110).unwrap();
+    assert_eq!(tasks.len(), 1);
+    assert_eq!(tasks[0].id, plan.task_id);
+    assert_eq!(tasks[0].tag_id, draft().tag_id);
+    assert!(store.active_sessions().unwrap().is_empty());
+}
+
+#[test]
+fn activity_aware_saves_reject_rest_activities_without_reclassifying_legacy_tasks() {
+    let (_directory, mut store) = database();
+    let plan = store.create_plan(&draft(), 100).unwrap();
+    let mut value = draft();
+    value.task_id = Some(plan.task_id);
+    value.tag_id = 4;
+    assert!(matches!(
+        store.update_plan_with_activity_if_unchanged(plan.id, &value, &plan, 1),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(store.plans_for_day(day()).unwrap(), vec![plan]);
+    let legacy_rest = store.create_task("Legacy rest", 4, 100).unwrap();
+    value.task_id = Some(legacy_rest.id);
+    value.tag_id = 1;
+    assert!(matches!(
+        store.create_plan_with_activity(&value, 120, Some(4)),
+        Err(Error::InvalidTransition)
+    ));
+    assert_eq!(
+        store
+            .tasks(120)
+            .unwrap()
+            .iter()
+            .find(|task| task.id == legacy_rest.id)
+            .unwrap()
+            .tag_id,
+        4
+    );
+}
+
+fn stored_interval_rows(store: &Store) -> Vec<(i64, i64, i64, Option<i64>)> {
+    store
+        .connection
+        .prepare("SELECT id, session_id, started_at, ended_at FROM intervals ORDER BY id")
+        .unwrap()
+        .query_map([], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+        })
+        .unwrap()
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .unwrap()
+}

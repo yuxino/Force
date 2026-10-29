@@ -98,23 +98,7 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let task = task_record(&transaction, id)?;
-        if task.completed_at.is_some() {
-            return Err(Error::InvalidTransition);
-        }
-        let tag = available_tag(&transaction, tag_id)?;
-        if unfinished_session(&transaction, id)?.is_some_and(|session| session.tag_kind != tag.kind)
-        {
-            return Err(Error::InvalidTransition);
-        }
-        transaction.execute(
-            "UPDATE tasks SET title = ?1, tag_id = ?2, tag_name = ?3, tag_kind = ?4 WHERE id = ?5",
-            params![title, tag.id, tag.name, tag.kind.as_str(), id],
-        )?;
-        transaction.execute(
-            "UPDATE sessions SET title = ?1, tag_id = ?2, tag_name = ?3, tag_kind = ?4, tag_class = ?5, tag_color = ?6 WHERE task_id = ?7 AND finished_at IS NULL",
-            params![title, tag.id, tag.name, tag.kind.as_str(), tag.class.as_str(), tag.color, id],
-        )?;
+        update_task_in_transaction(&transaction, id, title, tag_id)?;
         transaction.commit()?;
         Ok(())
     }
@@ -520,7 +504,34 @@ pub(super) fn available_tag(connection: &Connection, id: i64) -> Result<Tag> {
     })
 }
 
-fn task_record(connection: &Connection, id: i64) -> Result<Task> {
+/// Shares explicit task edits with atomic arrangement/activity updates. Finished
+/// session snapshots and interval rows are deliberately excluded.
+pub(super) fn update_task_in_transaction(
+    transaction: &Transaction<'_>,
+    id: i64,
+    title: &str,
+    tag_id: i64,
+) -> Result<()> {
+    let task = task_record(transaction, id)?;
+    if task.completed_at.is_some() {
+        return Err(Error::InvalidTransition);
+    }
+    let tag = available_tag(transaction, tag_id)?;
+    if unfinished_session(transaction, id)?.is_some_and(|session| session.tag_kind != tag.kind) {
+        return Err(Error::InvalidTransition);
+    }
+    transaction.execute(
+        "UPDATE tasks SET title = ?1, tag_id = ?2, tag_name = ?3, tag_kind = ?4 WHERE id = ?5",
+        params![title, tag.id, tag.name, tag.kind.as_str(), id],
+    )?;
+    transaction.execute(
+        "UPDATE sessions SET title = ?1, tag_id = ?2, tag_name = ?3, tag_kind = ?4, tag_class = ?5, tag_color = ?6 WHERE task_id = ?7 AND finished_at IS NULL",
+        params![title, tag.id, tag.name, tag.kind.as_str(), tag.class.as_str(), tag.color, id],
+    )?;
+    Ok(())
+}
+
+pub(super) fn task_record(connection: &Connection, id: i64) -> Result<Task> {
     let record = connection.query_row(
         "SELECT title, tag_id, tag_name, tag_kind, created_at, completed_at FROM tasks WHERE id = ?1 AND deleted = 0", [id],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, i64>(4)?, row.get::<_, Option<i64>>(5)?)),

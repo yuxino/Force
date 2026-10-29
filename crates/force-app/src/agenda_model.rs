@@ -119,7 +119,7 @@ pub(crate) struct AgendaState {
     pub(crate) date: NaiveDate,
     pub(crate) month: NaiveDate,
     pub(crate) month_overview: bool,
-    /// A compact contextual view over the unchanged month calendar.
+    /// Day details or a centered editor above the unchanged month calendar.
     pub(crate) popup_open: bool,
     pub(crate) calendar_focus: FocusHandle,
     /// `editing` retains a draft even while this editor is suspended.
@@ -217,11 +217,8 @@ impl AgendaState {
                 && this.agenda.editor_visible
                 && !this.compact
                 && !this.storage_failed
-                && this.agenda.draft_task.is_none()
-                && this
-                    .tags
-                    .iter()
-                    .any(|tag| tag.id == event.0 && tag.kind == TagKind::Focus)
+                && this.agenda_activity_editable()
+                && this.agenda_activity_allowed(event.0)
             {
                 this.agenda.draft_tag = event.0;
                 this.agenda.error = None;
@@ -296,6 +293,7 @@ impl AgendaState {
 
 #[derive(Clone, Copy)]
 enum AgendaDestination {
+    Today,
     New { task: Option<i64>, day: NaiveDate },
     NewAt { hour: u16, day: NaiveDate },
     Edit { id: i64, day: NaiveDate },
@@ -454,7 +452,7 @@ impl ForceView {
     }
 
     pub(crate) fn sync_agenda_tag_picker(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let options: Vec<_> = self
+        let mut options: Vec<_> = self
             .tags
             .iter()
             .filter(|tag| tag.kind == TagKind::Focus)
@@ -464,6 +462,23 @@ impl ForceView {
                 color: self.display_tag_color(tag).map(str::to_owned),
             })
             .collect();
+        // An archived original activity still describes this task. Keep it
+        // visible while allowing the user to replace it with an available one.
+        if let Some(task) = self
+            .agenda
+            .draft_task
+            .and_then(|id| self.tasks.iter().find(|task| task.id == id))
+            && !options.iter().any(|option| option.id == task.tag_id)
+        {
+            options.push(FocusTagOption {
+                id: task.tag_id,
+                name: task.tag_name.clone(),
+                color: None,
+            });
+        }
+        self.agenda.tag_picker.update(cx, |picker, cx| {
+            picker.set_trigger_width(crate::agenda_popover_view::editor_content_width(window), cx);
+        });
         let selected = options
             .iter()
             .find(|tag| tag.id == self.agenda.draft_tag)
@@ -471,7 +486,7 @@ impl ForceView {
         let enabled = self.page == Page::Agenda
             && self.agenda.editing
             && self.agenda.editor_visible
-            && self.agenda.draft_task.is_none()
+            && self.agenda_activity_editable()
             && !self.compact
             && !self.storage_failed;
         let picker = self.agenda.tag_picker.read(cx);
@@ -552,6 +567,7 @@ impl ForceView {
                             this.cancel_plan_edit(window, cx);
                         }
                         match destination {
+                            AgendaDestination::Today => this.begin_today_plan(window, cx),
                             AgendaDestination::New { task, day } => {
                                 this.select_agenda_date(day, window, cx);
                                 this.begin_plan(task, window, cx);
@@ -789,6 +805,26 @@ impl ForceView {
         }
     }
 
+    /// The month toolbar is a general entry point, independent of the day
+    /// last inspected. Explicit day/timeline actions still call begin_plan.
+    pub(crate) fn begin_today_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let today = Local::now().date_naive();
+        if self.agenda.editing
+            && self.agenda.edit_id.is_none()
+            && self.agenda.draft_task.is_none()
+            && self.agenda.draft_origin_date == Some(today)
+        {
+            self.resume_agenda_draft(window, cx);
+            return;
+        }
+        if self.confirm_agenda_changes(AgendaDestination::Today, window, cx) {
+            return;
+        }
+        self.select_agenda_date(today, window, cx);
+        self.select_agenda_month(today.with_day(1).unwrap_or(today), cx);
+        self.begin_plan(None, window, cx);
+    }
+
     pub(crate) fn begin_plan(
         &mut self,
         task_id: Option<i64>,
@@ -977,15 +1013,30 @@ impl ForceView {
         }
     }
 
+    pub(crate) fn agenda_activity_editable(&self) -> bool {
+        self.agenda.draft_task.is_none_or(|id| {
+            self.tasks
+                .iter()
+                .any(|task| task.id == id && task.completed_at.is_none())
+        })
+    }
+
+    fn agenda_activity_allowed(&self, tag_id: i64) -> bool {
+        self.tags
+            .iter()
+            .any(|tag| tag.id == tag_id && tag.kind == TagKind::Focus)
+            || self
+                .agenda
+                .draft_task
+                .and_then(|id| self.tasks.iter().find(|task| task.id == id))
+                .is_some_and(|task| task.tag_id == tag_id && task.tag_kind == TagKind::Focus)
+    }
+
     fn agenda_draft_error(&self, cx: &gpui::App) -> Option<PlanError> {
         let draft = self.agenda.snapshot(cx);
         validate_plan_fields(&draft).err().or_else(|| {
-            (draft.task.is_none()
-                && !self
-                    .tags
-                    .iter()
-                    .any(|tag| tag.id == draft.tag && tag.kind == TagKind::Focus))
-            .then(|| PlanError::new(PlanField::Tag, "请先在设置中添加可用的活动。"))
+            (!self.agenda_activity_allowed(draft.tag))
+                .then(|| PlanError::new(PlanField::Tag, "请先在设置中添加可用的活动。"))
         })
     }
 
@@ -1079,6 +1130,13 @@ impl ForceView {
         };
         let edit_id = self.agenda.edit_id;
         let original = self.agenda.original_plan.clone();
+        let expected_tag = self.agenda.baseline.as_ref().map(|snapshot| snapshot.tag);
+        // A pristine setup for this same task should follow the committed
+        // activity; a user-edited task draft remains independent and intact.
+        let sync_task_setup = self.preparing
+            && draft.task_id.is_some()
+            && self.selected_task == draft.task_id
+            && !self.task_has_unsaved_changes(cx);
         let mut conflict = false;
         let now = Local::now().timestamp();
         let mut saved = None;
@@ -1088,17 +1146,25 @@ impl ForceView {
                     let Some(original) = &original else {
                         return Err(force_core::Error::InvalidTransition);
                     };
-                    let updated = store.update_plan_if_unchanged(id, &draft, original)?;
-                    conflict = updated.is_none();
-                    updated
+                    let expected_tag = expected_tag.ok_or(force_core::Error::InvalidTransition)?;
+                    store.update_plan_with_activity_if_unchanged(
+                        id,
+                        &draft,
+                        original,
+                        expected_tag,
+                    )?
                 } else {
-                    Some(store.create_plan(&draft, now)?)
+                    store.create_plan_with_activity(&draft, now, expected_tag)?
                 };
+                conflict = saved.is_none();
                 Ok(())
             },
             cx,
         ) && let Some(plan) = saved
         {
+            if sync_task_setup {
+                self.reset_task_changes(window, cx);
+            }
             self.agenda.editing = false;
             self.agenda.editor_visible = false;
             self.agenda.popup_open = false;
@@ -1123,7 +1189,7 @@ impl ForceView {
             window.focus(&self.agenda.calendar_focus);
             self.notify("安排已保存。", cx);
         } else if conflict {
-            self.agenda.error = Some("这项安排已在别处更改，请取消后重新打开。".to_owned());
+            self.agenda.error = Some("这项安排或活动已在别处更改，请取消后重新打开。".to_owned());
             cx.notify();
         }
     }

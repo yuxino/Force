@@ -45,7 +45,7 @@ pub(crate) fn plan_button(id: impl Into<ElementId>, disabled: bool) -> Button {
         .px(px(12.))
         .unavailable(disabled)
         .icon(control_icon(IconName::Calendar, foreground))
-        .child(control_label("安排日程", foreground))
+        .child(control_label("添加安排", foreground))
 }
 
 #[cfg(test)]
