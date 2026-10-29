@@ -868,14 +868,20 @@ impl FloatingStrip {
             .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
             .child(if presentation == DockPresentation::Handle {
                 let (asset, width, height, left, top) = if left_edge {
-                    ("force-cat-grip-left.png", 28.8716, 20.6226, -3.5992, 1.3385)
+                    (
+                        "force-cat-grip-left.png",
+                        51.9689,
+                        37.1207,
+                        -6.4786,
+                        -1.1907,
+                    )
                 } else {
                     (
                         "force-cat-grip-right.png",
-                        28.1784,
-                        20.0949,
-                        -4.6490,
-                        1.6964,
+                        50.7211,
+                        36.1708,
+                        -4.3682,
+                        -0.5465,
                     )
                 };
                 div()
@@ -918,15 +924,15 @@ impl FloatingStrip {
                             .absolute()
                             .left(px(1.))
                             .top_0()
-                            .w(px(32.))
+                            .w(px(42.))
                             .h_full()
                             .flex()
                             .items_center()
                             .justify_center()
                             .gap(px(1.))
                             .font(timer_font(cx))
-                            .text_size(px(11.))
-                            .line_height(px(14.))
+                            .text_size(px(13.))
+                            .line_height(px(18.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(
                                 div()
@@ -939,7 +945,7 @@ impl FloatingStrip {
                                     div()
                                         .debug_selector(|| "strip-dock-unit".into())
                                         .flex_none()
-                                        .text_size(px(10.))
+                                        .text_size(px(11.))
                                         .text_color(rgb(MUTED))
                                         .child(
                                             div()
@@ -956,9 +962,9 @@ impl FloatingStrip {
                         div()
                             .debug_selector(|| "strip-dock-state-slot".into())
                             .absolute()
-                            .left(px(37.))
-                            .top(px(9.))
-                            .size(px(5.))
+                            .left(px(47.))
+                            .top(px(15.))
+                            .size(px(6.))
                             .text_color(rgb(0x656565))
                             .when(face.show_paused_mark(), |slot| {
                                 slot.child(
@@ -968,7 +974,7 @@ impl FloatingStrip {
                                         .child(
                                             Icon::default()
                                                 .path("force-icons/pause.svg")
-                                                .size(px(5.)),
+                                                .size(px(6.)),
                                         ),
                                 )
                             })
@@ -977,7 +983,7 @@ impl FloatingStrip {
                                     div()
                                         .debug_selector(|| "strip-dock-saved-mark".into())
                                         .size_full()
-                                        .child(Icon::new(IconName::Check).size(px(5.))),
+                                        .child(Icon::new(IconName::Check).size(px(6.))),
                                 )
                             }),
                     )
@@ -1897,14 +1903,14 @@ mod tests {
                     }
                     if presentation == super::DockPresentation::Handle {
                         let artwork = visual.debug_bounds("strip-dock-artwork").unwrap();
-                        assert_eq!(dock.size, size(px(20.), px(24.)));
+                        assert_eq!(dock.size, size(px(40.), px(36.)));
                         assert_eq!(artwork, dock);
                         assert!(visual.debug_bounds("strip-dock-paw-image").is_some());
                         assert!(visual.debug_bounds("strip-dock-readout").is_none());
                         assert!(visual.debug_bounds("strip-dock-time-text").is_none());
                         continue;
                     }
-                    assert_eq!(dock.size, size(px(44.), px(24.)));
+                    assert_eq!(dock.size, size(px(56.), px(36.)));
                     assert!(visual.debug_bounds("strip-dock-artwork").is_none());
                     let readout = visual.debug_bounds("strip-dock-readout").unwrap();
                     let time = visual.debug_bounds("strip-dock-time").unwrap();
@@ -2083,7 +2089,7 @@ mod tests {
                 let title = visual.debug_bounds("strip-title-text").unwrap();
                 let controls = visual.debug_bounds("strip-controls").unwrap();
                 if edge.is_some() {
-                    assert_eq!(root.size, size(px(216.), px(104.)));
+                    assert_eq!(root.size, size(px(228.), px(104.)));
                     assert_eq!(drawer.size, size(px(164.), px(96.)));
                     assert_eq!(drawer.top(), root.top());
                     assert_eq!(controls.size.width, px(148.));
@@ -2207,7 +2213,7 @@ mod tests {
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             Point::default(),
-                            size(px(20.), px(24.)),
+                            size(px(40.), px(36.)),
                         ))),
                         ..Default::default()
                     },
@@ -2227,7 +2233,7 @@ mod tests {
             (strip, cat.unwrap())
         });
         let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
-        visual.simulate_resize(size(px(20.), px(24.)));
+        visual.simulate_resize(size(px(40.), px(36.)));
         visual.run_until_parked();
         // TestPlatform's resize changes the platform bounds synchronously.
         // A sentinel size exposes any otherwise invisible native resize call
@@ -2245,7 +2251,7 @@ mod tests {
             cat.drawer_visible = true;
             cat.reshape(window, cx);
         });
-        let expanded_size = size(px(216.), px(104.));
+        let expanded_size = size(px(228.), px(104.));
         visual.simulate_resize(expanded_size);
         let session = manager.view.update(&mut manager.cx, |view, cx| {
             let session = view
@@ -2266,7 +2272,7 @@ mod tests {
         visual.update(|window, _| assert_eq!(window.bounds().size, expanded_size));
         visual.executor().advance_clock(Duration::from_millis(200));
         visual.run_until_parked();
-        visual.update(|window, _| assert_eq!(window.bounds().size, size(px(44.), px(24.))));
+        visual.update(|window, _| assert_eq!(window.bounds().size, size(px(56.), px(36.))));
         let timed_sentinel = size(px(79.), px(33.));
         visual.update(|window, _| window.resize(timed_sentinel));
         manager.view.update(&mut manager.cx, |view, cx| {
@@ -2306,7 +2312,7 @@ mod tests {
                 cat.timer_face(cx).dock_presentation(),
                 super::DockPresentation::Readout
             );
-            assert_eq!(cat.window_dimensions(cx), size(px(44.), px(24.)));
+            assert_eq!(cat.window_dimensions(cx), size(px(56.), px(36.)));
         });
         visual.update(|window, _| window.remove_window());
         visual.run_until_parked();
@@ -2363,7 +2369,7 @@ mod tests {
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                             Point::default(),
-                            size(px(216.), px(104.)),
+                            size(px(228.), px(104.)),
                         ))),
                         ..Default::default()
                     },
@@ -2386,7 +2392,7 @@ mod tests {
             (strip, cat.unwrap())
         });
         let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
-        visual.simulate_resize(size(px(216.), px(104.)));
+        visual.simulate_resize(size(px(228.), px(104.)));
         visual.update(|window, _| window.refresh());
         visual.run_until_parked();
         visual.simulate_keystrokes("escape");
@@ -2394,9 +2400,9 @@ mod tests {
         visual.run_until_parked();
         cat.read_with(&visual, |cat, cx| {
             assert!(!cat.expanded && !cat.drawer_visible);
-            assert_eq!(cat.window_dimensions(cx), size(px(44.), px(24.)));
+            assert_eq!(cat.window_dimensions(cx), size(px(56.), px(36.)));
         });
-        visual.simulate_resize(size(px(44.), px(24.)));
+        visual.simulate_resize(size(px(56.), px(36.)));
         visual.update(|window, _| window.refresh());
         visual.run_until_parked();
         // Focus remains in the collapsed dock: another Escape must stay local.

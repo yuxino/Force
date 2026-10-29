@@ -1337,8 +1337,8 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
         let root = strip.debug_bounds("strip-root").unwrap();
         let dock = strip.debug_bounds("strip-dock").unwrap();
         let controls = strip.debug_bounds("strip-controls").unwrap();
-        assert_eq!(root.size, size(px(216.), px(104.)));
-        assert_eq!(dock.size, size(px(44.), px(24.)));
+        assert_eq!(root.size, size(px(228.), px(104.)));
+        assert_eq!(dock.size, size(px(56.), px(36.)));
         match edge {
             crate::platform::DockEdge::Left => assert_eq!(dock.left(), root.left()),
             crate::platform::DockEdge::Right => assert_eq!(dock.right(), root.right()),
@@ -1391,14 +1391,14 @@ fn headless_ui_docked_paw_opens_a_menu_without_starting_idle_or_prepared_work(
             refresh_test_strip(&cat, &mut strip);
             assert_eq!(
                 strip.debug_bounds("strip-root").unwrap().size,
-                size(px(20.), px(24.))
+                size(px(40.), px(36.))
             );
             click_test_strip(&cat, &mut strip, "strip-dock");
             let root = strip.debug_bounds("strip-root").unwrap();
             let dock = strip.debug_bounds("strip-dock").unwrap();
             let drawer = strip.debug_bounds("strip-drawer").unwrap();
-            assert_eq!(root.size, size(px(216.), px(104.)));
-            assert_eq!(dock.size, size(px(20.), px(24.)));
+            assert_eq!(root.size, size(px(228.), px(104.)));
+            assert_eq!(dock.size, size(px(40.), px(36.)));
             assert_eq!(
                 drawer.size,
                 size(px(164.), px(if prepared { 96. } else { 40. }))
@@ -1419,7 +1419,7 @@ fn headless_ui_docked_paw_opens_a_menu_without_starting_idle_or_prepared_work(
             click_test_strip(&cat, &mut strip, "strip-dock");
             assert_eq!(
                 strip.debug_bounds("strip-root").unwrap().size,
-                size(px(20.), px(24.))
+                size(px(40.), px(36.))
             );
             if !prepared {
                 click_test_strip(&cat, &mut strip, "strip-dock");

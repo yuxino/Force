@@ -4,7 +4,7 @@
 
 Keep the floating cat clock independent of the normal management window. It is
 88 × 128 points when compact and 244 × 152 when expanded. The edge handle is
-20 × 24 idle/prepared or 44 × 24 with time, expanding to 216 × 104.
+40 × 36 idle/prepared or 56 × 36 with time, expanding to 228 × 104.
 An idle free cat opens a new task directly; the edge handle opens a compact new-task menu. With a task, clicking the cat toggles its controls; dragging near either screen edge docks it
 on macOS/Windows. Linux retains free movement and resizing. These local states
 must not pause, resume or retarget the active timer. Management starts at

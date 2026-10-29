@@ -15,10 +15,10 @@ pub(crate) const STRIP_WIDTH: f32 = 88.;
 pub(crate) const STRIP_HEIGHT: f32 = 128.;
 pub(crate) const STRIP_EXPANDED_WIDTH: f32 = 244.;
 pub(crate) const STRIP_EXPANDED_HEIGHT: f32 = 152.;
-pub(crate) const STRIP_DOCKED_WIDTH: f32 = 44.;
-pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 24.;
-pub(crate) const STRIP_DOCK_HANDLE_WIDTH: f32 = 20.;
-pub(crate) const STRIP_DOCK_EXPANDED_WIDTH: f32 = 216.;
+pub(crate) const STRIP_DOCKED_WIDTH: f32 = 56.;
+pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 36.;
+pub(crate) const STRIP_DOCK_HANDLE_WIDTH: f32 = 40.;
+pub(crate) const STRIP_DOCK_EXPANDED_WIDTH: f32 = 228.;
 pub(crate) const STRIP_DOCK_EXPANDED_HEIGHT: f32 = 104.;
 
 // Linux retains free movement and shares the geometry API, but never constructs
@@ -1014,7 +1014,7 @@ mod floating_geometry_tests {
                 free_size,
                 available,
             ),
-            rect(1128., 200., 88., 128.)
+            rect(1140., 200., 88., 128.)
         );
         assert_eq!(
             floating_geometry_from_right(
@@ -1049,7 +1049,7 @@ mod floating_geometry_tests {
                     DockEdge::Left => -1920.,
                     DockEdge::Right => -STRIP_DOCK_EXPANDED_WIDTH,
                 };
-                assert_eq!(expanded, rect(expanded_x, 200., 216., 104.));
+                assert_eq!(expanded, rect(expanded_x, 200., 228., 104.));
                 let folded = floating_geometry(
                     expanded,
                     size(px(width), px(STRIP_DOCKED_HEIGHT)),
@@ -1060,7 +1060,7 @@ mod floating_geometry_tests {
                     DockEdge::Left => -1920.,
                     DockEdge::Right => -width,
                 };
-                assert_eq!(folded, rect(folded_x, 200., width, 24.));
+                assert_eq!(folded, rect(folded_x, 200., width, 36.));
                 assert_eq!(
                     floating_geometry(
                         folded,
