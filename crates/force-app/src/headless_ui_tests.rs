@@ -1337,17 +1337,26 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
             view.docked = Some(edge);
             cx.notify();
         });
-        click_test_strip(&strip_view, &mut strip, "strip-face");
+        refresh_test_strip(&strip_view, &mut strip);
+        click_test_strip(&strip_view, &mut strip, "strip-dock");
         assert_eq!(
             strip.debug_bounds("strip-root").unwrap().size,
-            size(px(28.), px(80.))
+            size(
+                px(crate::platform::STRIP_DOCKED_WIDTH),
+                px(crate::platform::STRIP_DOCKED_HEIGHT)
+            )
         );
         click_test_strip(&strip_view, &mut strip, "strip-dock");
         strip_view.read_with(&strip, |view, _| {
             assert!(view.expanded);
             assert_eq!(view.docked, Some(edge));
         });
-        strip_control_bounds(&mut strip);
+        let root = strip.debug_bounds("strip-root").unwrap();
+        let dock = strip.debug_bounds("strip-dock").unwrap();
+        let controls = strip.debug_bounds("strip-controls").unwrap();
+        assert_horizontally_inside(dock, root);
+        assert_horizontally_inside(controls, root);
+        assert!(controls.right() <= dock.left() || controls.left() >= dock.right());
         manager.view.read_with(&manager.cx, |view, _| {
             assert!(!view.compact);
             assert_eq!(view.selected_session, Some(running));
