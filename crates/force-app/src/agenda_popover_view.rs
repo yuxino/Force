@@ -1,4 +1,4 @@
-//! Small calendar transactions stay above the month instead of replacing it.
+//! Day details stay contextual; arrangement editing uses a roomy centered dialog.
 use chrono::{Datelike, Days};
 use force_core::TagKind;
 use gpui::{prelude::*, *};
@@ -15,15 +15,32 @@ use crate::{
 };
 
 const POPUP_WIDTH: f32 = 360.;
-const TAG_WIDTH: f32 = POPUP_WIDTH - 38.;
-const VALIDATION_HEIGHT: f32 = 36.;
+const EDITOR_WIDTH: f32 = 560.;
+const EDITOR_PADDING: f32 = 20.;
+const HEADER_HEIGHT: f32 = 68.;
+
+pub(crate) fn editor_width(window: &Window) -> f32 {
+    EDITOR_WIDTH.min(f32::from(window.viewport_size().width) - 48.)
+}
+
+pub(crate) fn editor_content_width(window: &Window) -> f32 {
+    editor_width(window) - EDITOR_PADDING * 2. - 2.
+}
+const VALIDATION_HEIGHT: f32 = 22.;
 const EDITOR_GAP: f32 = 12.;
 
 impl ForceView {
     pub(crate) fn agenda_popover(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let size = window.viewport_size();
-        let width = POPUP_WIDTH.min(f32::from(size.width) - 24.);
-        let max_height = (f32::from(size.height) - 100.).max(240.);
+        let editing = self.agenda.editor_visible;
+        let width = if editing {
+            editor_width(window)
+        } else {
+            POPUP_WIDTH.min(f32::from(size.width) - 24.)
+        };
+        let padding = if editing { EDITOR_PADDING } else { 18. };
+        let max_height =
+            (f32::from(size.height) - if editing { HEADER_HEIGHT + 48. } else { 100. }).max(240.);
         let month = self.agenda.month;
         let first = month
             .checked_sub_days(Days::new(u64::from(month.weekday().num_days_from_monday())))
@@ -66,13 +83,16 @@ impl ForceView {
         } else {
             self.agenda.date.format("%-m月%-d日").to_string()
         };
-        let body_limit = (max_height - 142.).max(100.);
+        // Contextual day details scroll above their footer. The editor below
+        // instead gives its fields the remaining definite dialog height.
+        let body_limit = (max_height - padding * 2. - 106.).max(100.);
         let popup = div()
             .id("agenda-popover")
             .debug_selector(|| "agenda-popover".into())
             .w(px(width))
             .max_h(px(max_height))
-            .p(px(18.))
+            .when(editing, |popup| popup.h(px(600_f32.min(max_height))))
+            .p(px(padding))
             .rounded(px(8.))
             .border_1()
             .border_color(rgb(crate::view::CONTROL_LINE))
@@ -122,14 +142,12 @@ impl ForceView {
                 popup.child(
                     div()
                         .debug_selector(|| "agenda-editor".into())
+                        .flex_1()
                         .min_h_0()
                         .flex()
                         .flex_col()
                         .gap(px(EDITOR_GAP))
-                        .child(self.agenda_compact_editor(
-                            (body_limit - VALIDATION_HEIGHT - EDITOR_GAP).max(100.),
-                            cx,
-                        ))
+                        .child(self.agenda_compact_editor(cx))
                         .child(self.agenda_validation())
                         .child(self.agenda_editor_actions(cx)),
                 )
@@ -202,6 +220,26 @@ impl ForceView {
                             }),
                     )
             });
+        if editing {
+            // Stay in the normal paint pass: the activity and time pickers
+            // defer their menus, and GPUI cannot nest deferred draws.
+            return anchored()
+                .position(point(px(0.), px(HEADER_HEIGHT)))
+                .child(
+                    div()
+                        .id("agenda-editor-overlay")
+                        .debug_selector(|| "agenda-editor-overlay".into())
+                        .w(size.width)
+                        .h(size.height - px(HEADER_HEIGHT))
+                        .occlude()
+                        .bg(rgba(0x00000016))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(popup),
+                )
+                .into_any_element();
+        }
         // Anchored already lays out absolutely. Keep the parent in the normal
         // paint pass: TagPicker and input controls defer their own menus, and
         // GPUI 0.2.2 rejects a deferred draw nested inside another deferred draw.
@@ -212,15 +250,16 @@ impl ForceView {
             .into_any_element()
     }
 
-    fn agenda_compact_editor(&self, body_limit: f32, cx: &mut Context<Self>) -> Stateful<Div> {
-        let linked_task = self
+    fn agenda_compact_editor(&self, cx: &mut Context<Self>) -> Stateful<Div> {
+        let completed_task = self
             .agenda
             .draft_task
-            .and_then(|id| self.tasks.iter().find(|task| task.id == id));
+            .and_then(|id| self.tasks.iter().find(|task| task.id == id))
+            .is_some_and(|task| task.completed_at.is_some());
         div()
             .debug_selector(|| "agenda-editor-fields".into())
             .id("agenda-editor-scroll")
-            .max_h(px(body_limit))
+            .flex_1()
             .min_h_0()
             .overflow_y_scroll()
             .track_scroll(&self.agenda.editor_scroll)
@@ -299,28 +338,26 @@ impl ForceView {
                         ),
                     ),
             )
-            .child(editor_field("活动").w(px(TAG_WIDTH)).flex_shrink_0().child(
-                if let Some(task) = linked_task {
-                    div()
-                        .h(px(40.))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .child(single_line(task.tag_name.clone(), 14.).w(px(TAG_WIDTH)))
-                        .into_any_element()
+            .child(
+                editor_field(if completed_task {
+                    "活动（任务已完成）"
                 } else {
+                    "活动"
+                })
+                .flex_shrink_0()
+                .child(
                     div()
-                        .w(px(TAG_WIDTH))
+                        .w_full()
                         .h(px(40.))
-                        .child(self.agenda.tag_picker.clone())
-                        .into_any_element()
-                },
-            ))
+                        .child(self.agenda.tag_picker.clone()),
+                ),
+            )
             .child(
                 button("agenda-note-toggle")
                     .debug_selector(|| "agenda-note-toggle".into())
                     .custom(crate::view::quiet_variant(cx))
                     .h(px(28.))
+                    .flex_shrink_0()
                     .px(px(0.))
                     .justify_start()
                     .icon(control_icon(
@@ -340,6 +377,7 @@ impl ForceView {
                 body.child(
                     div()
                         .debug_selector(|| "agenda-note-input".into())
+                        .flex_shrink_0()
                         .child(Styled::h(
                             field(&self.agenda.note_input).h(px(76.)),
                             px(76.),
@@ -497,6 +535,7 @@ impl ForceView {
 
 fn editor_field(label: &str) -> Div {
     div()
+        .flex_shrink_0()
         .flex()
         .flex_col()
         .gap(px(6.))

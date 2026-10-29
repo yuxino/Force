@@ -27,7 +27,8 @@ pub struct PlanEntry {
 pub struct PlanDraft {
     pub task_id: Option<i64>,
     pub title: String,
-    /// Used only when a new task is created with the plan.
+    /// Used for new tasks and explicit activity-aware saves; occurrence-only
+    /// update APIs preserve the linked task's activity.
     pub tag_id: i64,
     pub day: NaiveDate,
     pub start_minute: u16,
@@ -157,32 +158,31 @@ impl Store {
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let task_id = if let Some(id) = draft.task_id {
-            let task = transaction
-                .query_row(
-                    "SELECT tag_kind, completed_at FROM tasks WHERE id = ?1 AND deleted = 0",
-                    [id],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
-                )
-                .optional()?
-                .ok_or(Error::NotFound)?;
-            if task.0 != "focus" || task.1.is_some() {
-                return Err(Error::InvalidTransition);
-            }
-            id
-        } else {
-            if task::available_tag(&transaction, draft.tag_id)?.kind != TagKind::Focus {
-                return Err(Error::InvalidTransition);
-            }
-            task::insert_task(&transaction, title, draft.tag_id, now)?.id
-        };
-        transaction.execute(
-            "INSERT INTO agenda_entries (task_id, title, day, start_minute, end_minute, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![task_id, title, draft.day.format("%Y-%m-%d").to_string(), draft.start_minute, draft.end_minute, note, now],
-        )?;
-        let plan = load_plan(&transaction, transaction.last_insert_rowid())?;
+        let plan = create_plan_in_transaction(&transaction, draft, now, title, note)?;
         transaction.commit()?;
         Ok(plan)
+    }
+
+    /// Creates an occurrence and explicitly changes its linked task's activity
+    /// atomically. A supplied activity baseline detects stale task edits.
+    pub fn create_plan_with_activity(
+        &mut self,
+        draft: &PlanDraft,
+        now: i64,
+        expected_tag_id: Option<i64>,
+    ) -> Result<Option<PlanEntry>> {
+        let (title, note) = validate_draft(draft)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(task_id) = draft.task_id
+            && !update_plan_activity(&transaction, task_id, draft.tag_id, expected_tag_id)?
+        {
+            return Ok(None);
+        }
+        let plan = create_plan_in_transaction(&transaction, draft, now, title, note)?;
+        transaction.commit()?;
+        Ok(Some(plan))
     }
 
     /// Edits only the occurrence, never its task, session snapshots or intervals.
@@ -215,6 +215,40 @@ impl Store {
             Err(error) => return Err(error),
         };
         if &current != expected {
+            return Ok(None);
+        }
+        let plan = update_plan_in_transaction(&transaction, &current, draft, title, note)?;
+        transaction.commit()?;
+        Ok(Some(plan))
+    }
+
+    /// Compares both occurrence and task activity baselines before atomically
+    /// saving the occurrence and its explicitly selected activity. The task's
+    /// title and finished history remain independent from this occurrence.
+    pub fn update_plan_with_activity_if_unchanged(
+        &mut self,
+        id: i64,
+        draft: &PlanDraft,
+        expected: &PlanEntry,
+        expected_tag_id: i64,
+    ) -> Result<Option<PlanEntry>> {
+        let (title, note) = validate_draft(draft)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let current = match load_plan(&transaction, id) {
+            Ok(current) => current,
+            Err(Error::NotFound) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        if &current != expected
+            || !update_plan_activity(
+                &transaction,
+                current.task_id,
+                draft.tag_id,
+                Some(expected_tag_id),
+            )?
+        {
             return Ok(None);
         }
         let plan = update_plan_in_transaction(&transaction, &current, draft, title, note)?;
@@ -360,6 +394,66 @@ impl Store {
         transaction.commit()?;
         Ok(tasks)
     }
+}
+
+fn create_plan_in_transaction(
+    transaction: &Transaction<'_>,
+    draft: &PlanDraft,
+    now: i64,
+    title: &str,
+    note: &str,
+) -> Result<PlanEntry> {
+    let task_id = if let Some(id) = draft.task_id {
+        let task = transaction
+            .query_row(
+                "SELECT tag_kind, completed_at FROM tasks WHERE id = ?1 AND deleted = 0",
+                [id],
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<i64>>(1)?)),
+            )
+            .optional()?
+            .ok_or(Error::NotFound)?;
+        if task.0 != "focus" || task.1.is_some() {
+            return Err(Error::InvalidTransition);
+        }
+        id
+    } else {
+        if task::available_tag(transaction, draft.tag_id)?.kind != TagKind::Focus {
+            return Err(Error::InvalidTransition);
+        }
+        task::insert_task(transaction, title, draft.tag_id, now)?.id
+    };
+    transaction.execute(
+        "INSERT INTO agenda_entries (task_id, title, day, start_minute, end_minute, note, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        params![task_id, title, draft.day.format("%Y-%m-%d").to_string(), draft.start_minute, draft.end_minute, note, now],
+    )?;
+    load_plan(transaction, transaction.last_insert_rowid())
+}
+
+fn update_plan_activity(
+    transaction: &Transaction<'_>,
+    task_id: i64,
+    tag_id: i64,
+    expected_tag_id: Option<i64>,
+) -> Result<bool> {
+    let task = match task::task_record(transaction, task_id) {
+        Ok(task) => task,
+        Err(Error::NotFound) => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if expected_tag_id.is_some_and(|expected| expected != task.tag_id) {
+        return Ok(false);
+    }
+    if task.tag_kind != TagKind::Focus {
+        return Err(Error::InvalidTransition);
+    }
+    // An occurrence-only edit keeps completed tasks and archived tags usable.
+    if task.tag_id != tag_id {
+        if task::available_tag(transaction, tag_id)?.kind != TagKind::Focus {
+            return Err(Error::InvalidTransition);
+        }
+        task::update_task_in_transaction(transaction, task_id, &task.title, tag_id)?;
+    }
+    Ok(true)
 }
 
 fn update_plan_in_transaction(

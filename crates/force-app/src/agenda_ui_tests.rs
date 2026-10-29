@@ -115,7 +115,7 @@ fn agenda_ui_month_overview_shows_task_titles_and_overflow_inside_each_day(
 }
 
 #[gpui::test]
-fn agenda_ui_month_navigation_today_and_add_keep_the_correct_date(cx: &mut TestAppContext) {
+fn agenda_ui_month_navigation_and_global_add_default_to_today(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
     let today = Local::now().date_naive();
     manager.click("agenda-overview-next");
@@ -125,16 +125,13 @@ fn agenda_ui_month_navigation_today_and_add_keep_the_correct_date(cx: &mut TestA
         assert_eq!(view.agenda.month, today.with_day(1).unwrap());
     });
     manager.click("agenda-overview-next");
-    let month = manager
-        .view
-        .read_with(&manager.cx, |view, _| view.agenda.month);
     manager.click("agenda-overview-add");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert!(view.agenda.editing);
-        assert_eq!(view.agenda.date, month);
+        assert_eq!(view.agenda.date, today);
         assert_eq!(
             view.agenda.date_input.read(cx).value(),
-            month.format("%Y-%m-%d").to_string()
+            today.format("%Y-%m-%d").to_string()
         );
         assert!(view.active.is_empty());
     });
@@ -245,7 +242,7 @@ fn agenda_ui_hidden_draft_does_not_block_timeline_initial_time_requests(cx: &mut
             view.open_agenda_day(origin, window, cx);
         });
         settle(&mut manager);
-        manager.click("agenda-overview-add");
+        manager.click("agenda-add");
         fill_plan(
             &mut manager,
             "Keep the draft while browsing the timeline",
@@ -768,7 +765,9 @@ fn agenda_ui_popup_editor_stays_bounded_over_a_six_week_month(cx: &mut TestAppCo
         assert_same_bounds(manager.bounds("agenda-overview-grid"), before);
         assert_inside(manager.bounds("agenda-editor"), popup);
         assert_inside(manager.bounds("agenda-title-input"), popup);
-        assert!(manager.bounds("agenda-title-input").size.width >= px(280.));
+        assert!(popup.size.width >= px(500.));
+        assert!((popup.center().x - viewport.center().x).abs() <= px(1.));
+        assert!(manager.bounds("agenda-title-input").size.width >= px(440.));
         assert_same_bounds(
             Bounds::new(
                 manager.bounds("agenda-date-input").origin,
@@ -781,7 +780,9 @@ fn agenda_ui_popup_editor_stays_bounded_over_a_six_week_month(cx: &mut TestAppCo
         let collapsed_actions = manager.bounds("agenda-editor-actions");
         let note_toggle = manager.bounds("agenda-note-toggle");
         let validation = manager.bounds("agenda-validation-slot");
-        assert!(collapsed_actions.top() - note_toggle.bottom() - validation.size.height <= px(36.));
+        assert_inside(note_toggle, manager.bounds("agenda-editor-fields"));
+        assert!(validation.top() >= manager.bounds("agenda-editor-fields").bottom());
+        assert!(collapsed_actions.top() >= validation.bottom());
         manager.click("agenda-note-toggle");
         assert_inside(
             manager.bounds("agenda-save"),
@@ -828,7 +829,8 @@ fn agenda_ui_outside_click_suspends_and_same_day_summary_keeps_the_draft(cx: &mu
         view.refresh_agenda(cx);
     });
     settle(&mut manager);
-    manager.click("agenda-overview-add");
+    manager.click("agenda-month-day-2026-08-15");
+    manager.click("agenda-add");
     fill_plan(
         &mut manager,
         "Keep outside-click draft",
@@ -852,6 +854,10 @@ fn agenda_ui_outside_click_suspends_and_same_day_summary_keeps_the_draft(cx: &mu
         );
     });
     manager.click("agenda-resume-draft");
+    manager
+        .cx
+        .simulate_click(Point::new(px(20.), px(600.)), Modifiers::default());
+    settle(&mut manager);
     manager.click("agenda-month-day-2026-08-31");
     assert!(!manager.cx.has_pending_prompt());
     manager.view.read_with(&manager.cx, |view, cx| {
@@ -898,7 +904,8 @@ fn agenda_ui_tag_menu_selects_without_dismissing_the_editor(cx: &mut TestAppCont
         view.refresh_agenda(cx);
     });
     settle(&mut manager);
-    manager.click("agenda-overview-add");
+    manager.click("agenda-month-day-2026-08-15");
+    manager.click("agenda-add");
     fill_plan(
         &mut manager,
         "Keep the draft while choosing a tag",
@@ -1440,7 +1447,8 @@ fn agenda_ui_calendar_and_editor_fit_default_and_minimum_windows(cx: &mut TestAp
         let popup = manager.bounds("agenda-popover");
         assert_inside(popup, viewport);
         assert_inside(editor, popup);
-        assert!(popup.size.width >= px(320.) && popup.size.width <= px(380.));
+        assert!(popup.size.width >= px(500.));
+        assert!((popup.center().x - viewport.center().x).abs() <= px(1.));
         assert_same_bounds(
             Bounds::new(
                 manager.bounds("agenda-date-input").origin,
@@ -2612,4 +2620,261 @@ fn agenda_ui_timeline_scrollbars_reach_both_edges_without_moving_the_viewport(
         assert!(!view.agenda.editing, "scrollbar must not select a plan");
     });
     assert_eq!(manager.bounds("agenda-day-viewport"), viewport);
+}
+
+#[gpui::test]
+fn agenda_ui_arrangement_editor_is_centered_independently_of_the_selected_day(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let month = NaiveDate::from_ymd_opt(2026, 8, 1).unwrap();
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            view.agenda.date = month;
+            view.agenda.month = month;
+            view.refresh_agenda(cx);
+        });
+        settle(&mut manager);
+        let viewport = Bounds::new(Point::default(), size(px(width), px(height)));
+        let grid = manager.bounds("agenda-overview-grid");
+        let mut first_editor = None;
+        for (date, selector) in [
+            (month, "agenda-month-day-2026-08-01"),
+            (month.with_day(15).unwrap(), "agenda-month-day-2026-08-15"),
+            (month.with_day(31).unwrap(), "agenda-month-day-2026-08-31"),
+        ] {
+            manager.click(selector);
+            manager.click("agenda-add");
+            let editor = manager.bounds("agenda-popover");
+            assert_inside(editor, viewport);
+            assert!(editor.size.width >= px(500.));
+            assert!((editor.center().x - viewport.center().x).abs() <= px(1.));
+            if let Some(first) = first_editor {
+                assert_same_bounds(editor, first);
+            } else {
+                first_editor = Some(editor);
+            }
+            for field in [
+                "agenda-title-input",
+                "agenda-date-input",
+                "agenda-start-input",
+                "agenda-end-input",
+                "focus-tag-picker",
+                "agenda-save",
+                "agenda-cancel",
+            ] {
+                assert_inside(manager.bounds(field), editor);
+            }
+            manager.view.read_with(&manager.cx, |view, cx| {
+                assert_eq!(view.agenda.date, date);
+                assert_eq!(
+                    view.agenda.date_input.read(cx).value(),
+                    date.format("%Y-%m-%d").to_string()
+                );
+                assert!(view.active.is_empty());
+            });
+            manager.click("agenda-cancel");
+            assert_same_bounds(manager.bounds("agenda-overview-grid"), grid);
+        }
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_saved_arrangement_activity_can_be_changed_saved_and_cancelled(
+    cx: &mut TestAppContext,
+) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        let plan = seed_plan(&mut manager, "Keep the saved arrangement");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.edit_plan(plan.id, window, cx)
+        });
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.agenda.tag_picker.read(cx).is_enabled());
+            assert_eq!(view.agenda.tag_picker.read(cx).selected_value(), Some(1));
+            assert!(!view.agenda_has_unsaved_changes(cx));
+        });
+        manager.click("focus-tag-picker");
+        manager.click("focus-tag-option-2");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.agenda.editor_visible);
+            assert_eq!(view.agenda.draft_tag, 2);
+            assert!(view.agenda_has_unsaved_changes(cx));
+            assert_eq!(
+                view.store.as_ref().unwrap().tasks(view.now).unwrap()[0].tag_id,
+                1,
+                "choosing an activity must not write before Save"
+            );
+        });
+        manager.click("agenda-save");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(!view.agenda.editor_visible);
+            assert_eq!(view.agenda.plans, vec![plan.clone()]);
+            let tasks = view.store.as_ref().unwrap().tasks(view.now).unwrap();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].id, plan.task_id);
+            assert_eq!(tasks[0].tag_id, 2);
+            assert_eq!(tasks[0].title, plan.title);
+            assert!(view.store.as_ref().unwrap().sessions().unwrap().is_empty());
+            assert!(view.active.is_empty());
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.edit_plan(plan.id, window, cx)
+        });
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.agenda.tag_picker.read(cx).selected_value(), Some(2));
+            assert!(!view.agenda_has_unsaved_changes(cx));
+        });
+        manager.click("focus-tag-picker");
+        manager.click("focus-tag-option-1");
+        manager.click("agenda-cancel");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(!view.agenda.editing);
+            assert_eq!(view.agenda.plans, vec![plan.clone()]);
+            assert_eq!(
+                view.store.as_ref().unwrap().tasks(view.now).unwrap()[0].tag_id,
+                2
+            );
+        });
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.edit_plan(plan.id, window, cx)
+        });
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.agenda.tag_picker.read(cx).selected_value(), Some(2));
+            assert!(!view.agenda_has_unsaved_changes(cx));
+        });
+    }
+}
+
+#[gpui::test]
+fn agenda_ui_archived_activity_can_be_kept_for_an_occurrence_edit_or_replaced(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+    let plan = seed_plan(&mut manager, "Keep the archived activity history");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.store.as_mut().unwrap().delete_tag(1).unwrap();
+        view.refresh(cx);
+        view.edit_plan(plan.id, window, cx);
+        view.agenda.note_input.update(cx, |input, cx| {
+            input.set_value("Only change the occurrence note", window, cx)
+        });
+    });
+    settle(&mut manager);
+    manager.click("agenda-save");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.agenda.editor_visible);
+        assert_eq!(view.agenda.plans[0].id, plan.id);
+        assert_eq!(view.agenda.plans[0].note, "Only change the occurrence note");
+        assert_eq!(
+            view.store.as_ref().unwrap().tasks(view.now).unwrap()[0].tag_id,
+            1
+        );
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.edit_plan(plan.id, window, cx)
+    });
+    settle(&mut manager);
+    manager.click("focus-tag-picker");
+    manager.click("focus-tag-option-2");
+    manager.click("agenda-save");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.agenda.editor_visible);
+        assert_eq!(view.agenda.plans[0].task_id, plan.task_id);
+        assert_eq!(
+            view.store.as_ref().unwrap().tasks(view.now).unwrap()[0].tag_id,
+            2
+        );
+        assert!(view.active.is_empty());
+    });
+}
+
+#[gpui::test]
+fn agenda_ui_cancel_global_add_keeps_the_original_dirty_editor_and_month(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let today = Local::now().date_naive();
+    let original_day = today.checked_add_days(Days::new(40)).unwrap();
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.open_agenda_day(original_day, window, cx);
+        view.begin_plan(None, window, cx);
+    });
+    settle(&mut manager);
+    fill_plan(
+        &mut manager,
+        "Keep this future arrangement draft",
+        original_day,
+        "14:00",
+        "15:00",
+        "Keep this note and calendar context",
+    );
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.begin_today_plan(window, cx)
+    });
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("取消");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.agenda.editor_visible);
+        assert!(view.agenda.popup_open);
+        assert!(view.agenda_has_unsaved_changes(cx));
+        assert_eq!(view.agenda.date, original_day);
+        assert_eq!(view.agenda.month, original_day.with_day(1).unwrap());
+        assert_eq!(
+            view.agenda.title_input.read(cx).value(),
+            "Keep this future arrangement draft"
+        );
+        assert_eq!(
+            view.agenda.date_input.read(cx).value(),
+            original_day.format("%Y-%m-%d").to_string()
+        );
+        assert_eq!(view.agenda.start_input.read(cx).value(), "14:00");
+        assert_eq!(view.agenda.end_input.read(cx).value(), "15:00");
+        assert_eq!(
+            view.agenda.note_input.read(cx).value(),
+            "Keep this note and calendar context"
+        );
+        assert!(
+            view.store
+                .as_ref()
+                .unwrap()
+                .tasks(view.now)
+                .unwrap()
+                .is_empty()
+        );
+    });
+}
+
+#[gpui::test]
+fn agenda_ui_global_add_refreshes_today_month_content_after_browsing_another_month(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let today = Local::now().date_naive();
+    let plan = seed_plan(&mut manager, "Keep today's arrangement visible");
+    manager.click("agenda-overview-next");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_ne!(view.agenda.month, today.with_day(1).unwrap());
+    });
+    manager.click("agenda-overview-add");
+    manager.click("agenda-cancel");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.agenda.date, today);
+        assert_eq!(view.agenda.month, today.with_day(1).unwrap());
+        assert!(!view.agenda.editor_visible);
+        assert!(
+            view.agenda.month_days[&today]
+                .iter()
+                .any(|item| item.title == plan.title)
+        );
+        assert_eq!(view.agenda.plans, vec![plan]);
+    });
+    let selector = Box::leak(format!("agenda-month-title-{today}-0").into_boxed_str());
+    let title = manager
+        .cx
+        .debug_bounds(selector)
+        .expect("today's actual arrangement title must be rendered after Cancel");
+    assert_inside(title, manager.bounds("agenda-overview-grid"));
 }
