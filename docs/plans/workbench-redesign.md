@@ -64,8 +64,10 @@ secondary and separate from task creation.
 The compact clock places a neutral readout below the Siamese cat's paws. Show the
 complete clock at a stable baseline and retain the real duration when paused or
 saved. Idle reads 开始; invalid duration reads 设置时长 without a placeholder dash.
-Clicking a prepared or active cat reveals one black panel with the activity,
-state and primary action. Show 结束计时 only for an active or paused session.
+Clicking a prepared or active cat reveals one black panel with the specific
+description first and its activity below when different. Time/state remain on
+the readout below the cat. The title has a detail chevron and a full-name tooltip;
+saved focus rounds also expose a quiet 详情 beside 再计一次. Show 结束计时 only for an active or paused session.
 The saved-round action 再计一次 starts a new segment for that same activity;
 clicking its title opens the task detail. Keep other paused tasks unchanged.
 Clicking the cat again collapses the panel without changing timing or management

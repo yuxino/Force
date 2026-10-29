@@ -34,3 +34,20 @@ acceptance remains headless only. Edge docking has no native interaction proof
 from this run. A 100-hour readout was not inspected natively. Real IME composition
 and candidate confirmation, and Windows/Linux native behavior, were not tested.
 Ordinary `x` input and pasted Chinese text are not IME acceptance.
+
+## Visual refinement follow-up
+
+- Clock drawers prioritize the task description, put its activity on a separate
+  line, and retain the full activity/title in the tooltip. The readout below the
+  paws carries time and state without repeating them in the drawer.
+- Saved focus rounds expose separate repeat and details actions. A native check
+  found the details text could shrink away inside the button; fixed-size content
+  and a regression for the actual label width address that defect.
+- Empty note sections no longer push records down; the date-specific note action
+  remains in the record toolbar. Classification color actions sit beside names.
+- Re-ran workspace checks, feature Clippy, and all 250 feature/UI tests. Inspected
+  signed macOS Dev windows with isolated data: cold-start paused drawer, saved
+  drawer including visible details, records, and expanded classification colors.
+- Native minimum-window resizing was again attempted without establishing a
+  changed window size. The native checks above use the default window size; the
+  minimum-size, IME, docking and other-platform boundaries above still apply.
