@@ -23,12 +23,23 @@ Verify the same three entry points and switching paths with temporary data at
 1040 × 780 and 780 × 620, then inspect the signed native app. TestPlatform bounds
 and key events do not establish native pixels, IME or other-platform interaction.
 
-## Edge dock refinement
+## Edge cat peek
 
-Keep the native 28 × 80-point dock, edge detection and drag/click behavior.
-Use the same light neutral surface as the cat readout, an existing Siamese
-portrait, stable duration/unit positions and an absolute progress rail on the
-inward edge. Flatten screen-side corners and round the inward corners. Pause,
-saved and storage-error marks must not move or replace a valid duration. Saved
-rounds retain their actual compact duration and units. Verify the actual text
-bounds on both edges and inspect a real native dock after drag/release.
+The dock is a 48 × 100-point transparent cat peek, with the existing full-body
+cat slightly cropped against the chosen screen edge. Keep the free 88 × 128 and
+expanded 244 × 152 shapes. Remove the enclosing panel, portrait thumbnail and
+vertical progress stripe. Put a compact duration and explicit unit below the
+paws; reserve a stable status slot for pause or saved marks and place countdown
+progress beneath the readout. Idle keeps the visible 开始 action. Preserve actual
+paused/saved duration and error priority.
+
+Hover stays quiet. Click opens the existing controls toward the inside of the
+screen while the edge cat and its readout stay in place, or opens a new task
+when idle. Dragging away restores the free cat; leaving the right expanded shape
+preserves its right anchor before clamping to the screen. Keep each rendered shape explicitly sized
+while native resize is pending. Native resizing must update content size and
+GPUI's content view, discard stale queued requests, and preserve the input
+responder. Verify both screen edges, real drag/release, expand/collapse and a
+return to the free shape with actual native frame/content/viewport measurements.
+A TestPlatform resize or a dock child painted inside a free-size window cannot
+establish this behavior.

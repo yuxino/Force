@@ -17,7 +17,7 @@ keep errors and meaningful distinctions visible.
 
 - Keep the 1040 × 780 default / 780 × 620 minimum management window and separate
   floating cat clock: 88 × 128 points when compact, 244 × 152 when expanded and
-  28 × 80 when edge-docked. Keep the 896-point content grid, 40-point insets,
+  48 × 100 when edge-docked. Keep the 896-point content grid, 40-point insets,
   32-point column gap and 240-point task column.
 - Use the existing system font with tabular time digits. Page titles are 32,
   task titles 28, main timers up to 104 (80 when compact), section labels 16,

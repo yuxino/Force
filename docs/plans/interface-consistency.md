@@ -3,7 +3,7 @@
 ## Windows and navigation
 
 Keep the floating cat clock independent of the normal management window. It is
-88 × 128 points when compact, 244 × 152 when expanded and 28 × 80 when docked.
+88 × 128 points when compact, 244 × 152 when expanded and 48 × 100 when docked.
 An idle cat opens a new task directly. With a task, clicking the cat toggles its controls; dragging near either screen edge docks it
 on macOS/Windows. Linux retains free movement and resizing. These local states
 must not pause, resume or retarget the active timer. Management starts at

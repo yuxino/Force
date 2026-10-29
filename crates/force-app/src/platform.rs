@@ -1,4 +1,4 @@
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 use std::sync::atomic::{AtomicU64, Ordering};
 
 // Force has one management window. New show/hide intent cancels older queued
@@ -6,12 +6,17 @@ use std::sync::atomic::{AtomicU64, Ordering};
 #[cfg(target_os = "macos")]
 static MANAGER_PRESENTATION_GENERATION: AtomicU64 = AtomicU64::new(0);
 
+// Force has one floating clock. Keep delayed native work from applying an older
+// expanded/collapsed shape after a newer drag or disclosure request.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+static FLOATING_GEOMETRY_GENERATION: AtomicU64 = AtomicU64::new(0);
+
 pub(crate) const STRIP_WIDTH: f32 = 88.;
 pub(crate) const STRIP_HEIGHT: f32 = 128.;
 pub(crate) const STRIP_EXPANDED_WIDTH: f32 = 244.;
 pub(crate) const STRIP_EXPANDED_HEIGHT: f32 = 152.;
-pub(crate) const STRIP_DOCKED_WIDTH: f32 = 28.;
-pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 80.;
+pub(crate) const STRIP_DOCKED_WIDTH: f32 = 48.;
+pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 100.;
 
 // Linux retains free movement and shares the geometry API, but never constructs
 // a native dock edge. Geometry tests still exercise both edges on every platform.
@@ -41,6 +46,15 @@ fn floating_geometry(
         None => current.origin.x.clamp(left, right),
     };
     Bounds::new(point(x, current.origin.y.clamp(top, bottom)), dimensions)
+}
+
+fn floating_geometry_from_right(
+    mut current: gpui::Bounds<gpui::Pixels>,
+    dimensions: gpui::Size<gpui::Pixels>,
+    available: gpui::Bounds<gpui::Pixels>,
+) -> gpui::Bounds<gpui::Pixels> {
+    current.origin.x = current.right() - dimensions.width;
+    floating_geometry(current, dimensions, available, None)
 }
 
 #[cfg(any(target_os = "macos", target_os = "windows", test))]
@@ -153,6 +167,27 @@ pub(crate) fn reshape_floating(
     edge: Option<DockEdge>,
     cx: &gpui::App,
 ) -> anyhow::Result<()> {
+    reshape_floating_inner(window, dimensions, edge, false, cx)
+}
+
+/// A right-docked drawer keeps its clock at the window's right edge. When a
+/// drag releases it away from the screen edge, shrink around that same clock.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
+pub(crate) fn reshape_floating_from_right(
+    window: &mut gpui::Window,
+    dimensions: gpui::Size<gpui::Pixels>,
+    cx: &gpui::App,
+) -> anyhow::Result<()> {
+    reshape_floating_inner(window, dimensions, None, true, cx)
+}
+
+fn reshape_floating_inner(
+    window: &mut gpui::Window,
+    dimensions: gpui::Size<gpui::Pixels>,
+    edge: Option<DockEdge>,
+    preserve_right: bool,
+    cx: &gpui::App,
+) -> anyhow::Result<()> {
     use anyhow::ensure;
 
     ensure!(
@@ -165,7 +200,11 @@ pub(crate) fn reshape_floating(
     let available = floating_work_area(window)
         .or_else(|| window.display(cx).map(|display| display.bounds()))
         .unwrap_or_else(|| window.bounds());
-    let bounds = floating_geometry(window.bounds(), dimensions, available, edge);
+    let bounds = if preserve_right {
+        floating_geometry_from_right(window.bounds(), dimensions, available)
+    } else {
+        floating_geometry(window.bounds(), dimensions, available, edge)
+    };
     set_floating_bounds(window, bounds, cx)
 }
 
@@ -175,8 +214,11 @@ fn set_floating_bounds(
     bounds: gpui::Bounds<gpui::Pixels>,
     cx: &gpui::App,
 ) -> anyhow::Result<()> {
-    let native = match native_window(window) {
-        Ok(native) => native,
+    use anyhow::Context as _;
+    use objc2_app_kit::NSAutoresizingMaskOptions;
+
+    let view = match native_view(window) {
+        Ok(view) => view,
         Err(error) => {
             #[cfg(test)]
             {
@@ -188,18 +230,82 @@ fn set_floating_bounds(
             return Err(error);
         }
     };
+    let native = view.window().context("The native view has no window")?;
     let current = window.bounds();
-    let mut frame = native.frame();
-    frame.origin.x += f64::from(f32::from(bounds.origin.x - current.origin.x));
-    // AppKit uses a bottom-left origin; keep the top stable when height changes.
-    frame.origin.y -= f64::from(f32::from(
-        bounds.origin.y - current.origin.y + bounds.size.height - current.size.height,
-    ));
-    frame.size.width = f64::from(f32::from(bounds.size.width));
-    frame.size.height = f64::from(f32::from(bounds.size.height));
+    let frame = native.frame();
+    let target_left = frame.origin.x + f64::from(f32::from(bounds.origin.x - current.origin.x));
+    let target_top = frame.origin.y + frame.size.height
+        - f64::from(f32::from(bounds.origin.y - current.origin.y));
+    let mut content_size = view.frame().size;
+    content_size.width = f64::from(f32::from(bounds.size.width));
+    content_size.height = f64::from(f32::from(bounds.size.height));
+    let generation = FLOATING_GEOMETRY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
+    let handle = window.window_handle();
+    let mut async_cx = cx.to_async();
+    let trace = std::env::var_os("FORCE_GEOMETRY_TRACE").is_some_and(|value| value == "1");
     cx.foreground_executor()
         .spawn(async move {
-            native.setFrame_display(frame, true);
+            if FLOATING_GEOMETRY_GENERATION.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            // Match GPUI's content-size path. Removing its titled/full-size
+            // style means a raw NSWindow frame is not a reliable viewport size.
+            // AppKit can synchronously call GPUI here, after its borrow ended.
+            native.setContentSize(content_size);
+            if FLOATING_GEOMETRY_GENERATION.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            if let Some(content) = native.contentView() {
+                content.setAutoresizesSubviews(true);
+                view.setAutoresizingMask(
+                    NSAutoresizingMaskOptions::ViewWidthSizable
+                        | NSAutoresizingMaskOptions::ViewHeightSizable,
+                );
+                // GPUI 0.2.2 updates its viewport from this view's setFrameSize
+                // callback, not NSWindowDidResize. Reconcile after style changes
+                // instead of leaving an old drawable behind a resized panel.
+                let content_bounds = content.bounds();
+                if view.frame().size != content_bounds.size {
+                    view.setFrameSize(content_bounds.size);
+                }
+            }
+            if FLOATING_GEOMETRY_GENERATION.load(Ordering::SeqCst) != generation {
+                return;
+            }
+            let mut origin = native.frame().origin;
+            origin.x = target_left;
+            origin.y = target_top - native.frame().size.height;
+            native.setFrameOrigin(origin);
+
+            // Read back after AppKit has delivered its synchronous callbacks.
+            // No native mutation runs while this GPUI window borrow is held.
+            let frame = native.frame();
+            let content = native.contentView().map(|content| content.bounds().size);
+            let drawable = view.frame().size;
+            let result = handle.update(&mut async_cx, |_, window, _| {
+                let viewport = window.viewport_size();
+                let width = f64::from(f32::from(bounds.size.width));
+                let height = f64::from(f32::from(bounds.size.height));
+                let size_matches = |actual_width: f64, actual_height: f64| {
+                    (actual_width - width).abs() < 0.5 && (actual_height - height).abs() < 0.5
+                };
+                let matches = size_matches(frame.size.width, frame.size.height)
+                    && content.is_some_and(|size| size_matches(size.width, size.height))
+                    && size_matches(drawable.width, drawable.height)
+                    && size_matches(
+                        f64::from(f32::from(viewport.width)),
+                        f64::from(f32::from(viewport.height)),
+                    );
+                if trace || !matches {
+                    eprintln!(
+                        "Force floating geometry: request={generation} target={bounds:?} frame={frame:?} content={content:?} view={drawable:?} viewport={viewport:?} acknowledged={matches}",
+                    );
+                }
+                window.refresh();
+            });
+            if trace && result.is_err() {
+                eprintln!("Force floating geometry: request={generation} acknowledged=unavailable");
+            }
         })
         .detach();
     Ok(())
@@ -244,8 +350,12 @@ fn set_floating_bounds(
         - frame.top
         - (client.bottom - client.top);
     let hwnd = handle.hwnd.get();
+    let generation = FLOATING_GEOMETRY_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
     cx.foreground_executor()
         .spawn(async move {
+            if FLOATING_GEOMETRY_GENERATION.load(Ordering::SeqCst) != generation {
+                return;
+            }
             let result = unsafe {
                 SetWindowPos(
                     hwnd as _,
@@ -385,9 +495,9 @@ pub fn set_always_on_top(_window: &gpui::Window, _enabled: bool) -> anyhow::Resu
 }
 
 #[cfg(target_os = "macos")]
-fn native_window(
+fn native_view(
     window: &gpui::Window,
-) -> anyhow::Result<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+) -> anyhow::Result<objc2::rc::Retained<objc2_app_kit::NSView>> {
     use anyhow::{Context as _, bail};
     use objc2_app_kit::NSView;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -397,9 +507,20 @@ fn native_window(
     let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
         bail!("Unsupported native window handle");
     };
-    // The GPUI-owned view is live for the borrowed window handle.
-    let view = unsafe { handle.ns_view.cast::<NSView>().as_ref() };
-    view.window().context("The native view has no window")
+    // Retain GPUI's live view across queued AppKit work; never replace it or its
+    // first-responder identity, which owns ordinary typing and IME composition.
+    unsafe { objc2::rc::Retained::retain(handle.ns_view.cast::<NSView>().as_ptr()) }
+        .context("The native window view is unavailable")
+}
+
+#[cfg(target_os = "macos")]
+fn native_window(
+    window: &gpui::Window,
+) -> anyhow::Result<objc2::rc::Retained<objc2_app_kit::NSWindow>> {
+    use anyhow::Context as _;
+    native_view(window)?
+        .window()
+        .context("The native view has no window")
 }
 
 #[cfg(target_os = "macos")]
@@ -850,7 +971,10 @@ pub(crate) fn play_time_tick() {
 
 #[cfg(test)]
 mod floating_geometry_tests {
-    use super::{DockEdge, dock_edge_for_bounds, floating_geometry};
+    use super::{
+        DockEdge, STRIP_DOCKED_HEIGHT, STRIP_DOCKED_WIDTH, dock_edge_for_bounds, floating_geometry,
+        floating_geometry_from_right,
+    };
     use gpui::{Bounds, Pixels, point, px, size};
 
     fn rect(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {
@@ -872,11 +996,25 @@ mod floating_geometry_tests {
     }
 
     #[test]
+    fn releasing_a_right_drawer_keeps_the_clock_position_and_clamps_to_the_work_area() {
+        let available = rect(0., 24., 1440., 856.);
+        let free_size = size(px(88.), px(128.));
+        assert_eq!(
+            floating_geometry_from_right(rect(1000., 200., 244., 152.), free_size, available),
+            rect(1156., 200., 88., 128.)
+        );
+        assert_eq!(
+            floating_geometry_from_right(rect(1240., 800., 244., 152.), free_size, available),
+            rect(1344., 744., 88., 128.)
+        );
+    }
+
+    #[test]
     fn both_docked_shapes_keep_the_same_edge_and_stay_inside_the_work_area() {
         let available = rect(-1920., 50., 1920., 1030.);
         for (edge, expected_x, closed_x) in [
             (DockEdge::Left, -1920., -1920.),
-            (DockEdge::Right, -240., -28.),
+            (DockEdge::Right, -240., -STRIP_DOCKED_WIDTH),
         ] {
             let expanded = floating_geometry(
                 rect(-600., 200., 88., 128.),
@@ -885,8 +1023,16 @@ mod floating_geometry_tests {
                 Some(edge),
             );
             assert_eq!(expanded, rect(expected_x, 200., 240., 192.));
-            let folded = floating_geometry(expanded, size(px(28.), px(80.)), available, Some(edge));
-            assert_eq!(folded, rect(closed_x, 200., 28., 80.));
+            let folded = floating_geometry(
+                expanded,
+                size(px(STRIP_DOCKED_WIDTH), px(STRIP_DOCKED_HEIGHT)),
+                available,
+                Some(edge),
+            );
+            assert_eq!(
+                folded,
+                rect(closed_x, 200., STRIP_DOCKED_WIDTH, STRIP_DOCKED_HEIGHT)
+            );
         }
     }
 
