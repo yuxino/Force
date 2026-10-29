@@ -11,7 +11,7 @@ use crate::{
     label::single_line,
     model::FloatingStrip,
     platform,
-    view::{INK, action_icon, button, clock, control_icon, timer_font},
+    view::{INK, MUTED, SURFACE, action_icon, button, clock, control_icon, timer_font},
 };
 
 pub(crate) const EXPANDED_WIDTH: f32 = platform::STRIP_EXPANDED_WIDTH;
@@ -45,6 +45,19 @@ impl TimerFace {
 
     fn dock_progress(&self) -> Option<f32> {
         self.progress.filter(|_| !self.failed && !self.paused)
+    }
+
+    fn dock_display(&self) -> (String, String) {
+        if self.failed {
+            ("重试".to_owned(), String::new())
+        } else if self.invalid_duration {
+            ("设置".to_owned(), String::new())
+        } else if self.idle {
+            ("开始".to_owned(), String::new())
+        } else {
+            // Saved rounds retain their actual duration just like paused ones.
+            compact_time(self.seconds)
+        }
     }
 
     fn compact_display(&self) -> (String, String) {
@@ -300,7 +313,7 @@ impl FloatingStrip {
         self.face_click_started = Some(Instant::now());
         cx.notify();
         if self.timer_face(cx).idle {
-            self.dispatch(cx, |model, window, cx| model.new_task(window, cx));
+            self.dispatch(cx, |model, window, cx| model.open_task_dialog(window, cx));
         } else {
             self.toggle_expanded(window, cx);
         }
@@ -740,71 +753,125 @@ impl FloatingStrip {
     }
 
     fn dock_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
-        let (readout, unit) = if face.failed {
-            ("重试".to_owned(), String::new())
-        } else if face.completed {
-            ("已存".to_owned(), String::new())
-        } else if face.invalid_duration {
-            ("设置".to_owned(), String::new())
-        } else if face.idle {
-            ("开始".to_owned(), String::new())
+        let (readout, unit) = face.dock_display();
+        let left_edge = self.docked == Some(platform::DockEdge::Left);
+        let readout_size = if unit.is_empty() || readout.chars().count() > 2 {
+            11.
         } else {
-            compact_time(face.seconds)
+            12.
         };
         div()
             .id("cat-clock-dock")
             .debug_selector(|| "strip-dock".into())
             .size_full()
-            .rounded(px(12.))
-            .bg(rgb(INK))
+            .relative()
+            .overflow_hidden()
+            .when(left_edge, |dock| {
+                dock.rounded_tr(px(10.)).rounded_br(px(10.))
+            })
+            .when(!left_edge, |dock| {
+                dock.rounded_tl(px(10.)).rounded_bl(px(10.))
+            })
+            .bg(rgb(SURFACE))
             .border_1()
-            .border_color(rgb(0x777777))
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap(px(7.))
+            .border_color(rgb(0xd5d5d5))
+            .when(left_edge, |dock| dock.border_l_0())
+            .when(!left_edge, |dock| dock.border_r_0())
             .cursor_pointer()
-            .text_color(rgb(0xf5f5f5))
+            .text_color(rgb(INK))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_face_press))
             .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
             .child(
                 div()
-                    .font(timer_font(cx))
+                    .debug_selector(|| "strip-dock-portrait".into())
+                    .absolute()
+                    .top(px(8.))
+                    .left(px(5.))
+                    .size(px(18.))
+                    .child(img(crate::embedded_image_source("force-logo.png")).size_full()),
+            )
+            .child(
+                div()
                     .debug_selector(|| "strip-dock-time".into())
-                    .text_size(px(if readout.chars().count() > 2 {
-                        11.
-                    } else {
-                        12.
-                    }))
+                    .absolute()
+                    .top(px(32.))
+                    .left(px(3.))
+                    .w(px(22.))
+                    .h(px(17.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .font(timer_font(cx))
+                    .text_size(px(readout_size))
                     .line_height(px(16.))
-                    .child(readout),
+                    .font_weight(FontWeight::MEDIUM)
+                    .child(
+                        div()
+                            .debug_selector(|| "strip-dock-time-text".into())
+                            .flex_none()
+                            .child(readout),
+                    ),
             )
             .when(!unit.is_empty(), |dock| {
                 dock.child(
                     div()
                         .debug_selector(|| "strip-dock-unit".into())
-                        .text_size(px(11.))
+                        .absolute()
+                        .top(px(50.))
+                        .left(px(3.))
+                        .w(px(22.))
+                        .h(px(12.))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(10.))
                         .line_height(px(12.))
-                        .text_color(rgb(0xbcbcbc))
-                        .child(unit),
+                        .text_color(rgb(MUTED))
+                        .child(
+                            div()
+                                .debug_selector(|| "strip-dock-unit-text".into())
+                                .flex_none()
+                                .child(unit),
+                        ),
                 )
             })
             .when(face.show_paused_mark(), |dock| {
                 dock.child(
                     div()
                         .debug_selector(|| "strip-dock-paused-mark".into())
-                        .size(px(10.))
-                        .child(Icon::default().path("force-icons/pause.svg").size(px(10.))),
+                        .absolute()
+                        .top(px(66.))
+                        .left(px(10.))
+                        .size(px(8.))
+                        .text_color(rgb(MUTED))
+                        .child(Icon::default().path("force-icons/pause.svg").size(px(8.))),
+                )
+            })
+            .when(face.completed && !face.failed, |dock| {
+                dock.child(
+                    div()
+                        .debug_selector(|| "strip-dock-saved-mark".into())
+                        .absolute()
+                        .top(px(66.))
+                        .left(px(10.))
+                        .size(px(8.))
+                        .text_color(rgb(MUTED))
+                        .child(Icon::new(IconName::Check).size(px(8.))),
                 )
             })
             .children(face.dock_progress().map(|progress| {
                 div()
                     .debug_selector(|| "strip-dock-progress".into())
-                    .h(px(22.))
+                    .absolute()
+                    .top(px(31.))
                     .w(px(2.))
-                    .bg(rgb(0x535353))
-                    .child(div().w_full().h(relative(progress)).bg(rgb(0xf5f5f5)))
+                    .h(px(32.))
+                    .when(left_edge, |rail| rail.right(px(2.)))
+                    .when(!left_edge, |rail| rail.left(px(2.)))
+                    .rounded_full()
+                    .overflow_hidden()
+                    .bg(rgb(0xd5d5d5))
+                    .child(div().w_full().h(relative(progress)).bg(rgb(INK)))
             }))
     }
 }
@@ -1268,6 +1335,163 @@ mod tests {
         }
         visual.update(|window, _| window.remove_window());
         visual.run_until_parked();
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn edge_dock_keeps_readouts_stable_and_inside_both_edges(cx: &mut gpui::TestAppContext) {
+        use crate::{headless_ui_tests::ManagerHarness, platform::DockEdge};
+        use gpui::{
+            AppContext as _, Bounds, Point, VisualTestContext, WindowBounds, WindowOptions, px,
+            size,
+        };
+        use gpui_component::Root;
+
+        // Idle, count-up, countdown, paused, saved, storage error and 100-hour
+        // readouts use fresh windows so removed-selector caching cannot pass.
+        for state in 0..7 {
+            let mut manager = ManagerHarness::new(cx, 1040., 780.);
+            manager.view.update(&mut manager.cx, |view, cx| {
+                if state != 0 {
+                    let elapsed = if state == 6 { 100 * 3600 + 135 } else { 1122 };
+                    let start = view.now - elapsed;
+                    let session = if state == 2 {
+                        view.store
+                            .as_mut()
+                            .unwrap()
+                            .create_and_start_task("Dock countdown", 1, start, Some(3600))
+                            .unwrap()
+                    } else {
+                        view.store
+                            .as_mut()
+                            .unwrap()
+                            .start("Dock readout", 1, start)
+                            .unwrap()
+                    };
+                    if state == 3 || state == 5 {
+                        view.store
+                            .as_mut()
+                            .unwrap()
+                            .pause(session.id, view.now)
+                            .unwrap();
+                    }
+                    if state == 4 {
+                        view.completed = Some(
+                            view.store
+                                .as_mut()
+                                .unwrap()
+                                .finish(session.id, view.now)
+                                .unwrap(),
+                        );
+                    }
+                    view.refresh(cx);
+                    view.storage_failed = state == 5;
+                }
+                cx.notify();
+            });
+            for edge in [DockEdge::Left, DockEdge::Right] {
+                let model = manager.view.clone();
+                let manager_window = manager.handle;
+                let dimensions = size(px(super::DOCK_WIDTH), px(super::DOCK_HEIGHT));
+                let (strip, cat) = manager.cx.cx.update(|cx| {
+                    let mut cat = None;
+                    let strip = cx
+                        .open_window(
+                            WindowOptions {
+                                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                                    Point::default(),
+                                    dimensions,
+                                ))),
+                                ..Default::default()
+                            },
+                            |window, cx| {
+                                let entity = cx.new(|cx| {
+                                    let mut cat = super::FloatingStrip::new(
+                                        model,
+                                        manager_window,
+                                        window,
+                                        cx,
+                                    );
+                                    cat.docked = Some(edge);
+                                    cat
+                                });
+                                cat = Some(entity.clone());
+                                cx.new(|cx| Root::new(entity, window, cx))
+                            },
+                        )
+                        .unwrap();
+                    (strip, cat.unwrap())
+                });
+                let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
+                visual.simulate_resize(dimensions);
+                visual.update(|window, _| window.refresh());
+                visual.run_until_parked();
+                let expected = cat.read_with(&visual, |cat, cx| cat.timer_face(cx).dock_display());
+                assert_eq!(
+                    expected,
+                    match state {
+                        0 => ("开始".into(), String::new()),
+                        2 => ("41".into(), "分".into()),
+                        5 => ("重试".into(), String::new()),
+                        6 => ("99+".into(), "时".into()),
+                        _ => ("18".into(), "分".into()),
+                    }
+                );
+                let dock = visual.debug_bounds("strip-dock").unwrap();
+                let portrait = visual.debug_bounds("strip-dock-portrait").unwrap();
+                let time = visual.debug_bounds("strip-dock-time").unwrap();
+                let time_text = visual.debug_bounds("strip-dock-time-text").unwrap();
+                assert_eq!(dock.size, dimensions);
+                for bounds in [portrait, time, time_text] {
+                    assert!(
+                        bounds.left() >= dock.left() && bounds.right() <= dock.right(),
+                        "state {state}, {edge:?}: {bounds:?}"
+                    );
+                    assert!(bounds.top() >= dock.top() && bounds.bottom() <= dock.bottom());
+                    assert!(bounds.size.width > px(0.) && bounds.size.height > px(0.));
+                }
+                assert!(portrait.bottom() <= time.top());
+                assert!(time_text.left() >= time.left() && time_text.right() <= time.right());
+                assert!(time_text.top() >= time.top() && time_text.bottom() <= time.bottom());
+                if !expected.1.is_empty() {
+                    let unit = visual.debug_bounds("strip-dock-unit").unwrap();
+                    let unit_text = visual.debug_bounds("strip-dock-unit-text").unwrap();
+                    assert!(time.bottom() <= unit.top());
+                    assert!(unit_text.left() >= unit.left() && unit_text.right() <= unit.right());
+                    assert!(unit_text.top() >= unit.top() && unit_text.bottom() <= unit.bottom());
+                    assert!(unit.bottom() <= dock.bottom());
+                } else {
+                    assert!(visual.debug_bounds("strip-dock-unit").is_none());
+                }
+                assert_eq!(
+                    visual.debug_bounds("strip-dock-paused-mark").is_some(),
+                    state == 3
+                );
+                assert_eq!(
+                    visual.debug_bounds("strip-dock-saved-mark").is_some(),
+                    state == 4
+                );
+                for selector in ["strip-dock-paused-mark", "strip-dock-saved-mark"] {
+                    if let Some(mark) = visual.debug_bounds(selector) {
+                        assert!(mark.left() >= dock.left() && mark.right() <= dock.right());
+                        assert!(mark.top() >= time.bottom() && mark.bottom() <= dock.bottom());
+                    }
+                }
+                if state == 2 {
+                    let rail = visual.debug_bounds("strip-dock-progress").unwrap();
+                    assert!(rail.top() >= dock.top() && rail.bottom() <= dock.bottom());
+                    if edge == DockEdge::Left {
+                        assert!(rail.left() >= time_text.right());
+                    } else {
+                        assert!(rail.right() <= time_text.left());
+                    }
+                } else {
+                    assert!(visual.debug_bounds("strip-dock-progress").is_none());
+                }
+                visual.update(|window, _| window.remove_window());
+                visual.run_until_parked();
+            }
+        }
     }
 
     #[cfg(feature = "ui-test-support")]

@@ -508,3 +508,53 @@ fn completed_arrangement_keeps_its_activity_picker_disabled_but_allows_note_edit
         assert!(view.active.is_empty());
     });
 }
+
+#[gpui::test]
+fn idle_primary_action_opens_the_shared_task_dialog_and_keeps_running_controls_independent(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., crate::model::Page::Records);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        assert!(view.active.is_empty());
+        view.primary_action(window, cx);
+        assert!(view.task_editor.visible);
+        assert_eq!(view.page, crate::model::Page::Records);
+        assert_eq!(view.selected_tag, 0);
+        assert!(view.task_input.read(cx).value().is_empty());
+        view.task_editor.title_input.update(cx, |input, cx| {
+            input.set_value("Keep the independent dialog draft", window, cx)
+        });
+        view.task_editor.selected_tag = 2;
+        view.primary_action(window, cx);
+        assert!(view.task_editor.visible);
+        assert_eq!(view.page, crate::model::Page::Records);
+        assert_eq!(view.task_editor.selected_tag, 2);
+        assert_eq!(
+            view.task_editor.title_input.read(cx).value(),
+            "Keep the independent dialog draft"
+        );
+        assert!(view.tasks.is_empty());
+        assert!(view.active.is_empty());
+        let session = view
+            .store
+            .as_mut()
+            .unwrap()
+            .create_and_start_task("Existing timer", 1, view.now, None)
+            .unwrap();
+        view.refresh(cx);
+        view.strip_primary_action(window, cx);
+        assert!(
+            view.active
+                .iter()
+                .find(|active| active.id == session.id)
+                .unwrap()
+                .is_paused()
+        );
+        assert!(view.task_editor.visible);
+        assert_eq!(
+            view.task_editor.title_input.read(cx).value(),
+            "Keep the independent dialog draft"
+        );
+        assert_eq!(view.task_editor.selected_tag, 2);
+    });
+}

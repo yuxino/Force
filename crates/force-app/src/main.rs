@@ -14,6 +14,7 @@ mod classification_view;
 mod completion_editor_model;
 mod completion_editor_view;
 mod control_style;
+mod editor_dialog;
 mod floating_view;
 mod focus_view;
 mod label;
@@ -26,6 +27,8 @@ mod record_editor_view;
 mod records_view;
 mod settings_view;
 mod tag_picker;
+mod task_editor_model;
+mod task_editor_view;
 mod time_picker;
 mod updates;
 mod view;
@@ -50,6 +53,8 @@ mod record_editor_ui_tests;
 mod task_draft_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod time_picker_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
+mod unified_dialog_ui_tests;
 
 use gpui::{prelude::*, *};
 use gpui_component::{Root, Theme, ThemeMode};
@@ -350,17 +355,23 @@ fn main() -> anyhow::Result<()> {
                 });
                 cx.on_action(move |_: &SaveMoment, cx| {
                     with_force(handle, cx, |this, window, cx| {
-                        if this.completion_editor.visible {
+                        if this.task_editor.visible {
+                            this.save_task_dialog(window, cx);
+                        } else if this.completion_editor.visible {
                             this.save_completion_editor(window, cx);
                         } else if this.record_editor.visible {
                             this.save_record_editor(window, cx);
+                        } else if this.agenda.editor_visible {
+                            this.save_plan(window, cx);
                         } else {
                             this.save_moment(window, cx);
                         }
                     })
                 });
                 cx.on_action(move |_: &NewTask, cx| {
-                    with_force(handle, cx, |this, window, cx| this.new_task(window, cx))
+                    with_force(handle, cx, |this, window, cx| {
+                        this.open_task_dialog(window, cx)
+                    })
                 });
                 cx.on_action(move |_: &ToggleCompact, cx| {
                     with_force(handle, cx, |this, window, cx| this.compact(window, cx))

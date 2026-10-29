@@ -24,6 +24,7 @@ pub(crate) struct MomentState {
     pub(crate) date: Entity<InputState>,
     pub(crate) time: Entity<InputState>,
     pub(crate) error: Option<String>,
+    pub(crate) editor_scroll: gpui::ScrollHandle,
     baseline: Option<MomentDraft>,
     source_timestamp: Option<i64>,
     generation: u64,
@@ -62,6 +63,7 @@ impl MomentState {
             date,
             time,
             error: None,
+            editor_scroll: gpui::ScrollHandle::default(),
             baseline: None,
             source_timestamp: None,
             generation: 0,
@@ -226,6 +228,7 @@ impl ForceView {
     }
 
     fn reveal_moment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_task_dialog(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
         self.time_picker

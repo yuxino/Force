@@ -760,12 +760,16 @@ fn headless_ui_independent_scrolls_leave_the_summary_visible(cx: &mut TestAppCon
             );
         });
     }
+    let scroll_before_dialog = manager
+        .view
+        .read_with(&manager.cx, |view, _| view.panel_scroll[0].offset().y);
     manager.click("global-new-task");
     assert_eq!(
         manager
             .view
             .read_with(&manager.cx, |view, _| view.panel_scroll[0].offset().y),
-        px(0.)
+        scroll_before_dialog,
+        "opening a creation dialog must not scroll the underlying workspace"
     );
     assert_same_bounds(manager.bounds("focus-summary"), summary);
 }
@@ -988,14 +992,14 @@ fn headless_ui_estimated_records_do_not_claim_an_unknown_pause(cx: &mut TestAppC
 fn headless_ui_global_new_task_is_available_without_scheduling_and_preserves_its_draft(
     cx: &mut TestAppContext,
 ) {
-    for page in [Page::Agenda, Page::Records] {
+    for page in [Page::Agenda, Page::Records, Page::Analysis, Page::Settings] {
         let mut manager = ManagerHarness::new_on_page(cx, 780., 620., page);
         let entry = manager.bounds("global-new-task");
         assert_horizontally_inside(entry, manager.bounds("manager-header"));
         manager.click("global-new-task");
         manager.view.read_with(&manager.cx, |view, _| {
-            assert!(matches!(view.page, Page::Focus));
-            assert!(view.preparing);
+            assert_eq!(view.page, page);
+            assert!(view.task_editor.visible);
             assert!(view.selected_task.is_none());
             assert!(!view.agenda.editing);
             assert!(view.tasks.is_empty());
@@ -1003,33 +1007,41 @@ fn headless_ui_global_new_task_is_available_without_scheduling_and_preserves_its
             assert!(view.agenda.plans.is_empty());
         });
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
-            view.selected_tag = 1;
-            view.task_input.update(cx, |input, cx| {
+            view.task_editor.selected_tag = 1;
+            view.task_editor.title_input.update(cx, |input, cx| {
                 input.set_value("A task without a date", window, cx)
             });
-            view.timer_minutes = 17;
-            view.timer_input
+            view.task_editor.countdown = true;
+            view.task_editor.timer_minutes = 17;
+            view.task_editor
+                .timer_input
                 .update(cx, |input, cx| input.set_value("17", window, cx));
         });
-        manager.click(if page == Page::Agenda {
-            "agenda-tab"
-        } else {
-            "records-tab"
-        });
+        manager.click("close-task-dialog");
+        assert_eq!(manager.page(), page);
         manager.click("global-new-task");
         assert!(!manager.cx.has_pending_prompt());
         manager.view.read_with(&manager.cx, |view, cx| {
-            assert!(matches!(view.page, Page::Focus));
-            assert_eq!(view.task_input.read(cx).value(), "A task without a date");
-            assert_eq!(view.timer_minutes, 17);
-            assert_eq!(view.timer_input.read(cx).value(), "17");
+            assert_eq!(view.page, page);
+            assert_eq!(
+                view.task_editor.title_input.read(cx).value(),
+                "A task without a date"
+            );
+            assert_eq!(view.task_editor.timer_minutes, 17);
+            assert_eq!(view.task_editor.timer_input.read(cx).value(), "17");
+            assert!(view.task_editor.countdown);
             assert!(view.active.is_empty());
             assert!(view.agenda.plans.is_empty());
         });
-        manager.click("save-new-task");
-        manager.view.read_with(&manager.cx, |view, _| {
+        manager.click("save-task-dialog");
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.page, Page::Focus);
+            assert!(!view.task_editor.visible);
             assert_eq!(view.tasks.len(), 1);
+            assert_eq!(view.selected_task, Some(view.tasks[0].id));
             assert_eq!(view.tasks[0].title, "A task without a date");
+            assert!(view.countdown);
+            assert_eq!(view.timer_input.read(cx).value(), "17");
             assert!(view.active.is_empty());
             assert!(view.agenda.plans.is_empty());
         });
@@ -1056,8 +1068,8 @@ fn headless_ui_global_new_task_keeps_an_unsaved_calendar_plan(cx: &mut TestAppCo
     manager.click("global-new-task");
     assert!(!manager.cx.has_pending_prompt());
     manager.view.read_with(&manager.cx, |view, cx| {
-        assert!(matches!(view.page, Page::Focus));
-        assert!(view.preparing);
+        assert_eq!(view.page, Page::Agenda);
+        assert!(view.task_editor.visible);
         assert!(view.selected_task.is_none());
         assert!(view.agenda_has_suspended_draft(cx));
         assert!(!view.agenda.popup_open);
@@ -1427,17 +1439,18 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
     });
     assert!(strip.debug_bounds("strip-controls").is_none());
     manager.view.read_with(&manager.cx, |view, _| {
-        assert!(view.preparing);
+        assert!(view.task_editor.visible);
         assert!(!view.compact);
     });
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
-        view.selected_tag = 1;
-        view.task_input
+        view.task_editor.selected_tag = 1;
+        view.task_editor
+            .title_input
             .update(cx, |input, cx| input.focus(window, cx));
     });
     let title = "浮窗应当完整保留这段很长的任务名称，显示时仅在信息区标题行内省略";
     manager.cx.simulate_input(title);
-    manager.click("start-focus");
+    manager.click("start-task-dialog");
     let started = manager.view.read_with(&manager.cx, |view, _| {
         assert_eq!(view.active.len(), 1);
         assert!(view.active[0].is_running());
@@ -1831,6 +1844,9 @@ fn headless_ui_cat_idle_blank_default_task_opens_new_task_directly(cx: &mut Test
         assert_eq!(view.timer_input.read(cx).value(), "25");
         assert!(!view.countdown && view.active.is_empty());
         assert_eq!(view.selected_tag, 0);
+        assert!(view.task_editor.visible);
+        assert_eq!(view.task_editor.selected_tag, 0);
+        assert!(view.task_editor.title_input.read(cx).value().is_empty());
     });
     strip.update(|window, _| window.remove_window());
     strip.run_until_parked();
@@ -2112,7 +2128,8 @@ fn headless_ui_browsing_exposes_current_timer_and_switching_preserves_both_tasks
         }
         manager.click("global-new-task");
         manager.view.read_with(&manager.cx, |view, _| {
-            assert!(view.preparing);
+            assert!(view.task_editor.visible);
+            assert_eq!(view.selected_session, Some(session_a));
             assert!(
                 view.active
                     .iter()
@@ -2121,29 +2138,28 @@ fn headless_ui_browsing_exposes_current_timer_and_switching_preserves_both_tasks
                     .is_running()
             );
         });
-        assert_horizontally_inside(
-            manager.bounds("timer-context"),
-            manager.bounds("focus-operation"),
-        );
-        manager.click("return-current-timer");
+        manager.click("close-task-dialog");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert_eq!(view.page, Page::Focus);
+            assert_eq!(view.selected_session, Some(session_a));
+        });
         manager.click("global-new-task");
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
-            view.selected_tag = 1;
-            view.task_input
+            view.task_editor.selected_tag = 1;
+            view.task_editor
+                .title_input
                 .update(cx, |input, cx| input.set_value("Next task", window, cx));
         });
         manager.cx.update(|window, _| window.refresh());
         manager.cx.run_until_parked();
-        let start = manager.bounds("start-focus");
-        let operation = manager.bounds("focus-operation");
+        let start = manager.bounds("start-task-dialog");
+        let editor = manager.bounds("task-editor");
+        assert_horizontally_inside(start, editor);
         assert!(
-            start.bottom() <= operation.bottom() + px(1.),
-            "switch-and-start action must be fully visible at {width}×{height}"
+            start.bottom() <= editor.bottom() + px(1.),
+            "switch-and-start must remain visible at {width}×{height}"
         );
-        manager
-            .view
-            .read_with(&manager.cx, |view, cx| assert!(view.can_start_task(cx)));
-        manager.click("start-focus");
+        manager.click("start-task-dialog");
         manager.view.read_with(&manager.cx, |view, _| {
             assert!(
                 view.active
@@ -2678,10 +2694,11 @@ fn headless_ui_custom_timer_starts_with_typed_minutes_at_default_and_minimum_siz
         });
         manager.click("global-new-task");
         manager.view.read_with(&manager.cx, |view, cx| {
-            assert!(view.is_new_task_form());
-            assert!(!view.countdown);
-            assert_eq!(view.timer_input.read(cx).value(), "25");
-            assert_eq!(view.timer_minutes, 25);
+            assert!(view.task_editor.visible);
+            assert_eq!(view.task_editor.selected_tag, 0);
+            assert!(!view.task_editor.countdown);
+            assert_eq!(view.task_editor.timer_input.read(cx).value(), "25");
+            assert_eq!(view.task_editor.timer_minutes, 25);
             assert!(view.active[0].is_running());
             assert_eq!(view.active[0].target_seconds, Some(i64::from(minutes) * 60));
         });
@@ -3034,14 +3051,30 @@ fn headless_ui_cancelling_or_leaving_duration_edit_preserves_the_saved_target(
                 .update(cx, |input, cx| input.set_value("37", window, cx));
         });
         manager.click(destination);
-        manager.view.read_with(&manager.cx, |view, _| {
-            assert!(view.editing_duration.is_none());
+        manager.view.read_with(&manager.cx, |view, cx| {
+            if destination == "global-new-task" {
+                assert!(view.task_editor.visible);
+                assert_eq!(view.editing_duration, Some(original.id));
+                assert_eq!(view.duration_input.read(cx).value(), "37");
+            } else {
+                assert!(view.editing_duration.is_none());
+            }
             assert_eq!(
                 view.store.as_ref().unwrap().active_sessions().unwrap(),
                 vec![original.clone()]
             );
         });
         assert!(!manager.cx.has_pending_prompt());
+        if destination == "global-new-task" {
+            manager.click("cancel-task-dialog");
+            manager.view.read_with(&manager.cx, |view, cx| {
+                assert!(!view.task_editor.visible);
+                assert_eq!(view.editing_duration, Some(original.id));
+                assert_eq!(view.duration_input.read(cx).value(), "37");
+            });
+            manager.bounds("session-duration-input");
+            manager.click("cancel-duration");
+        }
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.select_session(original.id, window, cx);
         });
@@ -4316,7 +4349,11 @@ fn headless_ui_new_activity_and_empty_minutes_do_not_show_premature_errors(
     cx: &mut TestAppContext,
 ) {
     let mut manager = ManagerHarness::new(cx, 780., 620.);
-    manager.click("global-new-task");
+    // This regression exercises the contextual workspace; creation-dialog
+    // validation has its own event and layout coverage.
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.new_task(window, cx)
+    });
     assert!(manager.cx.debug_bounds("task-tag-error").is_none());
     manager.view.read_with(&manager.cx, |view, cx| {
         assert_eq!(view.selected_tag, 0);

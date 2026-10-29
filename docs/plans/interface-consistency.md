@@ -157,20 +157,26 @@ handlers. Navigation and duration underlines must use a custom variant with a
 stable border color: Ghost variants clear it during hover/press, exactly when
 a newly selected choice must remain identifiable.
 
-## Calendar context editing
+## Creation dialogs and calendar context
 
-Keep the month visible while viewing a date or editing an arrangement. Use a
-360-point anchored panel with intrinsic height; optional notes expand inside its
-scrolling fields. Keep Save and Cancel together immediately below the form.
-Closing, Escape, outside clicks and navigation suspend a changed draft; show
-继续草稿 on the month. Explicit Cancel discards it. Selecting a different editor
-protects changed work with Save, Discard or Cancel. The timeline is an explicit
-secondary view with a visible return to the month. Actual records stay read-only.
+随手记、新任务 and 添加安排 share the centered editor shell described in
+[unified editors](unified-editors.md). Reuse its bounded 560-point width,
+header/close action, scrollable fields, fixed error area and right-aligned footer.
+Close, Escape, outside clicks and navigation suspend drafts; explicit Cancel
+discards. Pickers handle Escape first. The 68-point navigation remains available,
+and editor switching keeps each draft independent. Tab and Shift+Tab stay inside
+the visible editor.
 
-Keep the anchored parent in GPUI's normal paint pass. Input and tag menus defer
-their own drawing; GPUI 0.2.2 rejects nested deferred draws. Verify an actual tag
-menu selection outside the parent panel, followed by Escape, in the native app.
-Read-only detail titles wrap rather than relying on an unconstrained canvas line.
+Calendar day summaries and read-only details retain their 360-point anchored
+panel. Arrangement creation/editing uses the common centered shell. Today's
+month-toolbar default is independent of the month being browsed; date-specific
+creation keeps its explicit date. The timeline remains a secondary view with a
+return to the month. Actual records use their existing correction actions.
+
+Keep dialog and anchored parents in GPUI's normal paint pass. Inputs and tag
+menus defer their own drawing; GPUI 0.2.2 rejects nested deferred draws. Verify
+native picker selection and Escape. Read-only detail titles wrap rather than
+relying on an unconstrained canvas line.
 
 ## Activity calendar
 
@@ -325,8 +331,8 @@ of the library Ghost's fixed darkening. Timing mode selection uses a white selec
 duration presets use compact bordered choices with a clear selected state. Neither resembles disabled
 Start. The task sidebar heading is subordinate at 14 points.
 
-Calendar editors reserve two lines for validation so bottom-snapped title and
-time fields do not jump when typing clears an error. Fields scroll within the
+Creation editors reserve a validation area so fields and actions stay stable
+when typing clears an error. Errors may expand without hiding the actions. Fields scroll within the
 popup, while validation and Save/Cancel remain visible outside the scroll area.
 Expanding notes reveals and focuses the note field; validation reveals its first
 invalid field, including after resuming a draft. A fixed error slot is functional
