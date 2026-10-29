@@ -14,6 +14,8 @@ use crate::{
     tag_picker::{FocusTagOption, TagPicked, TagPicker},
 };
 
+gpui::actions!(agenda_editor, [NextField, PreviousField]);
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum PlanField {
     Title,
@@ -122,6 +124,7 @@ pub(crate) struct AgendaState {
     /// Day details or a centered editor above the unchanged month calendar.
     pub(crate) popup_open: bool,
     pub(crate) calendar_focus: FocusHandle,
+    pub(crate) editor_focus: FocusHandle,
     /// `editing` retains a draft even while this editor is suspended.
     pub(crate) editor_visible: bool,
     pub(crate) note_expanded: bool,
@@ -169,6 +172,10 @@ pub(crate) struct AgendaState {
 
 impl AgendaState {
     pub(crate) fn new(window: &mut Window, cx: &mut Context<ForceView>) -> Self {
+        cx.bind_keys([
+            gpui::KeyBinding::new("tab", NextField, Some("AgendaEditor")),
+            gpui::KeyBinding::new("shift-tab", PreviousField, Some("AgendaEditor")),
+        ]);
         let title_input = cx.new(|cx| InputState::new(window, cx).placeholder("输入安排名称"));
         let date_input = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
         let start_input = cx.new(|cx| InputState::new(window, cx).placeholder("09:00"));
@@ -232,6 +239,7 @@ impl AgendaState {
             month_overview: true,
             popup_open: false,
             calendar_focus: cx.focus_handle().tab_stop(false),
+            editor_focus: cx.focus_handle().tab_stop(false),
             editor_visible: false,
             note_expanded: false,
             month_days: BTreeMap::new(),
@@ -477,7 +485,7 @@ impl ForceView {
             });
         }
         self.agenda.tag_picker.update(cx, |picker, cx| {
-            picker.set_trigger_width(crate::agenda_popover_view::editor_content_width(window), cx);
+            picker.set_trigger_width(crate::editor_dialog::content_width(window), cx);
         });
         let selected = options
             .iter()
@@ -624,6 +632,8 @@ impl ForceView {
     }
 
     pub(crate) fn resume_agenda_draft(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_task_dialog(window, cx);
+        self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
         if !self.agenda.editing {
@@ -831,6 +841,8 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.suspend_task_dialog(window, cx);
+        self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
         if self.agenda.editing
@@ -922,6 +934,8 @@ impl ForceView {
     }
 
     pub(crate) fn edit_plan(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_task_dialog(window, cx);
+        self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
         if self.agenda.editing && self.agenda.edit_id == Some(id) {
@@ -985,6 +999,29 @@ impl ForceView {
             .start_input
             .update(cx, |input, cx| input.focus(window, cx));
         cx.notify();
+    }
+
+    pub(crate) fn cycle_agenda_editor_focus(
+        &self,
+        backwards: bool,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let first = window.focused(cx);
+        loop {
+            if backwards {
+                window.focus_prev();
+            } else {
+                window.focus_next();
+            }
+            if self.agenda.editor_focus.contains_focused(window, cx) {
+                return;
+            }
+            if window.focused(cx) == first {
+                break;
+            }
+        }
+        self.focus_agenda_editor(window, cx);
     }
 
     fn focus_agenda_editor(&self, window: &mut Window, cx: &mut Context<Self>) {

@@ -172,7 +172,7 @@ impl ForceView {
                             .child(control_label("新任务", PAPER))
                             .tooltip(shortcut("新任务", "N", "N"))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.new_task(window, cx);
+                                this.open_task_dialog(window, cx);
                             })),
                     )
                     .child(
@@ -343,6 +343,7 @@ impl ForceView {
 impl Render for ForceView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.sync_tag_picker(window, cx);
+        self.sync_task_dialog_picker(window, cx);
         self.sync_record_editor_picker(window, cx);
         self.sync_completion_editor_picker(window, cx);
         self.sync_agenda_tag_picker(window, cx);
@@ -378,6 +379,9 @@ impl Render for ForceView {
             })
             .when(self.completion_editor.visible, |body| {
                 body.child(self.completion_editor(window, cx))
+            })
+            .when(self.task_editor.visible, |body| {
+                body.child(self.task_dialog(window, cx))
             })
             .when(self.time_picker.read(cx).is_open(), |body| {
                 body.child(self.time_picker.clone())

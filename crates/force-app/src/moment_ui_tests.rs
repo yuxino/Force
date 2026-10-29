@@ -425,8 +425,9 @@ fn moment_ui_editor_delete_preserves_calendar_plan_draft_and_running_timer(
             assert_inside(manager.bounds(selector), editor);
         }
         assert!(
-            manager.bounds("cancel-moment").right() < manager.bounds("delete-moment-editor").left()
+            manager.bounds("delete-moment-editor").right() < manager.bounds("cancel-moment").left()
         );
+        assert!(manager.bounds("cancel-moment").right() < manager.bounds("save-moment").left());
         manager.click("delete-moment-editor");
         assert!(manager.cx.has_pending_prompt());
         manager.cx.simulate_prompt_answer("取消");
@@ -520,11 +521,11 @@ fn moment_ui_editor_fits_and_record_search_does_not_classify_point_notes(cx: &mu
             assert_inside(manager.bounds(selector), editor);
         }
         let content = manager.bounds("moment-content");
-        assert_eq!(
-            content.size.height,
-            px(120.),
+        assert!(
+            content.size.height >= px(120.),
             "multiple note lines must stay visible"
         );
+        assert_inside(content, manager.bounds("moment-editor-fields"));
         let date = manager.bounds("moment-date");
         let time = manager.bounds("moment-time");
         assert!(content.bottom() <= date.top());

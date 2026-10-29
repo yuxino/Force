@@ -39,6 +39,8 @@ pub(crate) enum TaskDestination {
     Task(i64),
     Session(i64),
     AgendaPlan(i64),
+    SaveDialog(u64),
+    StartDialog(u64),
 }
 
 #[derive(Clone)]
@@ -70,6 +72,7 @@ pub(crate) struct ForceView {
     pub(crate) time_picker: Entity<crate::time_picker::TimePicker>,
     pub(crate) agenda: crate::agenda_model::AgendaState,
     pub(crate) moments: crate::moment_model::MomentState,
+    pub(crate) task_editor: crate::task_editor_model::TaskDialogState,
     pub(crate) record_editor: crate::record_editor_model::RecordEditorState,
     pub(crate) completion_editor: crate::completion_editor_model::CompletionEditorState,
     pub(crate) record_moments: Vec<force_core::Moment>,
@@ -199,6 +202,7 @@ impl ForceView {
                 if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Focus
+                    && !this.task_editor.visible
                     && this.completed.is_none()
                     && (this.preparing || this.active.is_empty())
                 {
@@ -265,6 +269,7 @@ impl ForceView {
                 } else if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Focus
+                    && !this.task_editor.visible
                     && this.preparing
                     && this.countdown
                 {
@@ -281,6 +286,7 @@ impl ForceView {
                 } else if matches!(event, InputEvent::PressEnter { secondary: false })
                     && !this.compact
                     && this.page == Page::Focus
+                    && !this.task_editor.visible
                     && this.editing_duration.is_some()
                 {
                     this.save_duration(window, cx);
@@ -309,6 +315,7 @@ impl ForceView {
         });
         let agenda = crate::agenda_model::AgendaState::new(window, cx);
         let moments = crate::moment_model::MomentState::new(window, cx);
+        let task_editor = crate::task_editor_model::TaskDialogState::new(window, cx);
         let record_editor = crate::record_editor_model::RecordEditorState::new(window, cx);
         let completion_editor =
             crate::completion_editor_model::CompletionEditorState::new(window, cx);
@@ -319,6 +326,7 @@ impl ForceView {
         let mut view = Self {
             agenda,
             moments,
+            task_editor,
             record_editor,
             completion_editor,
             record_moments: Vec::new(),
@@ -513,6 +521,7 @@ impl ForceView {
             .find(|option| option.id == self.selected_tag)
             .map(|option| option.id);
         let enabled = self.page == Page::Focus
+            && !self.task_editor.visible
             && !self.compact
             && !self.storage_failed
             && self.completed.is_none()
@@ -1156,7 +1165,21 @@ impl ForceView {
                         if this.selected_task != selected || !this.preparing {
                             return;
                         }
+                        let dialog_generation = match destination {
+                            TaskDestination::SaveDialog(generation)
+                            | TaskDestination::StartDialog(generation) => Some(generation),
+                            _ => None,
+                        };
+                        if dialog_generation.is_some_and(|generation| {
+                            !this.task_editor.visible || this.task_editor.generation != generation
+                        }) {
+                            return;
+                        }
                         if choice == 0 {
+                            if dialog_generation.is_some() {
+                                this.focus_task_dialog(window, cx);
+                                return;
+                            }
                             if this.page == Page::Focus {
                                 this.task_input
                                     .update(cx, |input, cx| input.focus(window, cx));
@@ -1165,6 +1188,12 @@ impl ForceView {
                         }
                         if choice == 2 {
                             if !this.save_task_changes(cx) {
+                                if dialog_generation.is_some() {
+                                    this.task_editor.error =
+                                        Some("原任务未能保存，请重试。".to_owned());
+                                    this.focus_task_dialog(window, cx);
+                                    cx.notify();
+                                }
                                 return;
                             }
                         } else if this.selected_task.is_some() {
@@ -1183,6 +1212,8 @@ impl ForceView {
                             TaskDestination::AgendaPlan(id) => {
                                 this.start_plan_timer(id, window, cx)
                             }
+                            TaskDestination::SaveDialog(_) => this.save_task_dialog(window, cx),
+                            TaskDestination::StartDialog(_) => this.start_task_dialog(window, cx),
                         }
                         this.discarding_untitled_task = false;
                     });
@@ -1270,7 +1301,13 @@ impl ForceView {
         }
     }
 
-    fn accept_started(&mut self, session: Session, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn accept_started(
+        &mut self,
+        session: Session,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.suspend_task_dialog(window, cx);
         if session.tag_kind == TagKind::Focus {
             self.return_task = session.task_id;
             self.return_target_seconds = session.target_seconds;
@@ -1342,6 +1379,8 @@ impl ForceView {
         }
         if self.time_picker.read(cx).is_open() {
             self.time_picker.focus_handle(cx).focus(window);
+        } else if self.task_editor.visible {
+            self.focus_task_dialog(window, cx);
         } else if self.completion_editor.visible {
             self.focus_completion_editor(window, cx);
         } else if self.record_editor.visible {
@@ -1374,6 +1413,9 @@ impl ForceView {
             .tag_picker
             .update(cx, |picker, cx| picker.dismiss(window, false, cx));
         self.tag_picker
+            .update(cx, |picker, cx| picker.dismiss(window, false, cx));
+        self.task_editor
+            .tag_picker
             .update(cx, |picker, cx| picker.dismiss(window, false, cx));
         window.focus(&self.focus_handle);
         self.compact = true;
@@ -1412,6 +1454,7 @@ impl ForceView {
             self.notify("这项计时已结束，请刷新后重试。", cx);
             return;
         };
+        self.suspend_task_dialog(window, cx);
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
@@ -1440,6 +1483,7 @@ impl ForceView {
 
     pub(crate) fn select_task(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
         if self.selected_task == Some(id) && self.preparing {
+            self.suspend_task_dialog(window, cx);
             return;
         }
         if self.confirm_task_changes(TaskDestination::Task(id), window, cx) {
@@ -1449,6 +1493,7 @@ impl ForceView {
             self.notify("这件事已变更，请刷新后重试。", cx);
             return;
         };
+        self.suspend_task_dialog(window, cx);
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
@@ -1491,7 +1536,21 @@ impl ForceView {
         self.set_expanded(true, window, cx);
     }
 
+    /// The dialog already protected the previous draft before writing. Adopt
+    /// its newly created task without a second prompt after storage refresh.
+    pub(crate) fn select_created_task(
+        &mut self,
+        id: i64,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.suspend_untitled_task(cx);
+        self.preparing = false;
+        self.select_task(id, window, cx);
+    }
+
     pub(crate) fn new_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_task_dialog(window, cx);
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
@@ -1563,6 +1622,7 @@ impl ForceView {
 
     /// Open the task already represented by the cat, preserving its draft.
     pub(crate) fn show_strip_task(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_task_dialog(window, cx);
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);
@@ -1622,7 +1682,7 @@ impl ForceView {
         } else if self.can_start_task(cx) {
             self.start(window, cx);
         } else {
-            self.new_task(window, cx);
+            self.open_task_dialog(window, cx);
         }
     }
 
@@ -2108,6 +2168,7 @@ impl ForceView {
     }
 
     pub(crate) fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_task_dialog(window, cx);
         self.time_picker
             .update(cx, |picker, cx| picker.dismiss(window, cx));
         self.suspend_moment(window, cx);
@@ -2134,6 +2195,12 @@ impl ForceView {
         if self.time_picker.read(cx).is_open() {
             self.time_picker
                 .update(cx, |picker, cx| picker.dismiss(window, cx));
+        } else if self.task_editor.visible && self.task_editor.tag_picker.read(cx).is_open() {
+            self.task_editor
+                .tag_picker
+                .update(cx, |picker, cx| picker.dismiss(window, true, cx));
+        } else if self.task_editor.visible {
+            self.suspend_task_dialog(window, cx);
         } else if self.completion_editor.visible && self.completion_editor.picker.read(cx).is_open()
         {
             self.completion_editor
@@ -2713,7 +2780,7 @@ fn read_return_context(directory: &Path) -> std::io::Result<Option<(i64, Option<
 
 type DayStatistics = (Stats, Stats);
 
-fn parse_goal_draft(value: &str) -> Option<u32> {
+pub(crate) fn parse_goal_draft(value: &str) -> Option<u32> {
     value
         .trim()
         .parse::<u32>()
@@ -2737,7 +2804,7 @@ fn optional_task_description(title: &str, activity: &str) -> String {
     }
 }
 
-fn task_title_error_for(value: &str, required: bool) -> Option<&'static str> {
+pub(crate) fn task_title_error_for(value: &str, required: bool) -> Option<&'static str> {
     let title = value.trim();
     if required && title.is_empty() {
         Some("请选择活动。")
