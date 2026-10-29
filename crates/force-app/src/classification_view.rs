@@ -58,17 +58,22 @@ impl ForceView {
                         .flex_col()
                         .child(
                             div()
+                                .debug_selector(move || format!("class-controls-{key}"))
+                                .w_full()
+                                .max_w(px(240.))
                                 .h(px(36.))
                                 .flex()
                                 .items_center()
                                 .gap(px(10.))
                                 .child(
                                     div()
+                                        .debug_selector(move || format!("class-name-{key}"))
+                                        .w(px(56.))
+                                        .flex_shrink_0()
                                         .text_size(px(14.))
                                         .text_color(rgb(foreground))
                                         .child(tag_class_label(class)),
                                 )
-                                .child(div().flex_1())
                                 .child(
                                     button(SharedString::from(format!("edit-class-color-{key}")))
                                         .debug_selector(move || format!("edit-class-color-{key}"))

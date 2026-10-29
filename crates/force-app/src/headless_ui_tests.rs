@@ -1185,7 +1185,7 @@ fn strip_control_bounds(strip: &mut VisualTestContext) -> [Bounds<Pixels>; 2] {
     }
     // Measure the real information boxes, not only the enclosing panel. Text
     // and controls stay usable as the optional finish action appears/disappears.
-    assert!(text.size.width >= px(120.));
+    assert!(text.size.width >= px(110.));
     assert!(status.size.width >= px(120.));
     assert!((text.left() - status.left()).abs() <= px(1.));
     assert!(text.bottom() < status.top());
@@ -1499,7 +1499,14 @@ fn headless_ui_strip_dispatches_to_the_same_manager_model_without_window_reborro
         view.navigate(Page::Records, window, cx);
         view.hide_manager(window, cx);
     });
-    click_test_strip(&strip_view, &mut strip, "strip-open");
+    let details = strip.debug_bounds("strip-details").unwrap();
+    let details_label = strip.debug_bounds("strip-details-label").unwrap();
+    let actions = strip.debug_bounds("strip-controls").unwrap();
+    assert_horizontally_inside(details, actions);
+    assert_horizontally_inside(details_label, details);
+    assert_eq!(details_label.size.width, px(22.));
+    assert!(details.left() >= strip.debug_bounds("strip-primary").unwrap().right());
+    click_test_strip(&strip_view, &mut strip, "strip-details");
     manager.view.read_with(&manager.cx, |view, _| {
         assert!(matches!(view.page, Page::Focus));
         assert!(!view.compact);

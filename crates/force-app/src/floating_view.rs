@@ -23,6 +23,7 @@ const DISCLOSURE_DURATION: Duration = Duration::from_millis(160);
 
 struct TimerFace {
     title: String,
+    title_help: String,
     status: String,
     seconds: i64,
     running: bool,
@@ -125,38 +126,27 @@ impl FloatingStrip {
             )
         };
         let paused = current.is_some_and(Session::is_paused);
-        let state = if model.storage_failed {
-            "打开 Force 重试"
-        } else if completed {
-            "已保存"
-        } else if paused {
-            "已暂停"
-        } else if current.is_some_and(|s| s.tag_kind == TagKind::Rest) {
-            "休息中"
-        } else if current.is_some_and(|s| s.target_seconds.is_none()) {
-            "已投入"
-        } else if current.is_some() {
-            "剩余"
+        let activity = current.or(model.completed.as_ref()).map_or_else(
+            || model.selected_activity_name().unwrap_or_default(),
+            |session| session.tag_name.as_str(),
+        );
+        let activity_detail = if activity == title { "" } else { activity };
+        let title_help = if activity_detail.is_empty() {
+            title.clone()
         } else {
-            "未开始"
+            format!("{activity} · {title}")
         };
         let status = if invalid_duration {
             "设置时长".to_owned()
         } else {
             model.toast.as_ref().filter(|_| model.compact).map_or_else(
                 || {
-                    if model.storage_failed || paused {
-                        state.to_owned()
-                    } else if completed {
-                        format!("已保存 · {}", clock(seconds))
-                    } else if let Some(session) = current {
-                        if session.tag_kind == TagKind::Rest {
-                            "休息中".to_owned()
-                        } else if session.target_seconds.is_some() {
-                            "剩余时间".to_owned()
-                        } else {
-                            "正计时".to_owned()
-                        }
+                    if model.storage_failed {
+                        "打开 Force 重试".to_owned()
+                    } else if completed || current.is_some() {
+                        // Time and timer state already have a stable place below
+                        // the cat. Use the drawer for the work being timed.
+                        activity_detail.to_owned()
                     } else if has_task_draft && model.task_tag_error().is_some() {
                         "选择活动".to_owned()
                     } else if model.task_title_error(cx).is_some() {
@@ -164,9 +154,9 @@ impl FloatingStrip {
                     } else if model.task_has_unsaved_changes(cx) {
                         "修改待保存".to_owned()
                     } else if model.countdown {
-                        "倒计时 · 未开始".to_owned()
+                        "倒计时".to_owned()
                     } else {
-                        "正计时 · 随时开始".to_owned()
+                        "正计时".to_owned()
                     }
                 },
                 |(message, _)| message.clone(),
@@ -176,6 +166,7 @@ impl FloatingStrip {
             idle: current.is_none() && !completed && !model.storage_failed && !has_task_draft,
             ready: model.can_start_task(cx),
             title,
+            title_help,
             status,
             seconds,
             running: current.is_some_and(Session::is_running),
@@ -557,7 +548,7 @@ impl FloatingStrip {
         };
         let session_id = if face.failed { None } else { face.session };
         let opens_task = face.failed || (!face.completed && face.session.is_none() && !face.ready);
-        let title_help = face.title.clone();
+        let title_help = face.title_help.clone();
         div()
             .debug_selector(|| "strip-drawer".into())
             .absolute()
@@ -585,6 +576,9 @@ impl FloatingStrip {
                             .w_full()
                             .h(px(18.))
                             .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
                             .rounded(px(3.))
                             .hover(|title| title.bg(rgb(0x292929)))
                             .cursor_pointer()
@@ -608,9 +602,15 @@ impl FloatingStrip {
                             .child(
                                 single_line(face.title.clone(), 12.)
                                     .debug_selector(|| "strip-title-text".into())
-                                    .w(px(128.))
+                                    .w(px(112.))
+                                    .flex_shrink_0()
                                     .font_weight(FontWeight::MEDIUM)
                                     .text_color(rgb(0xf5f5f5)),
+                            )
+                            .child(
+                                control_icon(Icon::new(IconName::ChevronRight), 0xaaaaaa)
+                                    .size(px(12.))
+                                    .flex_none(),
                             ),
                     )
                     .child(
@@ -643,6 +643,7 @@ impl FloatingStrip {
                                     .child(
                                         div()
                                             .w(px(label_width + 17.))
+                                            .flex_none()
                                             .flex()
                                             .items_center()
                                             .gap(px(5.))
@@ -681,6 +682,35 @@ impl FloatingStrip {
                                         },
                                     )),
                             )
+                            .when(
+                                face.completed && face.repeatable && !face.failed,
+                                |controls| {
+                                    controls.child(
+                                        button("bar-details")
+                                            .debug_selector(|| "strip-details".into())
+                                            .w(px(44.))
+                                            .h(px(24.))
+                                            .px_0()
+                                            .rounded(px(4.))
+                                            .justify_end()
+                                            .custom(cat_secondary_variant(cx))
+                                            .child(
+                                                single_line("详情", 11.)
+                                                    .debug_selector(|| "strip-details-label".into())
+                                                    .w(px(22.))
+                                                    .flex_none()
+                                                    .text_color(rgb(0xaaaaaa)),
+                                            )
+                                            .on_click(cx.listener(|this, _, _, cx| {
+                                                if this.drawer_controls_ready() {
+                                                    this.dispatch(cx, |model, window, cx| {
+                                                        model.show_strip_task(window, cx)
+                                                    });
+                                                }
+                                            })),
+                                    )
+                                },
+                            )
                             .children(face.session.filter(|_| !face.failed).map(|id| {
                                 button("bar-finish")
                                     .debug_selector(|| "strip-finish".into())
@@ -694,6 +724,7 @@ impl FloatingStrip {
                                         single_line("结束计时", 11.)
                                             .debug_selector(|| "strip-finish-label".into())
                                             .w(px(44.))
+                                            .flex_none()
                                             .text_color(rgb(0xaaaaaa)),
                                     )
                                     .on_click(cx.listener(move |this, _, _, cx| {
@@ -817,7 +848,7 @@ impl Render for FloatingStrip {
                                     .h(px(88.))
                                     .rounded(px(14.))
                                     .border_1()
-                                    .border_color(rgb(0x5c5c5c))
+                                    .border_color(rgb(0x303030))
                                     .bg(rgb(INK)),
                             );
                         let drawer = self.drawer(&face, cx);
@@ -923,10 +954,10 @@ fn cat_secondary_variant(cx: &App) -> ButtonCustomVariant {
 }
 
 fn activity_task_label(activity: &str, title: &str) -> String {
-    if activity.is_empty() || activity == title {
-        title.to_owned()
+    if title.is_empty() {
+        activity.to_owned()
     } else {
-        format!("{activity} · {title}")
+        title.to_owned()
     }
 }
 
@@ -1071,7 +1102,7 @@ mod tests {
             let face = cat.timer_face(cx);
             assert!(!face.idle && face.ready);
             assert_eq!(face.title, "学习");
-            assert_eq!(face.status, "正计时 · 随时开始");
+            assert_eq!(face.status, "正计时");
         });
     }
 
@@ -1100,7 +1131,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(face.ready);
-            assert_eq!(face.status, "正计时 · 随时开始");
+            assert_eq!(face.status, "正计时");
         });
         manager.view.update_in(&mut manager.cx, |view, window, cx| {
             view.task_input
@@ -1121,7 +1152,7 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(face.ready && !face.running);
-            assert_eq!(face.status, "正计时 · 随时开始");
+            assert_eq!(face.status, "正计时");
         });
     }
 
@@ -1384,7 +1415,7 @@ mod tests {
             let face = cat.timer_face(cx);
             assert!(!face.invalid_duration && face.ready);
             assert_eq!(face.compact_display(), ("00:00".into(), "待开始".into()));
-            assert_eq!(face.status, "正计时 · 随时开始");
+            assert_eq!(face.status, "正计时");
         });
         manager.view.update_in(&mut manager.cx, |view, _, cx| {
             view.countdown = true;
@@ -1399,7 +1430,9 @@ mod tests {
         cat.read_with(&manager.cx, |cat, cx| {
             let face = cat.timer_face(cx);
             assert!(!face.invalid_duration && face.running);
-            assert_eq!(face.title, "工作 · Running");
+            assert_eq!(face.title, "Running");
+            assert_eq!(face.title_help, "工作 · Running");
+            assert_eq!(face.status, "工作");
             let model = cat.model.read(cx);
             let session = model.strip_session().unwrap();
             assert_eq!(face.session, Some(session.id));
@@ -1498,6 +1531,7 @@ mod tests {
     fn paused_readout_keeps_the_same_complete_clock_for_long_sessions() {
         let mut face = TimerFace {
             title: String::new(),
+            title_help: String::new(),
             status: String::new(),
             seconds: 100 * 3600 + 135,
             running: false,
@@ -1538,6 +1572,7 @@ mod tests {
     fn dock_progress_requires_a_countdown_and_yields_to_pause_or_error() {
         let mut face = TimerFace {
             title: String::new(),
+            title_help: String::new(),
             status: String::new(),
             seconds: 0,
             running: false,

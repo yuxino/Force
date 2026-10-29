@@ -12,24 +12,25 @@ management must not move the clock. Starting or resuming a timer preserves the
 windows the user has open; closing management is explicit.
 macOS and Windows hide management on close; Linux currently minimizes it.
 
-The primary navigation has 日历 and 记录. 日历 is the stable scheduling and
-review surface; 记录 supports date-based detail. Task/timer details are contextual,
-without a third primary navigation destination. Settings is a secondary gear
-control. Clock pinning belongs in settings; CSV export appears only in records.
-Both windows share one model and store. Inputs belong to management, and clock
-actions dispatch to that window after the current window borrow ends.
+The primary navigation has 日历, 记录 and 分析. Calendar handles scheduling and
+review, records show day detail, and analysis shows trends. Task/timer details
+are contextual. Settings is a secondary gear control. Clock pinning belongs in
+settings; CSV export appears only in records. Both windows share one model and
+store. Clock actions dispatch to management after the current window borrow ends.
 
 The clock prioritizes the running session. Browsing a paused task in management
 must not replace that timer or retarget its controls. Without a running session,
-the clock may show the selected paused session or completion state. Keep the
-compact readout inside the cream-colored Siamese cat. Its expanded black panel contains the
-task title, status and one primary action: 开始, 暂停, 继续, 查看本轮,
-查看任务 or 打开 Force as appropriate. Show 结束 only when the active or
-paused session can be modified. Clicking the task title opens its management
-detail without replacing the selected task or its draft. A short click animates
-the drawing while its hitbox remains still; dragging does not trigger that
-feedback. Click the cat again to collapse it; do not add a duplicate collapse button.
-Do not add a separate open button or hover tooltips to the clock.
+it may show the selected paused session or saved-round state. Keep the complete
+readout and state below the Siamese cat's paws. The expanded black panel uses
+the specific task description first and its activity on the second line when
+different, without repeating the readout or state. A title chevron opens details;
+its tooltip retains the full activity and description. Keep the action baseline
+stable even when there is no secondary text. Show 结束计时 for active or paused
+sessions. Saved focus rounds offer 再计一次 and a quiet 详情 action; legacy rest
+rounds offer only 查看详情. Preserve the selected task and drafts when navigating.
+A short click animates the cat while its hitbox remains still; dragging does not
+trigger that feedback. Clicking the cat again collapses it. Keep the compact cat
+free of hover tooltips and duplicate open/collapse buttons.
 
 ## Stable focus workspace
 
@@ -334,3 +335,13 @@ space, not an invitation to add helper prose to pristine forms.
 In the day timeline, pending tasks are separated by horizontal rules rather than
 individual boxes. Hide an hour label only while the current-time label overlaps
 it; retain the hour grid line and its click target.
+
+## Dense review surfaces
+
+On records, do not reserve an empty point-in-time section before the actual log.
+When a date has no notes, keep its date-specific 随手记 action beside search.
+Dates with notes retain the note list and search feedback. Keep the year activity
+grid, day summary, search and classification filters, with compact spacing so a
+complete record is visible at the minimum window size. Classification settings
+keep each name and color action together within 240 points instead of pushing
+those controls to opposite sides of the entire column.
