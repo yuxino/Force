@@ -99,6 +99,10 @@ impl AssetSource for Assets {
         }
         let custom: Option<&'static [u8]> = match path {
             "force-cat-blink.png" => Some(include_bytes!("../../../assets/cat-blink.png")),
+            "force-cat-grip-left.png" => Some(include_bytes!("../../../assets/cat-grip-left.png")),
+            "force-cat-grip-right.png" => {
+                Some(include_bytes!("../../../assets/cat-grip-right.png"))
+            }
             "force-cat-clock.png" => Some(include_bytes!("../../../assets/cat-clock.png")),
             "force-cat-side-expanded-clock.svg" => Some(include_bytes!(
                 "../../../assets/cat-side-expanded-clock.svg"
@@ -331,7 +335,7 @@ fn main() -> anyhow::Result<()> {
                 window_background: WindowBackgroundAppearance::Transparent,
                 window_decorations: Some(WindowDecorations::Client),
                 window_min_size: Some(size(
-                    px(platform::STRIP_DOCKED_WIDTH),
+                    px(platform::STRIP_DOCK_HANDLE_WIDTH),
                     px(platform::STRIP_DOCKED_HEIGHT),
                 )),
                 app_id: Some("app.yuxino.force".into()),
@@ -451,6 +455,8 @@ mod asset_tests {
             "force-wordmark.png",
             "force-cat-clock.png",
             "force-cat-blink.png",
+            "force-cat-grip-left.png",
+            "force-cat-grip-right.png",
         ] {
             let ImageSource::Resource(Resource::Embedded(path)) = embedded_image_source(name)
             else {

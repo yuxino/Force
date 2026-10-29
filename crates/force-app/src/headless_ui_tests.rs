@@ -1136,24 +1136,7 @@ fn open_test_strip(manager: &mut ManagerHarness) -> (Entity<FloatingStrip>, Visu
 }
 
 fn refresh_test_strip(view: &Entity<FloatingStrip>, strip: &mut VisualTestContext) {
-    let dimensions = view.read_with(&*strip, |view, _| {
-        if view.expanded {
-            size(
-                px(crate::floating_view::EXPANDED_WIDTH),
-                px(crate::floating_view::EXPANDED_HEIGHT),
-            )
-        } else if view.docked.is_some() {
-            size(
-                px(crate::floating_view::DOCK_WIDTH),
-                px(crate::floating_view::DOCK_HEIGHT),
-            )
-        } else {
-            size(
-                px(crate::platform::STRIP_WIDTH),
-                px(crate::platform::STRIP_HEIGHT),
-            )
-        }
-    });
+    let dimensions = view.read_with(&*strip, |view, cx| view.window_dimensions(cx));
     // Native reshaping is checked separately. TestPlatform does not deliver the
     // native resize notification, so supply its viewport explicitly.
     strip.simulate_resize(dimensions);
@@ -1354,6 +1337,12 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
         let root = strip.debug_bounds("strip-root").unwrap();
         let dock = strip.debug_bounds("strip-dock").unwrap();
         let controls = strip.debug_bounds("strip-controls").unwrap();
+        assert_eq!(root.size, size(px(216.), px(104.)));
+        assert_eq!(dock.size, size(px(44.), px(24.)));
+        match edge {
+            crate::platform::DockEdge::Left => assert_eq!(dock.left(), root.left()),
+            crate::platform::DockEdge::Right => assert_eq!(dock.right(), root.right()),
+        }
         assert_horizontally_inside(dock, root);
         assert_horizontally_inside(controls, root);
         assert!(controls.right() <= dock.left() || controls.left() >= dock.right());
@@ -1372,6 +1361,81 @@ fn headless_ui_cat_clock_disclosure_preserves_running_timer_and_manager_visibili
     }
     strip.update(|window, _| window.remove_window());
     strip.run_until_parked();
+}
+
+#[gpui::test]
+fn headless_ui_docked_paw_opens_a_menu_without_starting_idle_or_prepared_work(
+    cx: &mut TestAppContext,
+) {
+    for edge in [
+        crate::platform::DockEdge::Left,
+        crate::platform::DockEdge::Right,
+    ] {
+        for prepared in [false, true] {
+            let mut manager = ManagerHarness::new(cx, 1040., 780.);
+            manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                view.new_task(window, cx);
+                if prepared {
+                    view.selected_tag = 1;
+                    view.task_input.update(cx, |input, cx| {
+                        input.set_value("Prepared draft", window, cx)
+                    });
+                }
+                view.hide_manager(window, cx);
+            });
+            let (cat, mut strip) = open_test_strip(&mut manager);
+            cat.update(&mut strip, |cat, cx| {
+                cat.docked = Some(edge);
+                cx.notify();
+            });
+            refresh_test_strip(&cat, &mut strip);
+            assert_eq!(
+                strip.debug_bounds("strip-root").unwrap().size,
+                size(px(20.), px(24.))
+            );
+            click_test_strip(&cat, &mut strip, "strip-dock");
+            let root = strip.debug_bounds("strip-root").unwrap();
+            let dock = strip.debug_bounds("strip-dock").unwrap();
+            let drawer = strip.debug_bounds("strip-drawer").unwrap();
+            assert_eq!(root.size, size(px(216.), px(104.)));
+            assert_eq!(dock.size, size(px(20.), px(24.)));
+            assert_eq!(
+                drawer.size,
+                size(px(164.), px(if prepared { 96. } else { 40. }))
+            );
+            assert_horizontally_inside(dock, root);
+            assert_horizontally_inside(drawer, root);
+            match edge {
+                crate::platform::DockEdge::Left => assert_eq!(dock.left(), root.left()),
+                crate::platform::DockEdge::Right => assert_eq!(dock.right(), root.right()),
+            }
+            manager.view.read_with(&manager.cx, |view, cx| {
+                assert!(view.compact && view.active.is_empty() && view.tasks.is_empty());
+                assert_eq!(
+                    view.task_input.read(cx).value(),
+                    if prepared { "Prepared draft" } else { "" }
+                );
+            });
+            click_test_strip(&cat, &mut strip, "strip-dock");
+            assert_eq!(
+                strip.debug_bounds("strip-root").unwrap().size,
+                size(px(20.), px(24.))
+            );
+            if !prepared {
+                click_test_strip(&cat, &mut strip, "strip-dock");
+                click_test_strip(&cat, &mut strip, "strip-new-task");
+                manager.view.read_with(&manager.cx, |view, _| {
+                    assert!(!view.compact && view.task_editor.visible);
+                    assert!(view.active.is_empty() && view.tasks.is_empty());
+                });
+                cat.read_with(&strip, |cat, _| {
+                    assert!(!cat.expanded && !cat.drawer_visible)
+                });
+            }
+            strip.update(|window, _| window.remove_window());
+            strip.run_until_parked();
+        }
+    }
 }
 
 #[gpui::test]
