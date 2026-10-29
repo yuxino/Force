@@ -15,8 +15,11 @@ pub(crate) const STRIP_WIDTH: f32 = 88.;
 pub(crate) const STRIP_HEIGHT: f32 = 128.;
 pub(crate) const STRIP_EXPANDED_WIDTH: f32 = 244.;
 pub(crate) const STRIP_EXPANDED_HEIGHT: f32 = 152.;
-pub(crate) const STRIP_DOCKED_WIDTH: f32 = 48.;
-pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 100.;
+pub(crate) const STRIP_DOCKED_WIDTH: f32 = 44.;
+pub(crate) const STRIP_DOCKED_HEIGHT: f32 = 24.;
+pub(crate) const STRIP_DOCK_HANDLE_WIDTH: f32 = 20.;
+pub(crate) const STRIP_DOCK_EXPANDED_WIDTH: f32 = 216.;
+pub(crate) const STRIP_DOCK_EXPANDED_HEIGHT: f32 = 104.;
 
 // Linux retains free movement and shares the geometry API, but never constructs
 // a native dock edge. Geometry tests still exercise both edges on every platform.
@@ -972,7 +975,8 @@ pub(crate) fn play_time_tick() {
 #[cfg(test)]
 mod floating_geometry_tests {
     use super::{
-        DockEdge, STRIP_DOCKED_HEIGHT, STRIP_DOCKED_WIDTH, dock_edge_for_bounds, floating_geometry,
+        DockEdge, STRIP_DOCK_EXPANDED_HEIGHT, STRIP_DOCK_EXPANDED_WIDTH, STRIP_DOCK_HANDLE_WIDTH,
+        STRIP_DOCKED_HEIGHT, STRIP_DOCKED_WIDTH, dock_edge_for_bounds, floating_geometry,
         floating_geometry_from_right,
     };
     use gpui::{Bounds, Pixels, point, px, size};
@@ -1000,39 +1004,76 @@ mod floating_geometry_tests {
         let available = rect(0., 24., 1440., 856.);
         let free_size = size(px(88.), px(128.));
         assert_eq!(
-            floating_geometry_from_right(rect(1000., 200., 244., 152.), free_size, available),
-            rect(1156., 200., 88., 128.)
+            floating_geometry_from_right(
+                rect(
+                    1000.,
+                    200.,
+                    STRIP_DOCK_EXPANDED_WIDTH,
+                    STRIP_DOCK_EXPANDED_HEIGHT
+                ),
+                free_size,
+                available,
+            ),
+            rect(1128., 200., 88., 128.)
         );
         assert_eq!(
-            floating_geometry_from_right(rect(1240., 800., 244., 152.), free_size, available),
+            floating_geometry_from_right(
+                rect(
+                    1240.,
+                    800.,
+                    STRIP_DOCK_EXPANDED_WIDTH,
+                    STRIP_DOCK_EXPANDED_HEIGHT
+                ),
+                free_size,
+                available,
+            ),
             rect(1344., 744., 88., 128.)
         );
     }
 
     #[test]
-    fn both_docked_shapes_keep_the_same_edge_and_stay_inside_the_work_area() {
+    fn paw_and_timer_docks_keep_the_same_edge_when_the_compact_panel_opens_and_closes() {
         let available = rect(-1920., 50., 1920., 1030.);
-        for (edge, expected_x, closed_x) in [
-            (DockEdge::Left, -1920., -1920.),
-            (DockEdge::Right, -240., -STRIP_DOCKED_WIDTH),
-        ] {
-            let expanded = floating_geometry(
-                rect(-600., 200., 88., 128.),
-                size(px(240.), px(192.)),
-                available,
-                Some(edge),
-            );
-            assert_eq!(expanded, rect(expected_x, 200., 240., 192.));
-            let folded = floating_geometry(
-                expanded,
-                size(px(STRIP_DOCKED_WIDTH), px(STRIP_DOCKED_HEIGHT)),
-                available,
-                Some(edge),
-            );
-            assert_eq!(
-                folded,
-                rect(closed_x, 200., STRIP_DOCKED_WIDTH, STRIP_DOCKED_HEIGHT)
-            );
+        for edge in [DockEdge::Left, DockEdge::Right] {
+            for width in [STRIP_DOCK_HANDLE_WIDTH, STRIP_DOCKED_WIDTH] {
+                let expanded = floating_geometry(
+                    rect(-600., 200., width, STRIP_DOCKED_HEIGHT),
+                    size(
+                        px(STRIP_DOCK_EXPANDED_WIDTH),
+                        px(STRIP_DOCK_EXPANDED_HEIGHT),
+                    ),
+                    available,
+                    Some(edge),
+                );
+                let expanded_x = match edge {
+                    DockEdge::Left => -1920.,
+                    DockEdge::Right => -STRIP_DOCK_EXPANDED_WIDTH,
+                };
+                assert_eq!(expanded, rect(expanded_x, 200., 216., 104.));
+                let folded = floating_geometry(
+                    expanded,
+                    size(px(width), px(STRIP_DOCKED_HEIGHT)),
+                    available,
+                    Some(edge),
+                );
+                let folded_x = match edge {
+                    DockEdge::Left => -1920.,
+                    DockEdge::Right => -width,
+                };
+                assert_eq!(folded, rect(folded_x, 200., width, 24.));
+                assert_eq!(
+                    floating_geometry(
+                        folded,
+                        size(
+                            px(STRIP_DOCK_EXPANDED_WIDTH),
+                            px(STRIP_DOCK_EXPANDED_HEIGHT)
+                        ),
+                        available,
+                        Some(edge),
+                    ),
+                    expanded
+                );
+            }
         }
     }
 

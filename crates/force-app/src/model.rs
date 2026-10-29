@@ -2545,6 +2545,7 @@ pub(crate) struct FloatingStrip {
     pub(crate) face_click_serial: u64,
     pub(crate) face_click_started: Option<Instant>,
     pub(crate) docked: Option<crate::platform::DockEdge>,
+    pub(crate) dock_presentation: Option<crate::floating_view::DockPresentation>,
     pub(crate) drag_start: Option<gpui::Point<gpui::Pixels>>,
     #[cfg(target_os = "macos")]
     pub(crate) drag_event: Option<crate::platform::WindowDragEvent>,
@@ -2593,6 +2594,7 @@ impl FloatingStrip {
             face_click_serial: 0,
             face_click_started: None,
             docked: None,
+            dock_presentation: None,
             drag_start: None,
             #[cfg(target_os = "macos")]
             drag_event: None,

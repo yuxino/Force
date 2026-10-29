@@ -20,6 +20,27 @@ pub(crate) const DOCK_WIDTH: f32 = platform::STRIP_DOCKED_WIDTH;
 pub(crate) const DOCK_HEIGHT: f32 = platform::STRIP_DOCKED_HEIGHT;
 const CAT_CLICK_DURATION: Duration = Duration::from_millis(480);
 const DISCLOSURE_DURATION: Duration = Duration::from_millis(160);
+const DOCK_PANEL_WIDTH: f32 = 164.;
+const DOCK_PANEL_HEIGHT: f32 = 96.;
+const DOCK_PANEL_GAP: f32 = 8.;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum DockPresentation {
+    Handle,
+    Readout,
+}
+
+impl DockPresentation {
+    fn dimensions(self) -> Size<Pixels> {
+        size(
+            px(match self {
+                Self::Handle => platform::STRIP_DOCK_HANDLE_WIDTH,
+                Self::Readout => DOCK_WIDTH,
+            }),
+            px(DOCK_HEIGHT),
+        )
+    }
+}
 
 struct TimerFace {
     title: String,
@@ -43,8 +64,12 @@ impl TimerFace {
         self.paused && !self.failed
     }
 
-    fn dock_progress(&self) -> Option<f32> {
-        self.progress.filter(|_| !self.failed && !self.paused)
+    fn dock_presentation(&self) -> DockPresentation {
+        if self.failed || self.invalid_duration || self.session.is_some() || self.completed {
+            DockPresentation::Readout
+        } else {
+            DockPresentation::Handle
+        }
     }
 
     fn dock_display(&self) -> (String, String) {
@@ -52,11 +77,55 @@ impl TimerFace {
             ("重试".to_owned(), String::new())
         } else if self.invalid_duration {
             ("设置".to_owned(), String::new())
-        } else if self.idle {
-            ("开始".to_owned(), String::new())
+        } else if self.dock_presentation() == DockPresentation::Handle {
+            (String::new(), String::new())
         } else {
             // Saved rounds retain their actual duration just like paused ones.
             compact_time(self.seconds)
+        }
+    }
+
+    fn primary_label(&self) -> &'static str {
+        if self.failed {
+            "打开 Force"
+        } else if self.repeatable {
+            "再计一次"
+        } else if self.completed {
+            "查看详情"
+        } else if self.running {
+            "暂停"
+        } else if self.session.is_some() {
+            "继续"
+        } else if self.ready {
+            "开始"
+        } else {
+            "查看任务"
+        }
+    }
+
+    fn primary_opens_task(&self) -> bool {
+        self.failed || (!self.completed && self.session.is_none() && !self.ready)
+    }
+
+    fn panel_state(&self) -> &'static str {
+        if self.failed {
+            "数据错误"
+        } else if self.invalid_duration {
+            "待设置"
+        } else if self.completed {
+            "已保存"
+        } else if self.running {
+            if self.progress.is_some() {
+                "剩余"
+            } else {
+                "正计时"
+            }
+        } else if self.paused {
+            "已暂停"
+        } else if self.ready {
+            "待开始"
+        } else {
+            "待设置"
         }
     }
 
@@ -248,14 +317,27 @@ impl FloatingStrip {
         cx.notify();
     }
 
-    fn reshape(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let dimensions = if self.expanded {
+    pub(crate) fn window_dimensions(&self, cx: &App) -> Size<Pixels> {
+        if self.docked.is_some() {
+            if self.expanded {
+                size(
+                    px(platform::STRIP_DOCK_EXPANDED_WIDTH),
+                    px(platform::STRIP_DOCK_EXPANDED_HEIGHT),
+                )
+            } else {
+                self.timer_face(cx).dock_presentation().dimensions()
+            }
+        } else if self.expanded {
             size(px(EXPANDED_WIDTH), px(EXPANDED_HEIGHT))
-        } else if self.docked.is_some() {
-            size(px(DOCK_WIDTH), px(DOCK_HEIGHT))
         } else {
             size(px(platform::STRIP_WIDTH), px(platform::STRIP_HEIGHT))
-        };
+        }
+    }
+
+    fn reshape(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let presentation = self.timer_face(cx).dock_presentation();
+        self.dock_presentation = Some(presentation);
+        let dimensions = self.window_dimensions(cx);
         if let Err(error) = platform::reshape_floating(window, dimensions, self.docked, cx) {
             eprintln!("Force could not reshape the floating timer: {error}");
         }
@@ -273,9 +355,12 @@ impl FloatingStrip {
     fn begin_face_press(
         &mut self,
         event: &MouseDownEvent,
-        _window: &mut Window,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.docked.is_some() {
+            self.focus_handle.focus(window);
+        }
         // Dropping an earlier task cancels its release polling. The serial also
         // prevents a queued completion from settling a newer drag.
         self.drag_task = None;
@@ -289,7 +374,7 @@ impl FloatingStrip {
         {
             // TestPlatform has no native event, but ordinary click-to-expand
             // must still work there. Only a real drag requires this event.
-            self.drag_event = platform::capture_window_drag(_window).ok();
+            self.drag_event = platform::capture_window_drag(window).ok();
         }
         cx.notify();
     }
@@ -324,7 +409,9 @@ impl FloatingStrip {
         self.face_click_serial = self.face_click_serial.wrapping_add(1);
         self.face_click_started = Some(Instant::now());
         cx.notify();
-        if self.timer_face(cx).idle {
+        if self.docked.is_some() {
+            self.toggle_expanded(window, cx);
+        } else if self.timer_face(cx).idle {
             self.dispatch(cx, |model, window, cx| model.open_task_dialog(window, cx));
         } else {
             self.toggle_expanded(window, cx);
@@ -332,10 +419,19 @@ impl FloatingStrip {
     }
 
     pub(crate) fn model_changed(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.timer_face(cx).idle && self.drawer_visible {
+        let face = self.timer_face(cx);
+        let presentation = face.dock_presentation();
+        let shape_changed = self.dock_presentation != Some(presentation);
+        // Record intent before native callbacks can notify this model again.
+        self.dock_presentation = Some(presentation);
+        if self.docked.is_none() && face.idle && self.drawer_visible {
             self.disclosure_task = None;
             self.expanded = false;
             self.drawer_visible = false;
+            self.reshape(window, cx);
+        } else if self.docked.is_some() && !self.drawer_visible && shape_changed {
+            // Ticks replace only the readout. Idle/active class changes resize
+            // once; an open or closing panel keeps its native animation bounds.
             self.reshape(window, cx);
         }
         cx.notify();
@@ -541,21 +637,7 @@ impl FloatingStrip {
     }
 
     fn drawer(&self, face: &TimerFace, cx: &mut Context<Self>) -> Div {
-        let primary_label = if face.failed {
-            "打开 Force"
-        } else if face.repeatable {
-            "再计一次"
-        } else if face.completed {
-            "查看详情"
-        } else if face.running {
-            "暂停"
-        } else if face.session.is_some() {
-            "继续"
-        } else if face.ready {
-            "开始"
-        } else {
-            "查看任务"
-        };
+        let primary_label = face.primary_label();
         let primary_icon = if face.failed
             || (face.completed && !face.repeatable)
             || (!face.completed && !face.running && face.session.is_none() && !face.ready)
@@ -572,7 +654,7 @@ impl FloatingStrip {
             22.
         };
         let session_id = if face.failed { None } else { face.session };
-        let opens_task = face.failed || (!face.completed && face.session.is_none() && !face.ready);
+        let opens_task = face.primary_opens_task();
         let title_help = face.title_help.clone();
         let from_right = self.docked == Some(platform::DockEdge::Right);
         div()
@@ -767,16 +849,9 @@ impl FloatingStrip {
     }
 
     fn dock_face(&self, face: &TimerFace, cx: &mut Context<Self>) -> impl IntoElement {
-        let (readout, unit) = face.dock_display();
+        let presentation = face.dock_presentation();
+        let dimensions = presentation.dimensions();
         let left_edge = self.docked == Some(platform::DockEdge::Left);
-        let readout_size = if unit.is_empty() || readout.chars().count() > 2 {
-            11.
-        } else {
-            12.
-        };
-        // Keep this painted face independent of the native viewport while an
-        // edge resize settles. Only the readout has a background; the cat
-        // retains its transparent silhouette and peeks through the outer edge.
         div()
             .id("cat-clock-dock")
             .debug_selector(|| "strip-dock".into())
@@ -784,50 +859,74 @@ impl FloatingStrip {
             .top_0()
             .when(left_edge, |dock| dock.left_0())
             .when(!left_edge, |dock| dock.right_0())
-            .w(px(DOCK_WIDTH))
-            .h(px(DOCK_HEIGHT))
+            .w(dimensions.width)
+            .h(dimensions.height)
             .overflow_hidden()
             .cursor_pointer()
             .text_color(rgb(INK))
             .on_mouse_down(MouseButton::Left, cx.listener(Self::begin_face_press))
             .on_click(cx.listener(|this, _, window, cx| this.face_clicked(window, cx)))
-            .child(
+            .child(if presentation == DockPresentation::Handle {
+                let (asset, width, height, left, top) = if left_edge {
+                    ("force-cat-grip-left.png", 28.8716, 20.6226, -3.5992, 1.3385)
+                } else {
+                    (
+                        "force-cat-grip-right.png",
+                        28.1784,
+                        20.0949,
+                        -4.6490,
+                        1.6964,
+                    )
+                };
                 div()
                     .debug_selector(|| "strip-dock-artwork".into())
                     .absolute()
-                    .top_0()
-                    .left(px(if left_edge { -6. } else { 0. }))
-                    .w(px(54.))
-                    .h(px(54. * 112. / 76.))
-                    .child(img(crate::embedded_image_source("force-cat-clock.png")).size_full()),
-            )
-            .child(
-                div()
-                    .debug_selector(|| "strip-dock-readout-plate".into())
-                    .absolute()
-                    .top(px(80.))
                     .left_0()
-                    .w(px(DOCK_WIDTH))
-                    .h(px(20.))
-                    .rounded(px(8.))
-                    .bg(rgb(0xf7f7f7))
+                    .top_0()
+                    .size_full()
+                    .overflow_hidden()
+                    .child(
+                        img(crate::embedded_image_source(asset))
+                            .debug_selector(|| "strip-dock-paw-image".into())
+                            .absolute()
+                            .left(px(left))
+                            .top(px(top))
+                            .w(px(width))
+                            .h(px(height)),
+                    )
+                    .into_any_element()
+            } else {
+                let (readout, unit) = face.dock_display();
+                div()
+                    .debug_selector(|| "strip-dock-readout".into())
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .size_full()
+                    .bg(rgb(0xf8f8f8))
                     .border_1()
                     .border_color(rgb(0xd5d5d5))
+                    .when(left_edge, |readout| {
+                        readout.border_l_0().rounded_tr(px(5.)).rounded_br(px(5.))
+                    })
+                    .when(!left_edge, |readout| {
+                        readout.border_r_0().rounded_tl(px(5.)).rounded_bl(px(5.))
+                    })
                     .child(
                         div()
                             .debug_selector(|| "strip-dock-time".into())
                             .absolute()
+                            .left(px(1.))
                             .top_0()
-                            .left(px(2.))
-                            .w(px(34.))
-                            .h(px(16.))
+                            .w(px(32.))
+                            .h_full()
                             .flex()
                             .items_center()
                             .justify_center()
                             .gap(px(1.))
                             .font(timer_font(cx))
-                            .text_size(px(readout_size))
-                            .line_height(px(16.))
+                            .text_size(px(11.))
+                            .line_height(px(14.))
                             .font_weight(FontWeight::MEDIUM)
                             .child(
                                 div()
@@ -851,26 +950,25 @@ impl FloatingStrip {
                                 )
                             }),
                     )
-                    // The marker slot is always reserved so pauses and saved
-                    // rounds never shift the value or its time unit.
+                    // Reserve the state slot in every readout. Pause and save
+                    // never shift or replace the real recorded duration.
                     .child(
                         div()
                             .debug_selector(|| "strip-dock-state-slot".into())
                             .absolute()
-                            .top(px(5.))
-                            .left(px(38.))
-                            .w(px(6.))
-                            .h(px(8.))
-                            .text_color(rgb(MUTED))
+                            .left(px(37.))
+                            .top(px(9.))
+                            .size(px(5.))
+                            .text_color(rgb(0x656565))
                             .when(face.show_paused_mark(), |slot| {
                                 slot.child(
                                     div()
                                         .debug_selector(|| "strip-dock-paused-mark".into())
-                                        .size(px(6.))
+                                        .size_full()
                                         .child(
                                             Icon::default()
                                                 .path("force-icons/pause.svg")
-                                                .size(px(6.)),
+                                                .size(px(5.)),
                                         ),
                                 )
                             })
@@ -878,25 +976,301 @@ impl FloatingStrip {
                                 slot.child(
                                     div()
                                         .debug_selector(|| "strip-dock-saved-mark".into())
-                                        .size(px(6.))
-                                        .child(Icon::new(IconName::Check).size(px(6.))),
+                                        .size_full()
+                                        .child(Icon::new(IconName::Check).size(px(5.))),
                                 )
                             }),
                     )
-                    .children(face.dock_progress().map(|progress| {
+                    .into_any_element()
+            })
+    }
+
+    fn dock_panel(&self, face: &TimerFace, cx: &mut Context<Self>) -> Div {
+        let from_right = self.docked == Some(platform::DockEdge::Right);
+        let offset = face.dock_presentation().dimensions().width + px(DOCK_PANEL_GAP);
+        let panel = div()
+            .debug_selector(|| "strip-drawer".into())
+            .absolute()
+            .top_0()
+            .when(from_right, |panel| panel.right(offset))
+            .when(!from_right, |panel| panel.left(offset))
+            .w(px(DOCK_PANEL_WIDTH))
+            .h(px(if face.idle { 40. } else { DOCK_PANEL_HEIGHT }))
+            .rounded(px(9.))
+            .border_1()
+            .border_color(rgb(0x363636))
+            .bg(rgb(INK))
+            .text_color(rgb(0xf7f7f7));
+        if face.idle {
+            return panel.child(
+                div()
+                    .id("dock-new-task")
+                    .debug_selector(|| "strip-new-task".into())
+                    .absolute()
+                    .left_0()
+                    .top_0()
+                    .size_full()
+                    .rounded(px(9.))
+                    .cursor_pointer()
+                    .hover(|entry| entry.bg(rgb(0x303030)))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        if !this.drawer_controls_ready() {
+                            return;
+                        }
+                        this.toggle_expanded(window, cx);
+                        this.dispatch(cx, |model, window, cx| model.open_task_dialog(window, cx));
+                    }))
+                    .child(
                         div()
-                            .debug_selector(|| "strip-dock-progress".into())
                             .absolute()
-                            .top(px(17.))
-                            .left(px(3.))
-                            .w(px(40.))
-                            .h(px(1.))
-                            .rounded_full()
-                            .overflow_hidden()
-                            .bg(rgb(0xd5d5d5))
-                            .child(div().h_full().w(relative(progress)).bg(rgb(INK)))
+                            .left(px(12.))
+                            .top(px(12.))
+                            .text_size(px(12.))
+                            .line_height(px(16.))
+                            .child("新任务"),
+                    )
+                    .child(
+                        div()
+                            .absolute()
+                            .right(px(12.))
+                            .top(px(14.))
+                            .size(px(12.))
+                            .child(control_icon(Icon::new(IconName::Plus), 0xaaaaaa).size(px(12.))),
+                    ),
+            );
+        }
+
+        let session_id = if face.failed { None } else { face.session };
+        let title_help = face.title_help.clone();
+        let primary_label = face.primary_label();
+        let opens_task = face.primary_opens_task();
+        let has_details = face.completed && face.repeatable && !face.failed;
+        let has_secondary = session_id.is_some() || has_details;
+        let action_width = if has_secondary { 70. } else { 148. };
+        let has_clock = !face.failed
+            && !face.invalid_duration
+            && (face.session.is_some() || face.completed || face.ready);
+        let body = if face.failed {
+            "打开 Force 重试".to_owned()
+        } else if face.invalid_duration {
+            "设置时长".to_owned()
+        } else if has_clock {
+            compact_clock(face.seconds)
+        } else {
+            face.status.clone()
+        };
+        panel
+            .child(
+                div()
+                    .id("dock-task-details")
+                    .debug_selector(|| "strip-open".into())
+                    .absolute()
+                    .left(px(12.))
+                    .top(px(8.))
+                    .w(px(90.))
+                    .h(px(18.))
+                    .rounded(px(3.))
+                    .cursor_pointer()
+                    .hover(|title| title.bg(rgb(0x292929)))
+                    .tooltip(move |window, cx| {
+                        gpui_component::tooltip::Tooltip::new(title_help.clone()).build(window, cx)
+                    })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        if !this.drawer_controls_ready() {
+                            return;
+                        }
+                        this.dispatch(cx, move |model, window, cx| {
+                            if let Some(id) = session_id {
+                                model.show_manager(window, cx);
+                                model.select_session(id, window, cx);
+                            } else {
+                                model.show_strip_task(window, cx);
+                            }
+                        });
+                    }))
+                    .child(
+                        single_line(face.title.clone(), 12.)
+                            .debug_selector(|| "strip-title-text".into())
+                            .w(px(90.))
+                            .font_weight(FontWeight::MEDIUM),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "strip-status".into())
+                    .absolute()
+                    .left(px(108.))
+                    .top(px(10.))
+                    .w(px(44.))
+                    .h(px(14.))
+                    .flex()
+                    .justify_end()
+                    .text_size(px(11.))
+                    .line_height(px(14.))
+                    .text_color(rgb(0xaaaaaa))
+                    .child(div().flex_none().child(face.panel_state())),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "strip-panel-time".into())
+                    .absolute()
+                    .left(px(12.))
+                    .top(px(29.))
+                    .w(px(140.))
+                    .h(px(26.))
+                    .flex()
+                    .items_center()
+                    .font(timer_font(cx))
+                    .text_size(px(if has_clock { 20. } else { 12. }))
+                    .line_height(px(25.))
+                    .child(
+                        div()
+                            .debug_selector(|| "strip-panel-time-text".into())
+                            .flex_none()
+                            .child(body),
+                    ),
+            )
+            .child(
+                div()
+                    .debug_selector(|| "strip-controls".into())
+                    .absolute()
+                    .left(px(8.))
+                    .top(px(64.))
+                    .w(px(148.))
+                    .h(px(24.))
+                    .flex()
+                    .gap(px(6.))
+                    .child(
+                        button("dock-primary")
+                            .debug_selector(|| "strip-primary".into())
+                            .w(px(action_width))
+                            .h(px(24.))
+                            .px_0()
+                            .rounded(px(4.))
+                            .text_size(px(11.))
+                            .custom(cat_secondary_variant(cx).foreground(rgb(0xf7f7f7).into()))
+                            .child(
+                                div()
+                                    .debug_selector(|| "strip-primary-label".into())
+                                    .flex_none()
+                                    .child(primary_label),
+                            )
+                            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                                if this.drawer_controls_ready() && event.click_count() == 1 {
+                                    this.dispatch(cx, move |model, window, cx| {
+                                        if opens_task {
+                                            model.show_strip_task(window, cx);
+                                        } else {
+                                            model.strip_primary_action(window, cx);
+                                        }
+                                    });
+                                }
+                            })),
+                    )
+                    .when(has_details, |controls| {
+                        controls.child(
+                            button("dock-details")
+                                .debug_selector(|| "strip-details".into())
+                                .w(px(72.))
+                                .h(px(24.))
+                                .px_0()
+                                .rounded(px(4.))
+                                .text_size(px(11.))
+                                .custom(cat_secondary_variant(cx))
+                                .child(
+                                    div()
+                                        .debug_selector(|| "strip-details-label".into())
+                                        .flex_none()
+                                        .child("详情"),
+                                )
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    if this.drawer_controls_ready() {
+                                        this.dispatch(cx, |model, window, cx| {
+                                            model.show_strip_task(window, cx)
+                                        });
+                                    }
+                                })),
+                        )
+                    })
+                    .children(session_id.map(|id| {
+                        button("dock-finish")
+                            .debug_selector(|| "strip-finish".into())
+                            .w(px(72.))
+                            .h(px(24.))
+                            .px_0()
+                            .rounded(px(4.))
+                            .text_size(px(11.))
+                            .custom(cat_secondary_variant(cx))
+                            .child(
+                                div()
+                                    .debug_selector(|| "strip-finish-label".into())
+                                    .flex_none()
+                                    .child("结束计时"),
+                            )
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                if this.drawer_controls_ready() {
+                                    this.dispatch(cx, move |model, _, cx| model.finish(id, cx));
+                                }
+                            }))
                     })),
             )
+    }
+
+    fn dock_surface(&self, face: &TimerFace, cx: &mut Context<Self>) -> Div {
+        let mut surface = div().size_full().relative();
+        if self.drawer_visible {
+            let from_right = self.docked == Some(platform::DockEdge::Right);
+            let from = self.disclosure_from;
+            let target = if self.expanded { 1. } else { 0. };
+            let offset = face.dock_presentation().dimensions().width + px(DOCK_PANEL_GAP);
+            let panel = self.dock_panel(face, cx);
+            surface = if self.disclosure_task.is_some() {
+                let started = self.disclosure_started;
+                surface.child(panel.with_animation(
+                    ElementId::NamedInteger("dock-disclosure".into(), self.disclosure_serial),
+                    Animation::new(DISCLOSURE_DURATION),
+                    move |panel, _| {
+                        let reveal = disclosure_reveal(from, target, started, Instant::now());
+                        let animated_offset = offset - px(4. * (1. - reveal));
+                        panel
+                            .opacity(reveal)
+                            .when(from_right, |panel| panel.right(animated_offset))
+                            .when(!from_right, |panel| panel.left(animated_offset))
+                    },
+                ))
+            } else {
+                surface.child(panel)
+            };
+            if self.expanded
+                && self.disclosure_task.is_none()
+                && self.drawer_painted_serial != Some(self.disclosure_serial)
+            {
+                let serial = self.disclosure_serial;
+                let weak = cx.weak_entity();
+                surface = surface.child(
+                    canvas(
+                        |_, _, _| (),
+                        move |_, _, _, cx| {
+                            let weak = weak.clone();
+                            cx.defer(move |cx| {
+                                let _ = weak.update(cx, |this, _| {
+                                    if this.expanded
+                                        && this.drawer_visible
+                                        && this.disclosure_task.is_none()
+                                        && this.disclosure_serial == serial
+                                    {
+                                        this.drawer_painted_serial = Some(serial);
+                                    }
+                                });
+                            });
+                        },
+                    )
+                    .absolute()
+                    .size_full(),
+                );
+            }
+        }
+        surface.child(self.dock_face(face, cx))
     }
 }
 
@@ -915,8 +1289,18 @@ impl Render for FloatingStrip {
             .size_full()
             .relative()
             .text_color(rgb(INK))
-            .child(if self.docked.is_some() && !self.drawer_visible {
-                self.dock_face(&face, cx).into_any_element()
+            .on_action(cx.listener(|this, _: &crate::ClosePanel, window, cx| {
+                if this.docked.is_some() {
+                    if this.expanded {
+                        this.toggle_expanded(window, cx);
+                    }
+                    cx.stop_propagation();
+                } else {
+                    cx.propagate();
+                }
+            }))
+            .child(if self.docked.is_some() {
+                self.dock_surface(&face, cx).into_any_element()
             } else {
                 div()
                     .size_full()
@@ -1013,13 +1397,7 @@ impl Render for FloatingStrip {
                             )
                         }
                     })
-                    .child(if self.docked.is_some() {
-                        // The edge cat never changes size or axis while its
-                        // controls open toward the inside of the screen.
-                        self.dock_face(&face, cx).into_any_element()
-                    } else {
-                        self.cat_face(&face, cx).into_any_element()
-                    })
+                    .child(self.cat_face(&face, cx))
                     .into_any_element()
             })
             .child(
@@ -1483,49 +1861,57 @@ mod tests {
                 assert_eq!(
                     expected,
                     match state {
-                        0 => ("开始".into(), String::new()),
+                        0 | 7 | 10 => (String::new(), String::new()),
                         2 | 9 => ("41".into(), "分".into()),
                         5 => ("重试".into(), String::new()),
                         6 => ("99+".into(), "时".into()),
-                        7 | 11 => ("00".into(), "分".into()),
+                        11 => ("00".into(), "分".into()),
                         8 => ("设置".into(), String::new()),
-                        10 => ("37".into(), "分".into()),
                         _ => ("18".into(), "分".into()),
                     },
                     "state {state}, {edge:?}"
                 );
-                // Native resizing can arrive later than the view update. A
-                // stale free/expanded viewport must not stretch the dock or
-                // leave a white card across its transparent background.
+                let presentation =
+                    cat.read_with(&visual, |cat, cx| cat.timer_face(cx).dock_presentation());
+                let expected_dimensions = presentation.dimensions();
                 for viewport in [
-                    dimensions,
+                    expected_dimensions,
                     size(px(88.), px(128.)),
                     size(px(super::EXPANDED_WIDTH), px(super::EXPANDED_HEIGHT)),
+                    size(
+                        px(crate::platform::STRIP_DOCK_EXPANDED_WIDTH),
+                        px(crate::platform::STRIP_DOCK_EXPANDED_HEIGHT),
+                    ),
                 ] {
                     visual.simulate_resize(viewport);
                     visual.update(|window, _| window.refresh());
                     visual.run_until_parked();
                     let root = visual.debug_bounds("strip-root").unwrap();
                     let dock = visual.debug_bounds("strip-dock").unwrap();
-                    let artwork = visual.debug_bounds("strip-dock-artwork").unwrap();
-                    let plate = visual.debug_bounds("strip-dock-readout-plate").unwrap();
-                    let time = visual.debug_bounds("strip-dock-time").unwrap();
-                    let time_text = visual.debug_bounds("strip-dock-time-text").unwrap();
-                    let slot = visual.debug_bounds("strip-dock-state-slot").unwrap();
-                    assert_eq!(dock.size, dimensions);
+                    assert_eq!(dock.size, expected_dimensions);
                     assert_eq!(dock.top(), root.top());
                     if edge == DockEdge::Left {
                         assert_eq!(dock.left(), root.left());
-                        assert!(artwork.left() < dock.left());
-                        assert_eq!(artwork.right(), dock.right());
                     } else {
                         assert_eq!(dock.right(), root.right());
-                        assert_eq!(artwork.left(), dock.left());
-                        assert!(artwork.right() > dock.right());
                     }
-                    assert!(artwork.bottom() <= plate.top());
-                    assert!(artwork.size.height > plate.size.height * 3.);
-                    for bounds in [plate, time, time_text, slot] {
+                    if presentation == super::DockPresentation::Handle {
+                        let artwork = visual.debug_bounds("strip-dock-artwork").unwrap();
+                        assert_eq!(dock.size, size(px(20.), px(24.)));
+                        assert_eq!(artwork, dock);
+                        assert!(visual.debug_bounds("strip-dock-paw-image").is_some());
+                        assert!(visual.debug_bounds("strip-dock-readout").is_none());
+                        assert!(visual.debug_bounds("strip-dock-time-text").is_none());
+                        continue;
+                    }
+                    assert_eq!(dock.size, size(px(44.), px(24.)));
+                    assert!(visual.debug_bounds("strip-dock-artwork").is_none());
+                    let readout = visual.debug_bounds("strip-dock-readout").unwrap();
+                    let time = visual.debug_bounds("strip-dock-time").unwrap();
+                    let time_text = visual.debug_bounds("strip-dock-time-text").unwrap();
+                    let slot = visual.debug_bounds("strip-dock-state-slot").unwrap();
+                    assert_eq!(readout, dock);
+                    for bounds in [time, time_text, slot] {
                         assert!(
                             bounds.left() >= dock.left() && bounds.right() <= dock.right(),
                             "state {state}, {edge:?}, {viewport:?}: {bounds:?}"
@@ -1565,14 +1951,6 @@ mod tests {
                             assert!(mark.top() >= slot.top() && mark.bottom() <= slot.bottom());
                         }
                     }
-                    if matches!(state, 2 | 11) {
-                        let rail = visual.debug_bounds("strip-dock-progress").unwrap();
-                        assert!(rail.top() >= time_text.bottom());
-                        assert!(rail.left() >= plate.left() && rail.right() <= plate.right());
-                        assert!(rail.bottom() <= plate.bottom());
-                    } else {
-                        assert!(visual.debug_bounds("strip-dock-progress").is_none());
-                    }
                 }
                 visual.update(|window, _| window.remove_window());
                 visual.run_until_parked();
@@ -1592,9 +1970,7 @@ mod tests {
         };
         use gpui_component::Root;
 
-        // Exercise the widest action variants and long task titles alongside
-        // running, saved, failed, prepared and paused timers.
-        for state in 0..5 {
+        for state in 0..6 {
             let mut manager = ManagerHarness::new(cx, 1040., 780.);
             manager.view.update_in(&mut manager.cx, |view, window, cx| {
                 if state == 3 {
@@ -1604,6 +1980,7 @@ mod tests {
                         input.set_value("A prepared task with a long title", window, cx)
                     });
                 } else {
+                    let elapsed = if state == 5 { 9999 * 3600 + 3599 } else { 1122 };
                     let session = view
                         .store
                         .as_mut()
@@ -1611,7 +1988,7 @@ mod tests {
                         .start(
                             "A long task title that must keep room for both actions",
                             1,
-                            view.now - 1122,
+                            view.now - elapsed,
                         )
                         .unwrap();
                     if state == 1 {
@@ -1637,7 +2014,14 @@ mod tests {
             for edge in [None, Some(DockEdge::Left), Some(DockEdge::Right)] {
                 let model = manager.view.clone();
                 let manager_window = manager.handle;
-                let dimensions = size(px(super::EXPANDED_WIDTH), px(super::EXPANDED_HEIGHT));
+                let dimensions = if edge.is_some() {
+                    size(
+                        px(crate::platform::STRIP_DOCK_EXPANDED_WIDTH),
+                        px(crate::platform::STRIP_DOCK_EXPANDED_HEIGHT),
+                    )
+                } else {
+                    size(px(super::EXPANDED_WIDTH), px(super::EXPANDED_HEIGHT))
+                };
                 let (strip, cat) = manager.cx.cx.update(|cx| {
                     let mut cat = None;
                     let strip = cx
@@ -1679,7 +2063,11 @@ mod tests {
                     "strip-face"
                 };
                 let readout_selector = if edge.is_some() {
-                    "strip-dock-time"
+                    if state == 3 {
+                        "strip-dock-artwork"
+                    } else {
+                        "strip-dock-time"
+                    }
                 } else {
                     "strip-time"
                 };
@@ -1687,12 +2075,35 @@ mod tests {
                 let readout = visual.debug_bounds(readout_selector).unwrap();
                 let root = visual.debug_bounds("strip-root").unwrap();
                 let drawer = visual.debug_bounds("strip-drawer").unwrap();
-                let content = visual.debug_bounds("strip-content").unwrap();
+                let content = if edge.is_some() {
+                    drawer
+                } else {
+                    visual.debug_bounds("strip-content").unwrap()
+                };
                 let title = visual.debug_bounds("strip-title-text").unwrap();
                 let controls = visual.debug_bounds("strip-controls").unwrap();
-                assert_eq!(content.size.width, px(128.));
-                assert_eq!(controls.size.width, px(128.));
-                assert_eq!(title.size.width, px(112.));
+                if edge.is_some() {
+                    assert_eq!(root.size, size(px(216.), px(104.)));
+                    assert_eq!(drawer.size, size(px(164.), px(96.)));
+                    assert_eq!(drawer.top(), root.top());
+                    assert_eq!(controls.size.width, px(148.));
+                    assert_eq!(title.size.width, px(90.));
+                    let status = visual.debug_bounds("strip-status").unwrap();
+                    assert!(title.right() < status.left());
+                    let clock = visual.debug_bounds("strip-panel-time").unwrap();
+                    let clock_text = visual.debug_bounds("strip-panel-time-text").unwrap();
+                    assert!(
+                        clock_text.left() >= clock.left() && clock_text.right() <= clock.right()
+                    );
+                    assert!(
+                        clock_text.top() >= clock.top() && clock_text.bottom() <= clock.bottom()
+                    );
+                    assert!(clock_text.size.width > px(0.));
+                } else {
+                    assert_eq!(content.size.width, px(128.));
+                    assert_eq!(controls.size.width, px(128.));
+                    assert_eq!(title.size.width, px(112.));
+                }
                 assert!(drawer.left() >= root.left() && drawer.right() <= root.right());
                 for selector in [
                     "strip-open",
@@ -1719,21 +2130,19 @@ mod tests {
                 }
                 if edge == Some(DockEdge::Right) {
                     assert_eq!(face.right(), root.right());
-                    assert!(content.right() < face.left());
+                    assert_eq!(face.left() - drawer.right(), px(8.));
+                } else if edge == Some(DockEdge::Left) {
+                    assert_eq!(face.left(), root.left());
+                    assert_eq!(drawer.left() - face.right(), px(8.));
                 } else {
                     assert!(face.right() < content.left());
-                    if edge.is_some() {
-                        assert_eq!(face.left(), root.left());
-                    }
                 }
                 if edge.is_some() {
-                    assert_eq!(
-                        face.size,
-                        size(px(super::DOCK_WIDTH), px(super::DOCK_HEIGHT))
-                    );
+                    let expected = cat.read_with(&visual, |cat, cx| {
+                        cat.timer_face(cx).dock_presentation().dimensions()
+                    });
+                    assert_eq!(face.size, expected);
                 }
-                // Keep the same face/readout through both animation directions.
-                // Only the drawer slides eight points toward its own anchor.
                 if state == 0 {
                     for opening in [true, false] {
                         cat.update_in(&mut visual, |cat, window, cx| {
@@ -1757,15 +2166,16 @@ mod tests {
                         let moving = visual.debug_bounds("strip-drawer").unwrap();
                         assert_eq!(moving.size, drawer.size);
                         assert_eq!(moving.top(), drawer.top());
+                        let travel = px(if edge.is_some() { 4. } else { 8. });
                         if edge == Some(DockEdge::Right) {
                             assert!(
                                 moving.left() >= drawer.left()
-                                    && moving.left() <= drawer.left() + px(8.)
+                                    && moving.left() <= drawer.left() + travel
                             );
                         } else {
                             assert!(
                                 moving.left() <= drawer.left()
-                                    && moving.left() >= drawer.left() - px(8.)
+                                    && moving.left() >= drawer.left() - travel
                             );
                         }
                     }
@@ -1774,6 +2184,258 @@ mod tests {
                 visual.run_until_parked();
             }
         }
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn dock_model_ticks_do_not_resize_and_closing_uses_the_latest_presentation(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::{headless_ui_tests::ManagerHarness, platform::DockEdge};
+        use gpui::{
+            AppContext as _, Bounds, Point, VisualTestContext, WindowBounds, WindowOptions, px,
+            size,
+        };
+        use gpui_component::Root;
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        let model = manager.view.clone();
+        let manager_window = manager.handle;
+        let (strip, cat) = manager.cx.cx.update(|cx| {
+            let mut cat = None;
+            let strip = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Point::default(),
+                            size(px(20.), px(24.)),
+                        ))),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let entity = cx.new(|cx| {
+                            let mut cat =
+                                super::FloatingStrip::new(model, manager_window, window, cx);
+                            cat.docked = Some(DockEdge::Right);
+                            cat.reshape(window, cx);
+                            cat
+                        });
+                        cat = Some(entity.clone());
+                        cx.new(|cx| Root::new(entity, window, cx))
+                    },
+                )
+                .unwrap();
+            (strip, cat.unwrap())
+        });
+        let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
+        visual.simulate_resize(size(px(20.), px(24.)));
+        visual.run_until_parked();
+        // TestPlatform's resize changes the platform bounds synchronously.
+        // A sentinel size exposes any otherwise invisible native resize call
+        // during an ordinary model tick, even while its viewport is delayed.
+        let idle_sentinel = size(px(77.), px(31.));
+        visual.update(|window, _| window.resize(idle_sentinel));
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.now += 1;
+            cx.notify();
+        });
+        visual.run_until_parked();
+        visual.update(|window, _| assert_eq!(window.bounds().size, idle_sentinel));
+        cat.update_in(&mut visual, |cat, window, cx| {
+            cat.expanded = true;
+            cat.drawer_visible = true;
+            cat.reshape(window, cx);
+        });
+        let expanded_size = size(px(216.), px(104.));
+        visual.simulate_resize(expanded_size);
+        let session = manager.view.update(&mut manager.cx, |view, cx| {
+            let session = view
+                .store
+                .as_mut()
+                .unwrap()
+                .start("Ticking dock", 1, view.now - 60)
+                .unwrap();
+            view.refresh(cx);
+            cx.notify();
+            session.id
+        });
+        visual.run_until_parked();
+        visual.update(|window, _| assert_eq!(window.bounds().size, expanded_size));
+        cat.update_in(&mut visual, |cat, window, cx| {
+            cat.toggle_expanded(window, cx)
+        });
+        visual.update(|window, _| assert_eq!(window.bounds().size, expanded_size));
+        visual.executor().advance_clock(Duration::from_millis(200));
+        visual.run_until_parked();
+        visual.update(|window, _| assert_eq!(window.bounds().size, size(px(44.), px(24.))));
+        let timed_sentinel = size(px(79.), px(33.));
+        visual.update(|window, _| window.resize(timed_sentinel));
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.now += 60;
+            cx.notify();
+        });
+        visual.run_until_parked();
+        visual.update(|window, _| assert_eq!(window.bounds().size, timed_sentinel));
+        let paused_at = manager.view.update(&mut manager.cx, |view, cx| {
+            let paused_at = view.now;
+            view.store
+                .as_mut()
+                .unwrap()
+                .pause(session, paused_at)
+                .unwrap();
+            view.refresh(cx);
+            cx.notify();
+            paused_at
+        });
+        visual.run_until_parked();
+        visual.update(|window, _| assert_eq!(window.bounds().size, timed_sentinel));
+        manager.view.update(&mut manager.cx, |view, cx| {
+            view.completed = Some(
+                view.store
+                    .as_mut()
+                    .unwrap()
+                    .finish(session, paused_at + 1)
+                    .unwrap(),
+            );
+            view.refresh(cx);
+            cx.notify();
+        });
+        visual.run_until_parked();
+        visual.update(|window, _| assert_eq!(window.bounds().size, timed_sentinel));
+        cat.read_with(&visual, |cat, cx| {
+            assert_eq!(
+                cat.timer_face(cx).dock_presentation(),
+                super::DockPresentation::Readout
+            );
+            assert_eq!(cat.window_dimensions(cx), size(px(44.), px(24.)));
+        });
+        visual.update(|window, _| window.remove_window());
+        visual.run_until_parked();
+    }
+
+    #[cfg(feature = "ui-test-support")]
+    #[gpui::test]
+    fn dock_escape_uses_the_bound_close_action_without_closing_management(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        use crate::{headless_ui_tests::ManagerHarness, platform::DockEdge};
+        use gpui::{
+            AppContext as _, Bounds, KeyBinding, Point, VisualTestContext, WindowBounds,
+            WindowOptions, px, size,
+        };
+        use gpui_component::Root;
+        use std::{cell::Cell, rc::Rc};
+        let mut manager = ManagerHarness::new(cx, 1040., 780.);
+        let session = manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let session = view
+                .store
+                .as_mut()
+                .unwrap()
+                .start("Keep running", 1, view.now - 60)
+                .unwrap();
+            view.refresh(cx);
+            view.select_session(session.id, window, cx);
+            view.open_task_dialog(window, cx);
+            view.task_editor.title_input.update(cx, |input, cx| {
+                input.set_value("Keep this unsaved manager draft", window, cx)
+            });
+            session.id
+        });
+        let before = manager.view.read_with(&manager.cx, |view, _| {
+            (view.compact, view.selected_task, view.selected_session)
+        });
+        let forwarded = Rc::new(Cell::new(0));
+        let global_forwarded = forwarded.clone();
+        let manager_window = manager.handle;
+        manager.cx.cx.update(|cx| {
+            cx.bind_keys([KeyBinding::new("escape", crate::ClosePanel, Some("Force"))]);
+            cx.on_action(move |_: &crate::ClosePanel, cx| {
+                global_forwarded.set(global_forwarded.get() + 1);
+                crate::with_force(manager_window, cx, |view, window, cx| {
+                    view.close_panel(window, cx)
+                });
+            });
+        });
+        let model = manager.view.clone();
+        let (strip, cat) = manager.cx.cx.update(|cx| {
+            let mut cat = None;
+            let strip = cx
+                .open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(Bounds::new(
+                            Point::default(),
+                            size(px(216.), px(104.)),
+                        ))),
+                        ..Default::default()
+                    },
+                    |window, cx| {
+                        let entity = cx.new(|cx| {
+                            let mut cat =
+                                super::FloatingStrip::new(model, manager_window, window, cx);
+                            cat.docked = Some(DockEdge::Right);
+                            cat.expanded = true;
+                            cat.drawer_visible = true;
+                            cat.focus_handle.focus(window);
+                            cat.reshape(window, cx);
+                            cat
+                        });
+                        cat = Some(entity.clone());
+                        cx.new(|cx| Root::new(entity, window, cx))
+                    },
+                )
+                .unwrap();
+            (strip, cat.unwrap())
+        });
+        let mut visual = VisualTestContext::from_window(*strip, &manager.cx.cx);
+        visual.simulate_resize(size(px(216.), px(104.)));
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        visual.simulate_keystrokes("escape");
+        visual.executor().advance_clock(Duration::from_millis(200));
+        visual.run_until_parked();
+        cat.read_with(&visual, |cat, cx| {
+            assert!(!cat.expanded && !cat.drawer_visible);
+            assert_eq!(cat.window_dimensions(cx), size(px(44.), px(24.)));
+        });
+        visual.simulate_resize(size(px(44.), px(24.)));
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        // Focus remains in the collapsed dock: another Escape must stay local.
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        assert_eq!(
+            forwarded.get(),
+            0,
+            "the dock must consume both open and collapsed ClosePanel actions"
+        );
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(
+                (view.compact, view.selected_task, view.selected_session),
+                before
+            );
+            assert_eq!(view.strip_session().unwrap().id, session);
+            assert!(view.strip_session().unwrap().is_running());
+            assert!(view.task_editor.visible);
+            assert_eq!(
+                view.task_editor.title_input.read(cx).value(),
+                "Keep this unsaved manager draft"
+            );
+        });
+        // The free cat retains its existing global ClosePanel route.
+        cat.update_in(&mut visual, |cat, window, cx| {
+            cat.docked = None;
+            cat.expanded = true;
+            cat.drawer_visible = true;
+            cat.focus_handle.focus(window);
+            cat.reshape(window, cx);
+        });
+        visual.simulate_resize(size(px(super::EXPANDED_WIDTH), px(super::EXPANDED_HEIGHT)));
+        visual.update(|window, _| window.refresh());
+        visual.run_until_parked();
+        visual.simulate_keystrokes("escape");
+        visual.run_until_parked();
+        assert_eq!(forwarded.get(), 1);
+        visual.update(|window, _| window.remove_window());
+        visual.run_until_parked();
     }
 
     #[cfg(feature = "ui-test-support")]
@@ -2075,12 +2737,12 @@ mod tests {
     }
 
     #[test]
-    fn dock_progress_requires_a_countdown_and_yields_to_pause_or_error() {
+    fn dock_shape_distinguishes_prepared_tasks_from_recorded_time_and_error_actions() {
         let mut face = TimerFace {
             title: String::new(),
             title_help: String::new(),
             status: String::new(),
-            seconds: 0,
+            seconds: 37 * 60,
             running: false,
             paused: false,
             completed: false,
@@ -2092,20 +2754,30 @@ mod tests {
             ready: false,
             idle: true,
         };
-        assert_eq!(face.dock_progress(), None);
+        assert_eq!(face.dock_presentation(), super::DockPresentation::Handle);
+        assert_eq!(face.dock_display(), (String::new(), String::new()));
         face.idle = false;
-        face.running = true;
+        face.ready = true;
+        assert_eq!(face.dock_presentation(), super::DockPresentation::Handle);
         face.session = Some(1);
-        assert_eq!(face.dock_progress(), None); // Count-up has no goal.
-        for progress in [0., 0.5, 1.] {
-            face.progress = Some(progress);
-            assert_eq!(face.dock_progress(), Some(progress));
-        }
+        face.running = true;
+        assert_eq!(face.dock_presentation(), super::DockPresentation::Readout);
+        assert_eq!(face.dock_display(), ("37".into(), "分".into()));
+        face.running = false;
         face.paused = true;
-        assert_eq!(face.dock_progress(), None);
+        assert_eq!(face.dock_display(), ("37".into(), "分".into()));
+        face.session = None;
         face.paused = false;
+        face.completed = true;
+        assert_eq!(face.dock_presentation(), super::DockPresentation::Readout);
+        assert_eq!(face.dock_display(), ("37".into(), "分".into()));
         face.failed = true;
-        assert_eq!(face.dock_progress(), None);
+        assert_eq!(face.dock_display(), ("重试".into(), String::new()));
+        face.failed = false;
+        face.completed = false;
+        face.invalid_duration = true;
+        assert_eq!(face.dock_presentation(), super::DockPresentation::Readout);
+        assert_eq!(face.dock_display(), ("设置".into(), String::new()));
     }
 
     #[test]
