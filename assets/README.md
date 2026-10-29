@@ -5,7 +5,7 @@
 - `siamese-cat.png`：坐姿角色画稿。`siamese-blink.png` 是同一构图的闭眼画稿；动画只显示闭眼图的眼部局部，身体保持固定。
 - `siamese-portrait.png`：同角色的头部画稿，用于小标志与应用图标。
 - `cat-clock.png` / `cat-blink.png`：按相同取景框导出的 304 × 448 图像，在猫钟中按 76 × 112 点显示。使用保色图像渲染，不能当作单色图标蒙版。
-- `cat-grip-left.png` / `cat-grip-right.png`：独立的卡通爪尖吸附把手；原始透明画布由内置图像生成工具制作，渲染时按各自取景框裁切到 20 × 24 点。仅在空闲或准备状态显示，不与计时读数叠放。生成规格见 [grip-prompt.md](grip-prompt.md)。
+- `cat-grip-left.png` / `cat-grip-right.png`：独立的卡通爪尖吸附把手；原始透明画布由内置图像生成工具制作，渲染时按各自取景框裁切为约 36 × 17 点的可见爪子，点击区域为 40 × 36 点。仅在空闲或准备状态显示，不与计时读数叠放。生成规格见 [grip-prompt.md](grip-prompt.md)。
 - `logo.png`：方形头像。`wordmark.png` / `wordmark-dark.png`：头像与原有 FORCE 几何字形；明暗版只切换字色。
 - `wordmark-lettering.svg`：原有 FORCE 字形路径，不依赖字体。
 - `icon.png` / `Force.icns` / `Force.ico`：头像配白色圆角底的应用图标；ICO 包含 16、32、48、256 px。

@@ -17,7 +17,7 @@ keep errors and meaningful distinctions visible.
 
 - Keep the 1040 × 780 default / 780 × 620 minimum management window and separate
   floating cat clock: 88 × 128 points when compact, 244 × 152 when expanded and
-  20 × 24 when idle at an edge, 44 × 24 when timed and 216 × 104 with dock controls open. Keep the 896-point content grid, 40-point insets,
+  40 × 36 when idle at an edge, 56 × 36 when timed and 228 × 104 with dock controls open. Keep the 896-point content grid, 40-point insets,
   32-point column gap and 240-point task column.
 - Use the existing system font with tabular time digits. Page titles are 32,
   task titles 28, main timers up to 104 (80 when compact), section labels 16,
@@ -73,7 +73,7 @@ clicking its title opens the task detail. Keep other paused tasks unchanged.
 Clicking the cat again collapses the panel without changing timing or management
 visibility. Keep the clock free of hover tooltips and a separate open button.
 Native dragging near either screen edge docks it on macOS/Windows; the dock
-uses a small paw grip while idle/prepared and a single 24-point-high tab with 分 or 时 units while timing. See [the edge handle design](edge-handle.md). Linux retains free movement and resizing. Preserve
+uses a small paw grip while idle/prepared and a single 36-point-high tab with 分 or 时 units while timing. See [the edge handle design](edge-handle.md). Linux retains free movement and resizing. Preserve
 running-session priority and visible errors across all clock shapes.
 
 Calendar actual-record details offer local editing and 删除计时记录. Completion

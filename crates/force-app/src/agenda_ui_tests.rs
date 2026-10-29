@@ -1074,7 +1074,12 @@ fn agenda_ui_actual_record_and_untimed_completion_open_in_the_same_month_context
 
 fn seed_calendar_record(manager: &mut ManagerHarness, date: NaiveDate) -> (Session, Session) {
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
-        let day_start = day_bounds(date).0;
+        let (day_start, day_end) = day_bounds(date);
+        // This timer belongs to today, separate from the historical record.
+        // A plain now - 300 crosses into the selected day just after midnight.
+        let now = Local::now();
+        let running_start = (now.timestamp() - 300).max(day_bounds(now.date_naive()).0);
+        assert!(running_start >= day_end);
         let store = view.store.as_mut().unwrap();
         let record = store
             .create_completed_record(
@@ -1094,7 +1099,7 @@ fn seed_calendar_record(manager: &mut ManagerHarness, date: NaiveDate) -> (Sessi
             )
             .unwrap();
         let running = store
-            .create_and_start_task("正在进行的另一件事", 1, view.now - 300, None)
+            .create_and_start_task("正在进行的另一件事", 1, running_start, None)
             .unwrap();
         view.refresh(cx);
         view.open_agenda_day(date, window, cx);
