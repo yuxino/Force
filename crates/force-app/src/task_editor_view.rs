@@ -7,8 +7,8 @@ use crate::{
     editor_dialog,
     model::{ForceView, task_title_error_for},
     view::{
-        ControlState, DESTRUCTIVE, INK, MUTED, PAPER, SURFACE, button, control_icon, control_label,
-        field, field_label, outlined_button, primary_button, selection_button,
+        ControlState, DESTRUCTIVE, INK, MUTED, SURFACE, button, control_icon, control_label, field,
+        field_label, outlined_button, selection_button,
     },
 };
 
@@ -233,42 +233,42 @@ impl ForceView {
                             })),
                     )
                     .child(
-                        outlined_button("start-task-dialog")
-                            .debug_selector(|| "start-task-dialog".into())
-                            .h(px(36.))
-                            .unavailable(!start_enabled)
-                            .child(control_label(
-                                if switching {
-                                    "切换并开始"
-                                } else {
-                                    "开始计时"
-                                },
-                                if start_enabled { INK } else { MUTED },
-                            ))
-                            .tooltip(if switching {
-                                "暂停当前计时或结束当前休息，再开始新任务；已计时间保留"
-                            } else {
-                                "保存新任务并开始本次计时"
-                            })
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.start_task_dialog(window, cx)
-                            })),
-                    )
-                    .child(
-                        primary_button("save-task-dialog")
+                        outlined_button("save-task-dialog")
                             .debug_selector(|| "save-task-dialog".into())
                             .h(px(36.))
                             .unavailable(!save_enabled)
                             .child(control_label(
-                                "保存",
-                                if save_enabled { PAPER } else { MUTED },
+                                "保存任务",
+                                if save_enabled { INK } else { MUTED },
                             ))
-                            .tooltip("保存任务，稍后再开始计时")
+                            .tooltip("保存任务，稍后再开始计时（Enter）")
                             .on_click(
                                 cx.listener(|this, _, window, cx| {
                                     this.save_task_dialog(window, cx)
                                 }),
                             ),
+                    )
+                    .child(
+                        crate::control_style::start_button(
+                            "start-task-dialog",
+                            if switching {
+                                "切换并开始"
+                            } else {
+                                "开始计时"
+                            },
+                            crate::view::action_icon("play").size(px(14.)),
+                            !start_enabled,
+                        )
+                        .debug_selector(|| "start-task-dialog".into())
+                        .h(px(36.))
+                        .tooltip(if switching {
+                            "暂停当前计时或结束当前休息，再开始新任务；已计时间保留"
+                        } else {
+                            "保存新任务并开始本次计时"
+                        })
+                        .on_click(
+                            cx.listener(|this, _, window, cx| this.start_task_dialog(window, cx)),
+                        ),
                     ),
             );
         editor_dialog::overlay("task-editor-overlay", window, panel)

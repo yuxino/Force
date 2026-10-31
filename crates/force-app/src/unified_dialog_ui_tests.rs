@@ -86,7 +86,7 @@ fn assert_same_bounds(actual: Bounds<Pixels>, expected: Bounds<Pixels>) {
 }
 
 #[gpui::test]
-fn creation_dialogs_share_frame_heading_and_footer_at_both_window_sizes(cx: &mut TestAppContext) {
+fn creation_dialogs_share_chrome_without_forcing_equal_heights(cx: &mut TestAppContext) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
         let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
         let viewport = Bounds::new(Point::default(), size(px(width), px(height)));
@@ -135,15 +135,33 @@ fn creation_dialogs_share_frame_heading_and_footer_at_both_window_sizes(cx: &mut
             assert!(panel.top() > manager.bounds("manager-header").bottom());
             assert!(cancel.right() <= save.left() + px(1.));
             assert!((cancel.top() - save.top()).abs() <= px(1.));
-            if let Some((expected_panel, expected_heading, expected_footer, expected_save_right)) =
-                reference
-            {
-                assert_same_bounds(panel, expected_panel);
-                assert_same_bounds(heading, expected_heading);
-                assert_same_bounds(footer, expected_footer);
-                assert!((save.right() - expected_save_right).abs() <= px(1.));
+            let trailing = if editor == Editor::Task {
+                let start = manager.bounds("start-task-dialog");
+                assert_inside(start, panel);
+                assert!(save.right() + px(6.) <= start.left());
+                assert!((save.top() - start.top()).abs() <= px(1.));
+                start
             } else {
-                reference = Some((panel, heading, footer, save.right()));
+                save
+            };
+            assert!((trailing.right() - footer.right()).abs() <= px(1.));
+            let chrome = [
+                panel.left(),
+                panel.size.width,
+                heading.left() - panel.left(),
+                heading.top() - panel.top(),
+                heading.size.width,
+                heading.size.height,
+                footer.size.width,
+                footer.size.height,
+                panel.bottom() - footer.bottom(),
+            ];
+            if let Some(expected) = reference {
+                for (actual, expected) in chrome.into_iter().zip(expected) {
+                    assert!((actual - expected).abs() <= px(1.));
+                }
+            } else {
+                reference = Some(chrome);
             }
             manager.click(match editor {
                 Editor::Arrangement => "agenda-cancel",
@@ -152,6 +170,61 @@ fn creation_dialogs_share_frame_heading_and_footer_at_both_window_sizes(cx: &mut
             });
             assert_same_bounds(manager.bounds("agenda-overview-grid"), month);
         }
+    }
+}
+
+#[gpui::test]
+fn task_dialog_fits_content_and_keeps_actions_visible_with_errors(cx: &mut TestAppContext) {
+    for (width, height) in [(1040., 780.), (780., 620.)] {
+        let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
+        open(&mut manager, Editor::Task);
+        let count_up = manager.bounds("task-editor");
+        assert!(count_up.size.height < px(420.), "{count_up:?}");
+        let fields = manager.bounds("task-editor-fields");
+        let mode = manager.bounds("task-editor-mode");
+        assert_inside(mode, fields);
+        assert!(fields.bottom() - mode.bottom() <= px(2.));
+        manager.click("task-dialog-duration-custom");
+        let countdown = manager.bounds("task-editor");
+        assert!(countdown.size.height > count_up.size.height + px(50.));
+        assert_inside(
+            manager.bounds("task-editor-duration"),
+            manager.bounds("task-editor-fields"),
+        );
+        manager.click("task-dialog-duration-45");
+        manager.click("task-dialog-duration-0");
+        assert_same_bounds(manager.bounds("task-editor"), count_up);
+        manager.click("task-dialog-duration-custom");
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.task_editor.selected_tag = 2;
+            view.task_editor
+                .timer_input
+                .update(cx, |input, cx| input.set_value("0", window, cx));
+            view.task_editor.error =
+                Some("Could not save.\nTry again.\nThe task draft is preserved.".into());
+        });
+        settle(&mut manager);
+        let panel = manager.bounds("task-editor");
+        let fields = manager.bounds("task-editor-fields");
+        let error = manager.bounds("task-editor-duration-error");
+        assert_inside(error, fields);
+        assert_inside(manager.bounds("task-editor-validation"), panel);
+        let footer = manager.bounds("task-editor-actions");
+        assert_inside(footer, panel);
+        assert!(fields.bottom() <= footer.top());
+        assert!(panel.top() >= px(68. + 24.));
+        assert!(panel.bottom() <= px(height - 24.));
+        manager.click("start-task-dialog");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(view.task_editor.visible);
+            assert!(view.tasks.is_empty() && view.active.is_empty());
+        });
+        manager.click("save-task-dialog");
+        manager.view.read_with(&manager.cx, |view, _| {
+            assert!(!view.task_editor.visible);
+            assert_eq!(view.tasks.len(), 1);
+            assert!(view.active.is_empty());
+        });
     }
 }
 

@@ -219,7 +219,7 @@ impl ForceView {
             .child(
                 div()
                     .debug_selector(|| "agenda-editor".into())
-                    .flex_1()
+                    .flex_initial()
                     .min_h_0()
                     .flex()
                     .flex_col()

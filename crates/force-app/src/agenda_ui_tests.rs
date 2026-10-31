@@ -1462,6 +1462,11 @@ fn agenda_ui_calendar_and_editor_fit_default_and_minimum_windows(cx: &mut TestAp
             manager.bounds("agenda-date-input"),
         );
         manager.click("agenda-note-toggle");
+        // Content-sized dialogs can grow and recenter after expanding notes.
+        let editor = manager.bounds("agenda-editor");
+        let popup = manager.bounds("agenda-popover");
+        assert_inside(popup, viewport);
+        assert_inside(editor, popup);
         for selector in [
             "agenda-title-input",
             "agenda-date-input",
@@ -1474,6 +1479,29 @@ fn agenda_ui_calendar_and_editor_fit_default_and_minimum_windows(cx: &mut TestAp
         assert_inside(manager.bounds("agenda-editor-actions"), editor);
         assert_inside(manager.bounds("agenda-save"), editor);
         assert_inside(manager.bounds("agenda-cancel"), editor);
+        manager.view.update_in(&mut manager.cx, |view, _, cx| {
+            view.agenda.error =
+                Some("Could not save.\nTry again.\nThe arrangement draft is preserved.".into());
+            cx.notify();
+        });
+        settle(&mut manager);
+        let popup = manager.bounds("agenda-popover");
+        let fields = manager.bounds("agenda-editor-fields");
+        let validation = manager.bounds("agenda-validation-slot");
+        let footer = manager.bounds("agenda-editor-actions");
+        for bounds in [popup, fields, validation, footer] {
+            assert_inside(bounds, viewport);
+            if bounds != popup {
+                assert_inside(bounds, popup);
+            }
+        }
+        assert!(popup.top() >= px(68. + 24.));
+        assert!(popup.bottom() <= px(height - 24.));
+        assert!(fields.bottom() <= validation.top());
+        assert!(validation.bottom() <= footer.top());
+        manager.scroll("agenda-editor-fields", -1000.);
+        assert_same_bounds(manager.bounds("agenda-editor-actions"), footer);
+        assert_inside(manager.bounds("agenda-note-input"), fields);
         manager.click("agenda-cancel");
         manager
             .view

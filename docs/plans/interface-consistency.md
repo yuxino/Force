@@ -332,6 +332,11 @@ of the library Ghost's fixed darkening. Timing mode selection uses a white selec
 duration presets use compact bordered choices with a clear selected state. Neither resembles disabled
 Start. The task sidebar heading is subordinate at 14 points.
 
+Creation editors share width, padding and control geometry, but size their height
+to the content, capped by the available window height. Short forms must not
+stretch to the height of a long editor. The new-task footer places secondary
+保存任务 before the primary 开始计时 action; Enter continues to save without starting.
+
 Creation editors reserve a validation area so fields and actions stay stable
 when typing clears an error. Errors may expand without hiding the actions. Fields scroll within the
 popup, while validation and Save/Cancel remain visible outside the scroll area.
