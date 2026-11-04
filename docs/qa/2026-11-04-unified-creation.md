@@ -51,3 +51,24 @@ preview evidence remain.
 Native resizing did not establish the minimum size; minimum-layout evidence is
 TestPlatform-only. Real IME composition and Windows/Linux native interaction
 were not exercised.
+
+## v0.1.5 publication
+
+Release source: `a4250bdbb78ab4557dcc1727a916a44f952d960b`. Canonical local
+checks and all 292 UI tests passed again with version 0.1.5. Main and tag CI
+passed on macOS, Windows and Linux.
+
+[Release workflow](https://github.com/yuxino/Force/actions/runs/41820931354)
+succeeded and published [v0.1.5](https://github.com/yuxino/Force/releases/tag/v0.1.5)
+as the latest stable release. Downloaded all four packages; every SHA256 matched
+SHA256SUMS, Windows/Linux archives were readable, both DMGs verified, and both
+Mac bundles had version 0.1.5, the expected identifier and valid signatures.
+The published bilingual notes match the repository source. This does not add
+Windows/Linux native-interaction or real IME acceptance.
+
+The installed local app was also updated to 0.1.5 with its existing signing
+requirement, byte-verified and launched. Its original task draft was restored
+without saving or starting a timer. Installation staging, duplicate bundles,
+downloaded verification packages and task-only logs were removed afterward.
+The merged task branch was removed after verifying remote main, worktree use
+and the absence of an open task PR.
