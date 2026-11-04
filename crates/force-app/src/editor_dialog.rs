@@ -34,7 +34,7 @@ pub(crate) fn panel(id: &'static str, window: &Window) -> Stateful<Div> {
         .occlude()
         .flex()
         .flex_col()
-        .gap(px(12.))
+        .gap(px(8.))
 }
 
 pub(crate) fn overlay(id: &'static str, window: &Window, content: impl IntoElement) -> AnyElement {

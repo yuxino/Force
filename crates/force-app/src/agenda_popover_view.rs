@@ -134,18 +134,6 @@ impl ForceView {
                                     this.open_agenda_timeline(window, cx)
                                 })),
                         )
-                        .child(
-                            button("agenda-moment-add")
-                                .debug_selector(|| "agenda-moment-add".into())
-                                .custom(crate::view::quiet_variant(cx))
-                                .h(px(34.))
-                                .px(px(8.))
-                                .unavailable(self.storage_failed)
-                                .child(control_label("随手记", INK))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.begin_moment(Some(this.agenda.date), window, cx)
-                                })),
-                        )
                         .child(if selected_detail {
                             button("agenda-popover-day")
                                 .custom(crate::view::quiet_variant(cx))
@@ -155,9 +143,11 @@ impl ForceView {
                                     this.open_agenda_day(this.agenda.date, window, cx)
                                 }))
                         } else {
-                            crate::control_style::plan_button("agenda-add", self.storage_failed)
+                            crate::view::outlined_button("agenda-add")
                                 .debug_selector(|| "agenda-add".into())
                                 .h(px(34.))
+                                .unavailable(self.storage_failed)
+                                .child(control_label("新建", INK))
                                 .on_click(cx.listener(|this, _, window, cx| {
                                     this.begin_plan(None, window, cx)
                                 }))
@@ -174,7 +164,7 @@ impl ForceView {
         let heading = if self.agenda.edit_id.is_some() {
             "修改安排"
         } else {
-            "新安排"
+            "新建"
         };
         let close = button("agenda-popover-close")
             .debug_selector(|| "agenda-popover-close".into())
@@ -186,6 +176,17 @@ impl ForceView {
         let panel = crate::editor_dialog::panel("agenda-popover", window)
             .track_focus(&self.agenda.editor_focus)
             .key_context("AgendaEditor")
+            // Single-line inputs emit PressEnter and propagate the action. Stop
+            // that bubble so a rejected save cannot insert a native newline.
+            // The multiline note consumes ordinary Enter inside InputState.
+            .on_action(
+                cx.listener(|this, action: &gpui_component::input::Enter, window, cx| {
+                    if action.secondary {
+                        this.save_plan(window, cx);
+                    }
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(
                 cx.listener(|this, _: &crate::agenda_model::NextField, window, cx| {
                     this.cycle_agenda_editor_focus(false, window, cx);
@@ -208,7 +209,10 @@ impl ForceView {
                     cx.stop_propagation();
                 },
             ))
-            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if event.position.y < px(68.) {
+                    return;
+                }
                 if !this.agenda.tag_picker.read(cx).is_open()
                     && !this.time_picker.read(cx).is_open()
                 {
@@ -216,6 +220,9 @@ impl ForceView {
                 }
             }))
             .child(crate::editor_dialog::heading(heading, close))
+            .when(self.agenda.edit_id.is_none(), |panel| {
+                panel.child(self.creation_tabs(crate::creation::CreationKind::Plan, cx))
+            })
             .child(
                 div()
                     .debug_selector(|| "agenda-editor".into())
@@ -239,6 +246,20 @@ impl ForceView {
             .is_some_and(|task| task.completed_at.is_some());
         crate::editor_dialog::fields("agenda-editor-scroll", &self.agenda.editor_scroll)
             .debug_selector(|| "agenda-editor-fields".into())
+            .child(
+                editor_field(if completed_task {
+                    "活动（任务已完成）"
+                } else {
+                    "活动"
+                })
+                .flex_shrink_0()
+                .child(
+                    div()
+                        .w_full()
+                        .h(px(40.))
+                        .child(self.agenda.tag_picker.clone()),
+                ),
+            )
             .child(editor_field("安排名称").child(
                 div().debug_selector(|| "agenda-title-input".into()).child(
                     field(&self.agenda.title_input).disabled(self.agenda.draft_task.is_some()),
@@ -310,20 +331,6 @@ impl ForceView {
                                 ),
                         ),
                     ),
-            )
-            .child(
-                editor_field(if completed_task {
-                    "活动（任务已完成）"
-                } else {
-                    "活动"
-                })
-                .flex_shrink_0()
-                .child(
-                    div()
-                        .w_full()
-                        .h(px(40.))
-                        .child(self.agenda.tag_picker.clone()),
-                ),
             )
             .child(
                 button("agenda-note-toggle")

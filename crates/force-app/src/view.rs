@@ -148,20 +148,6 @@ impl ForceView {
                     )
                     .child(div().flex_1())
                     .child(
-                        button("global-new-moment")
-                            .debug_selector(|| "global-new-moment".into())
-                            .custom(quiet_variant(cx))
-                            .h(px(36.))
-                            .px(px(10.))
-                            .mr(px(8.))
-                            .flex_shrink_0()
-                            .child(control_label("随手记", INK))
-                            .tooltip(shortcut("随手记", "Shift+N", "Shift+N"))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.begin_moment(None, window, cx)
-                            })),
-                    )
-                    .child(
                         primary_button("global-new-task")
                             .debug_selector(|| "global-new-task".into())
                             .h(px(36.))
@@ -169,10 +155,10 @@ impl ForceView {
                             .mr(px(12.))
                             .flex_shrink_0()
                             .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), PAPER))
-                            .child(control_label("新任务", PAPER))
-                            .tooltip(shortcut("新任务", "N", "N"))
+                            .child(control_label("新建", PAPER))
+                            .tooltip(shortcut("新建", "N", "N"))
                             .on_click(cx.listener(|this, _, window, cx| {
-                                this.open_task_dialog(window, cx);
+                                this.open_creation(window, cx);
                             })),
                     )
                     .child(

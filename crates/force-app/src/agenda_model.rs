@@ -551,6 +551,7 @@ impl ForceView {
                             return;
                         }
                         if choice == 0 {
+                            this.clear_creation_seed();
                             if this.page != Page::Agenda {
                                 window.focus(&this.focus_handle);
                             } else if !this.agenda.editor_visible {
@@ -565,6 +566,7 @@ impl ForceView {
                         if choice == 2 {
                             this.save_plan(window, cx);
                             if this.agenda.editing {
+                                this.clear_creation_seed();
                                 // A failed save must reveal the retained draft
                                 // and its validation/storage error, even if the
                                 // requested action came from another page.
@@ -926,6 +928,7 @@ impl ForceView {
         };
         self.set_plan_inputs(&snapshot, window, cx);
         self.agenda.baseline = Some(self.agenda.snapshot(cx));
+        self.seed_creation(crate::creation::CreationKind::Plan, window, cx);
         self.agenda
             .editor_scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));
@@ -1024,7 +1027,7 @@ impl ForceView {
         self.focus_agenda_editor(window, cx);
     }
 
-    fn focus_agenda_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
+    pub(crate) fn focus_agenda_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
         let input = if self.agenda.draft_task.is_some() {
             &self.agenda.start_input
         } else {
@@ -1119,11 +1122,11 @@ impl ForceView {
         cx: &mut Context<Self>,
     ) {
         let (item, input) = match field {
-            PlanField::Title => (0, Some(&self.agenda.title_input)),
-            PlanField::Date => (1, Some(&self.agenda.date_input)),
-            PlanField::Start => (2, Some(&self.agenda.start_input)),
-            PlanField::End => (2, Some(&self.agenda.end_input)),
-            PlanField::Tag => (3, None),
+            PlanField::Title => (1, Some(&self.agenda.title_input)),
+            PlanField::Date => (2, Some(&self.agenda.date_input)),
+            PlanField::Start => (3, Some(&self.agenda.start_input)),
+            PlanField::End => (3, Some(&self.agenda.end_input)),
+            PlanField::Tag => (0, None),
             PlanField::Note => {
                 if !self.agenda.note_expanded {
                     self.agenda.note_return_scroll = Some(self.agenda.editor_scroll.offset());
@@ -1143,7 +1146,7 @@ impl ForceView {
     }
 
     pub(crate) fn save_plan(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.agenda.editing {
+        if !self.agenda.editing || self.storage_failed {
             return;
         }
         if let Some(error) = self.agenda_draft_error(cx) {

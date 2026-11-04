@@ -1,27 +1,44 @@
-# Unified creation dialogs
+# Unified creation dialog
 
-The header's 随手记 and 新任务 actions and the calendar's 添加安排 action use one
-centered editor shell above the current page. Keep the 68-point navigation
-available; only one editor is visible at a time. Reuse a 560-point width bounded
-by the window, a common header/close action, 40-point fields, scrollable content,
-a fixed validation area and a right-aligned footer. The minimum window keeps
-all actions visible. Activity and time menus remain above the normal paint pass.
+The management header has one 新建 action (Cmd/Ctrl+N). Its centered dialog
+contains 任务, 安排, 补记 and 随手记 tabs. Calendar day/timeline 新建 actions
+open the same surface with 安排 and the selected day. The month toolbar and
+records page do not duplicate creation actions. The floating cat still opens
+任务 directly; Cmd/Ctrl+Shift+N opens 随手记 in the shared surface.
 
-Each editor owns its draft. Close, outside click, Escape and navigation suspend;
-explicit Cancel discards. Switching editors suspends the previous editor and
-reopening restores its fields. A picker handles Escape before its parent.
-Keyboard focus stays in the editor while tabbing and returns to the page on close.
+Reuse a 560-point width bounded by the window, a common heading and close
+action, 40-point fields, scrollable content, a fixed validation area and a
+right-aligned footer. Keep the 68-point navigation available. Activity and time
+menus remain above the normal paint pass. Existing-object editing keeps its
+specific title and does not show creation tabs.
 
-New tasks open independently of task/timer selection and default to count-up
-without an activity. Save creates an unscheduled task and opens its task details without starting or
-pausing a timer; Start uses the existing transactional
-switching path and protects unsaved task edits. Existing task/timer details stay
-in their contextual workspace. Point notes never count as work. Arrangement
-creation keeps today's default and explicit-date contextual actions.
+Each type retains its own draft. Close, outside click, Escape and navigation
+suspend; explicit Cancel discards the current type. Switching types suspends
+the previous editor. First entry to an unused type carries its activity and
+short description; it never overwrites a retained draft. Long or multiline
+notes remain in 随手记 rather than becoming invalid task titles. Dates follow
+the visible source editor or selected record day; backfill dates cannot default
+to the future. A new arrangement otherwise starts today. Opening 新建 again
+while it is visible focuses the same form; after closing it, 新建 starts at
+任务 with the retained drafts available through their tabs.
 
-Verify the same three entry points and switching paths with temporary data at
-1040 × 780 and 780 × 620, then inspect the signed native app. TestPlatform bounds
-and key events do not establish native pixels, IME or other-platform interaction.
+A picker handles Escape before its parent. Tab stays inside the editor and
+focus returns to the page on close. Starting a new note or backfill while an
+existing object has unsaved edits offers Save, Discard or Cancel; failed saves
+and stale asynchronous responses preserve that edit.
+
+Task defaults remain count-up with no activity selected. Save creates an
+unscheduled task without starting or pausing a timer; Start uses the existing
+transactional switching path. Arrangements remain plans, not recorded work.
+Backfills create completed work over explicit past intervals without touching
+running timers. Notes remain point markers and never add focus time. No schema
+or accounting-policy change is required.
+
+Verify all four types and switching paths with temporary data at 1040 × 780
+and 780 × 620, including retained drafts, date context, no activities, validation,
+existing-object edits and independent running timers, then inspect the signed
+native app. TestPlatform bounds and key events do not establish native pixels,
+IME or other-platform interaction.
 
 ## Edge handle
 

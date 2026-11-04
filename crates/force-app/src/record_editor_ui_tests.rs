@@ -222,11 +222,11 @@ fn record_editor_close_navigation_and_other_editors_suspend_without_saving(
             .update(cx, |input, cx| input.set_value("尚未保存", window, cx));
         view.close_panel(window, cx);
         assert!(!view.record_editor.visible && view.record_editor.active);
-        view.begin_record_entry(window, cx);
+        view.edit_record(record.clone(), window, cx);
         assert_eq!(view.record_editor.description.read(cx).value(), "尚未保存");
         view.navigate(Page::Analysis, window, cx);
         assert!(!view.record_editor.visible && view.record_editor.active);
-        view.begin_record_entry(window, cx);
+        view.edit_record(record.clone(), window, cx);
         view.hide_manager(window, cx);
         view.show_manager(window, cx);
         assert!(
@@ -238,7 +238,7 @@ fn record_editor_close_navigation_and_other_editors_suspend_without_saving(
         );
         view.begin_moment(None, window, cx);
         assert!(!view.record_editor.visible && view.moments.visible);
-        view.begin_record_entry(window, cx);
+        view.edit_record(record.clone(), window, cx);
         assert!(view.record_editor.visible && !view.moments.visible);
         view.edit_record(other.clone(), window, cx);
     });
@@ -286,6 +286,175 @@ fn record_editor_close_navigation_and_other_editors_suspend_without_saving(
                 .title,
             other.title
         );
+    });
+}
+
+#[gpui::test]
+fn record_editor_new_entry_replaces_unchanged_edit_but_preserves_its_own_draft(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Records);
+    let record = seed(&mut manager, 2);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.edit_record(record.clone(), window, cx);
+        view.begin_record_entry(window, cx);
+        assert!(view.record_editor.original.is_none());
+        assert_eq!(view.record_editor.intervals.len(), 1);
+        assert_eq!(view.record_editor.activity, 0);
+        assert_eq!(view.record_editor.description.read(cx).value(), "");
+        view.record_editor.activity = 2;
+        view.record_editor.description.update(cx, |input, cx| {
+            input.set_value("尚未保存的补记", window, cx)
+        });
+        view.suspend_record_editor(window, cx);
+        view.begin_record_entry(window, cx);
+        assert_eq!(view.record_editor.activity, 2);
+        assert_eq!(
+            view.record_editor.description.read(cx).value(),
+            "尚未保存的补记"
+        );
+        assert_eq!(
+            view.store
+                .as_ref()
+                .unwrap()
+                .record_edit_snapshot(record.id)
+                .unwrap()
+                .session,
+            record
+        );
+    });
+    assert!(!manager.cx.has_pending_prompt());
+}
+
+#[gpui::test]
+fn record_editor_new_entry_protects_dirty_record_before_starting_backfill(cx: &mut TestAppContext) {
+    for choice in ["取消", "不保存", "保存"] {
+        let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Records);
+        let record = seed(&mut manager, 2);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.edit_record(record.clone(), window, cx);
+            view.record_editor.description.update(cx, |input, cx| {
+                input.set_value("尚未保存的修正", window, cx)
+            });
+            view.suspend_record_editor(window, cx);
+            view.begin_record_entry(window, cx);
+        });
+        assert!(manager.cx.has_pending_prompt());
+        manager.cx.simulate_prompt_answer(choice);
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.record_editor.active && view.record_editor.visible);
+            let saved = view
+                .store
+                .as_ref()
+                .unwrap()
+                .record_edit_snapshot(record.id)
+                .unwrap()
+                .session;
+            assert_eq!(saved.intervals, record.intervals);
+            assert_eq!(
+                saved.title,
+                if choice == "保存" {
+                    "尚未保存的修正"
+                } else {
+                    &record.title
+                }
+            );
+            if choice == "取消" {
+                assert_eq!(view.record_editor.original.as_ref().unwrap().id, record.id);
+                assert_eq!(
+                    view.record_editor.description.read(cx).value(),
+                    "尚未保存的修正"
+                );
+            } else {
+                assert!(view.record_editor.original.is_none());
+                assert_eq!(view.record_editor.activity, 0);
+                assert_eq!(view.record_editor.description.read(cx).value(), "");
+            }
+        });
+    }
+}
+
+#[gpui::test]
+fn record_editor_new_entry_uses_source_date_after_discarding_old_record_edits(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Records);
+    let record = seed(&mut manager, 1);
+    let yesterday = Local::now()
+        .date_naive()
+        .checked_sub_days(Days::new(1))
+        .unwrap();
+    let date_text = yesterday.format("%Y-%m-%d").to_string();
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.record_date = Local::now().date_naive();
+        view.edit_record(record.clone(), window, cx);
+        view.record_editor.description.update(cx, |input, cx| {
+            input.set_value("旧记录未保存的修正", window, cx)
+        });
+        view.open_creation(window, cx);
+        view.switch_creation(crate::creation::CreationKind::Plan, window, cx);
+        view.agenda.draft_tag = 2;
+        view.agenda.title_input.update(cx, |input, cx| {
+            input.set_value("昨日的学习安排", window, cx)
+        });
+        view.agenda.date_input.update(cx, |input, cx| {
+            input.set_value(date_text.clone(), window, cx)
+        });
+        view.switch_creation(crate::creation::CreationKind::Record, window, cx);
+        assert!(view.record_editor.original.is_some());
+    });
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("不保存");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.record_editor.active && view.record_editor.visible);
+        assert!(view.record_editor.original.is_none());
+        assert_eq!(view.record_date, yesterday);
+        assert_eq!(view.record_editor.activity, 2);
+        assert_eq!(
+            view.record_editor.description.read(cx).value(),
+            "昨日的学习安排"
+        );
+        assert_eq!(
+            view.record_editor.intervals[0].start_date.read(cx).value(),
+            date_text
+        );
+        assert_eq!(
+            view.record_editor.intervals[0].end_date.read(cx).value(),
+            date_text
+        );
+        assert_eq!(
+            view.store
+                .as_ref()
+                .unwrap()
+                .record_edit_snapshot(record.id)
+                .unwrap()
+                .session,
+            record
+        );
+    });
+}
+
+#[gpui::test]
+fn record_editor_stale_new_entry_prompt_cannot_replace_a_suspended_draft(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Records);
+    let record = seed(&mut manager, 1);
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.edit_record(record.clone(), window, cx);
+        view.record_editor
+            .description
+            .update(cx, |input, cx| input.set_value("保留修正", window, cx));
+        view.begin_record_entry(window, cx);
+        view.suspend_record_editor(window, cx);
+    });
+    assert!(manager.cx.has_pending_prompt());
+    manager.cx.simulate_prompt_answer("不保存");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.record_editor.active && !view.record_editor.visible);
+        assert_eq!(view.record_editor.original.as_ref().unwrap().id, record.id);
+        assert_eq!(view.record_editor.description.read(cx).value(), "保留修正");
     });
 }
 

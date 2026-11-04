@@ -455,20 +455,6 @@ impl ForceView {
                                     this.select_session(id, window, cx);
                                 })),
                         )
-                    })
-                    .when(!self.agenda.editor_visible, |header| {
-                        header.child(
-                            crate::control_style::plan_button(
-                                "agenda-overview-add",
-                                self.storage_failed,
-                            )
-                            .debug_selector(|| "agenda-overview-add".into())
-                            .on_click(cx.listener(
-                                |this, _, window, cx| {
-                                    this.begin_today_plan(window, cx);
-                                },
-                            )),
-                        )
                     }),
             )
             .when(self.storage_failed, |body| {
@@ -505,9 +491,10 @@ impl ForceView {
                         ),
                 )
             })
-            .when(self.agenda.popup_open && !self.storage_failed, |body| {
-                body.child(self.agenda_popover(window, cx))
-            })
+            .when(
+                self.agenda.popup_open && (self.agenda.editor_visible || !self.storage_failed),
+                |body| body.child(self.agenda_popover(window, cx)),
+            )
     }
 
     fn agenda_month_sidebar(&self, cx: &mut Context<Self>) -> Div {

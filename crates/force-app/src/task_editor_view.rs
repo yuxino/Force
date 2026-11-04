@@ -21,6 +21,16 @@ impl ForceView {
         let panel = editor_dialog::panel("task-editor", window)
             .track_focus(&self.task_editor.focus)
             .key_context("TaskEditor")
+            // The input subscription saves on ordinary Enter. Consume its
+            // propagated action even when validation keeps this draft open.
+            .on_action(
+                cx.listener(|this, action: &gpui_component::input::Enter, window, cx| {
+                    if action.secondary {
+                        this.save_task_dialog(window, cx);
+                    }
+                    cx.stop_propagation();
+                }),
+            )
             .on_action(cx.listener(
                 |this, _: &crate::task_editor_model::NextField, window, cx| {
                     this.cycle_task_dialog_focus(false, window, cx);
@@ -43,13 +53,16 @@ impl ForceView {
                     cx.stop_propagation();
                 },
             ))
-            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if event.position.y < px(68.) {
+                    return;
+                }
                 if !this.task_editor.tag_picker.read(cx).is_open() {
                     this.suspend_task_dialog(window, cx);
                 }
             }))
             .child(editor_dialog::heading(
-                "新任务",
+                "新建",
                 button("close-task-dialog")
                     .debug_selector(|| "close-task-dialog".into())
                     .custom(crate::view::quiet_variant(cx))
@@ -60,6 +73,7 @@ impl ForceView {
                         cx.listener(|this, _, window, cx| this.suspend_task_dialog(window, cx)),
                     ),
             ))
+            .child(self.creation_tabs(crate::creation::CreationKind::Task, cx))
             .child(
                 editor_dialog::fields("task-editor-fields", &self.task_editor.scroll)
                     .child(task_field("活动").child(if no_activities {

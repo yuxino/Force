@@ -116,6 +116,54 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        // A new note must never silently resume editing an existing note.
+        if self.moments.active && self.moments.editing.is_some() {
+            if self.moments.changed(cx) {
+                self.reveal_moment(window, cx);
+                let generation = self.moments.generation;
+                let draft = self.moments.draft(cx);
+                let answer = window.prompt(
+                    PromptLevel::Info,
+                    "保存当前随记？",
+                    None,
+                    &[
+                        PromptButton::cancel("取消"),
+                        PromptButton::new("不保存"),
+                        PromptButton::new("保存"),
+                    ],
+                    cx,
+                );
+                cx.spawn_in(window, async move |this, cx| {
+                    let choice = answer.await;
+                    let _ = cx.update(|window, cx| {
+                        let _ = this.update(cx, |this, cx| {
+                            if this.moments.generation != generation
+                                || this.moments.draft(cx) != draft
+                            {
+                                return;
+                            }
+                            if !this.compact {
+                                window.activate_window();
+                                this.moments.content.read(cx).focus_handle(cx).focus(window);
+                            }
+                            if let Ok(choice @ (1 | 2)) = choice {
+                                if choice == 2 && !this.save_moment(window, cx) {
+                                    this.clear_creation_seed();
+                                    return;
+                                }
+                                this.moments.active = false;
+                                this.begin_moment(date, window, cx);
+                            } else {
+                                this.clear_creation_seed();
+                            }
+                        });
+                    });
+                })
+                .detach();
+                return;
+            }
+            self.moments.active = false;
+        }
         if !self.moments.active {
             let now = Local::now();
             let day = date.unwrap_or(now.date_naive());
@@ -130,6 +178,10 @@ impl ForceView {
                 window,
                 cx,
             );
+            self.seed_creation(crate::creation::CreationKind::Moment, window, cx);
+        } else {
+            // Resuming a draft must not retain fields intended for a new note.
+            self.clear_creation_seed();
         }
         self.reveal_moment(window, cx);
     }
@@ -272,6 +324,7 @@ impl ForceView {
     pub(crate) fn save_moment(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
         if !self.moments.visible
             || !self.moments.active
+            || self.storage_failed
             || self.compact
             || self.time_picker.read(cx).is_open()
         {
@@ -472,5 +525,137 @@ mod tests {
         ] {
             assert!(resolve_moment_time(&invalid, Some(&baseline), Some(source)).is_err());
         }
+    }
+}
+
+#[cfg(all(test, feature = "ui-test-support"))]
+mod creation_tests {
+    use super::*;
+    use crate::{headless_ui_tests::ManagerHarness, model::Page};
+    use gpui::TestAppContext;
+
+    fn edit_saved_note(manager: &mut ManagerHarness) -> Moment {
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            let now = Local::now().timestamp();
+            let moment = view
+                .store
+                .as_mut()
+                .unwrap()
+                .create_moment("Saved note", now, now)
+                .unwrap();
+            view.refresh(cx);
+            view.edit_moment(moment.clone(), window, cx);
+            moment
+        })
+    }
+
+    fn settle(manager: &mut ManagerHarness) {
+        manager.cx.update(|window, _| window.refresh());
+        manager.cx.run_until_parked();
+    }
+
+    #[gpui::test]
+    fn new_note_leaves_unchanged_existing_note_intact(cx: &mut TestAppContext) {
+        let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+        let moment = edit_saved_note(&mut manager);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.begin_moment(None, window, cx);
+        });
+        settle(&mut manager);
+        assert!(!manager.cx.has_pending_prompt());
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.moments.visible);
+            assert!(view.moments.editing.is_none());
+            assert!(view.moments.content.read(cx).value().is_empty());
+            assert_eq!(view.record_moments, vec![moment]);
+        });
+    }
+
+    #[gpui::test]
+    fn new_note_protects_an_edited_existing_note(cx: &mut TestAppContext) {
+        for answer in ["取消", "不保存", "保存"] {
+            let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+            let moment = edit_saved_note(&mut manager);
+            manager.view.update_in(&mut manager.cx, |view, window, cx| {
+                view.moments
+                    .content
+                    .update(cx, |input, cx| input.set_value("Edited note", window, cx));
+                view.suspend_moment(window, cx);
+                view.begin_moment(None, window, cx);
+            });
+            settle(&mut manager);
+            assert!(manager.cx.has_pending_prompt());
+            manager.cx.simulate_prompt_answer(answer);
+            settle(&mut manager);
+            manager.view.read_with(&manager.cx, |view, cx| {
+                assert!(view.moments.visible);
+                assert_eq!(view.record_moments.len(), 1);
+                assert_eq!(view.record_moments[0].id, moment.id);
+                assert_eq!(
+                    view.record_moments[0].content,
+                    if answer == "保存" {
+                        "Edited note"
+                    } else {
+                        "Saved note"
+                    }
+                );
+                if answer == "取消" {
+                    assert_eq!(view.moments.editing, Some(moment.id));
+                    assert_eq!(view.moments.content.read(cx).value(), "Edited note");
+                } else {
+                    assert!(view.moments.editing.is_none());
+                    assert!(view.moments.content.read(cx).value().is_empty());
+                }
+            });
+        }
+    }
+
+    #[gpui::test]
+    fn new_note_keeps_invalid_existing_edits_when_save_is_rejected(cx: &mut TestAppContext) {
+        let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+        let moment = edit_saved_note(&mut manager);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.moments
+                .date
+                .update(cx, |input, cx| input.set_value("2026-02-30", window, cx));
+            view.begin_moment(None, window, cx);
+        });
+        settle(&mut manager);
+        manager.cx.simulate_prompt_answer("保存");
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert_eq!(view.moments.editing, Some(moment.id));
+            assert_eq!(view.moments.date.read(cx).value(), "2026-02-30");
+            assert!(view.moments.error.is_some());
+            assert_eq!(view.record_moments, vec![moment]);
+        });
+    }
+
+    #[gpui::test]
+    fn outdated_new_note_confirmation_cannot_replace_a_newer_draft(cx: &mut TestAppContext) {
+        let mut manager = ManagerHarness::new_on_page(cx, 1040., 780., Page::Agenda);
+        edit_saved_note(&mut manager);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.moments
+                .content
+                .update(cx, |input, cx| input.set_value("Edited note", window, cx));
+            view.begin_moment(None, window, cx);
+        });
+        settle(&mut manager);
+        manager.view.update_in(&mut manager.cx, |view, window, cx| {
+            view.cancel_moment(window, cx);
+            view.begin_moment(None, window, cx);
+            view.moments
+                .content
+                .update(cx, |input, cx| input.set_value("Newer note", window, cx));
+        });
+        manager.cx.simulate_prompt_answer("不保存");
+        settle(&mut manager);
+        manager.view.read_with(&manager.cx, |view, cx| {
+            assert!(view.moments.editing.is_none());
+            assert_eq!(view.moments.content.read(cx).value(), "Newer note");
+            assert_eq!(view.record_moments.len(), 1);
+            assert_eq!(view.record_moments[0].content, "Saved note");
+        });
     }
 }

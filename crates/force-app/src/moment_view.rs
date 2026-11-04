@@ -149,7 +149,10 @@ impl ForceView {
                     cx.stop_propagation();
                 },
             ))
-            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+            .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                if event.position.y < px(68.) {
+                    return;
+                }
                 if !this.time_picker.read(cx).is_open() {
                     this.suspend_moment(window, cx);
                 }
@@ -158,10 +161,13 @@ impl ForceView {
                 if self.moments.editing.is_some() {
                     "编辑随记"
                 } else {
-                    "随手记"
+                    "新建"
                 },
                 close,
             ))
+            .when(self.moments.editing.is_none(), |panel| {
+                panel.child(self.creation_tabs(crate::creation::CreationKind::Moment, cx))
+            })
             .child(fields)
             .child(crate::editor_dialog::validation(
                 "moment-message",

@@ -53,7 +53,8 @@ fn time_picker_ui_plan_clock_is_bounded_and_only_confirmation_changes_time(
 ) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
         let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Agenda);
-        manager.click("agenda-overview-add");
+        manager.click("global-new-task");
+        manager.click("creation-type-plan");
         manager.cx.simulate_input("Keep this plan draft");
         set_plan_times(&mut manager, "09:07", "10:00");
         manager.click("agenda-start-picker");
@@ -120,7 +121,8 @@ fn time_picker_ui_cancel_preserves_invalid_input_and_end_midnight_is_explicit(
     cx: &mut TestAppContext,
 ) {
     let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
-    manager.click("agenda-overview-add");
+    manager.click("global-new-task");
+    manager.click("creation-type-plan");
     set_plan_times(&mut manager, "  unfinished  ", "23:30");
     manager.click("agenda-start-picker");
     choose_dial(&mut manager, point(px(0.), px(82.)));
@@ -151,7 +153,8 @@ fn time_picker_ui_cancel_preserves_invalid_input_and_end_midnight_is_explicit(
 #[gpui::test]
 fn time_picker_ui_keyboard_stays_in_picker_and_returns_to_moment_input(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
-    manager.click("global-new-moment");
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
     manager.cx.simulate_input("The note stays unchanged");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.moments
@@ -200,7 +203,8 @@ fn time_picker_ui_keyboard_stays_in_picker_and_returns_to_moment_input(cx: &mut 
 #[gpui::test]
 fn time_picker_ui_does_not_overwrite_a_changed_parent_draft(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
-    manager.click("agenda-overview-add");
+    manager.click("global-new-task");
+    manager.click("creation-type-plan");
     set_plan_times(&mut manager, "09:00", "10:00");
     manager.click("agenda-start-picker");
     choose_dial(&mut manager, point(px(82.), px(0.)));
@@ -214,7 +218,8 @@ fn time_picker_ui_does_not_overwrite_a_changed_parent_draft(cx: &mut TestAppCont
 #[gpui::test]
 fn time_picker_ui_showing_manager_preserves_picker_focus_and_parent_note(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
-    manager.click("global-new-moment");
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
     manager.cx.simulate_input("A protected note");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.moments
@@ -260,7 +265,8 @@ fn time_picker_ui_selecting_a_task_or_session_cancels_preview_without_hidden_foc
             session
         });
         settle(&mut manager);
-        manager.click("agenda-overview-add");
+        manager.click("global-new-task");
+        manager.click("creation-type-plan");
         manager.cx.simulate_input("Preserve the plan draft");
         set_plan_times(&mut manager, "09:10", "10:00");
         manager.click("agenda-start-picker");

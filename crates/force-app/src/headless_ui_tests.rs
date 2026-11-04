@@ -1066,6 +1066,7 @@ fn headless_ui_global_new_task_keeps_an_unsaved_calendar_plan(cx: &mut TestAppCo
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
     manager.click("global-new-task");
+    manager.click("creation-type-task");
     assert!(!manager.cx.has_pending_prompt());
     manager.view.read_with(&manager.cx, |view, cx| {
         assert_eq!(view.page, Page::Agenda);

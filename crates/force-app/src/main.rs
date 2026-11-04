@@ -14,6 +14,7 @@ mod classification_view;
 mod completion_editor_model;
 mod completion_editor_view;
 mod control_style;
+mod creation;
 mod editor_dialog;
 mod floating_view;
 mod focus_view;
@@ -244,8 +245,7 @@ fn main() -> anyhow::Result<()> {
             Menu {
                 name: "计时".into(),
                 items: vec![
-                    MenuItem::action("新任务…", NewTask),
-                    MenuItem::action("随手记…", NewMoment),
+                    MenuItem::action("新建…", NewTask),
                     MenuItem::separator(),
                     MenuItem::action("开始 / 暂停 / 继续", PrimaryAction),
                     MenuItem::action("结束本次计时", FinishSegment),
@@ -374,7 +374,7 @@ fn main() -> anyhow::Result<()> {
                 });
                 cx.on_action(move |_: &NewTask, cx| {
                     with_force(handle, cx, |this, window, cx| {
-                        this.open_task_dialog(window, cx)
+                        this.open_creation(window, cx)
                     })
                 });
                 cx.on_action(move |_: &ToggleCompact, cx| {

@@ -132,6 +132,7 @@ impl ForceView {
             self.task_editor.generation = self.task_editor.generation.wrapping_add(1);
         }
         self.task_editor.visible = true;
+        self.seed_creation(crate::creation::CreationKind::Task, window, cx);
         self.task_editor
             .scroll
             .set_offset(gpui::point(gpui::px(0.), gpui::px(0.)));

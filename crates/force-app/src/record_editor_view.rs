@@ -1,206 +1,153 @@
+use force_core::TagKind;
 use gpui::{prelude::*, *};
 use gpui_component::{IconName, button::ButtonVariants};
 
 use crate::{
+    creation::CreationKind,
+    editor_dialog,
     model::ForceView,
     record_editor_model::RecordIntervalInputs,
     view::{
-        CONTROL_LINE, ControlState, DESTRUCTIVE, LINE, MUTED, PAPER, button, control_icon,
-        control_label, field, field_label, primary_button,
+        ControlState, INK, LINE, MUTED, PAPER, button, control_icon, control_label, field,
+        field_label, outlined_button, primary_button,
     },
 };
 
 impl ForceView {
-    pub(crate) fn record_editor(
-        &self,
-        window: &Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let width = (f32::from(window.viewport_size().width) - 48.).min(560.);
-        let height = (f32::from(window.viewport_size().height) - 64.).min(660.);
-        div()
-            .id("record-editor-overlay")
-            .debug_selector(|| "record-editor-overlay".into())
-            .absolute()
-            .inset_0()
-            .size_full()
-            .occlude()
-            .bg(rgba(0x00000016))
-            .flex()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .id("record-editor")
-                    .debug_selector(|| "record-editor".into())
-                    .track_focus(&self.record_editor.focus)
-                    .key_context("RecordEditor")
-                    // Single-line inputs propagate Enter. Consume ordinary Return here
-                    // so it cannot fall through to text input as a newline.
-                    .on_action(cx.listener(
-                        |this, action: &gpui_component::input::Enter, window, cx| {
-                            if action.secondary {
-                                this.save_record_editor(window, cx);
-                            }
-                            cx.stop_propagation();
-                        },
-                    ))
-                    .on_action(cx.listener(
-                        |this, _: &crate::record_editor_model::NextField, window, cx| {
-                            this.cycle_record_editor_focus(false, window, cx)
-                        },
-                    ))
-                    .on_action(cx.listener(
-                        |this, _: &crate::record_editor_model::PreviousField, window, cx| {
-                            this.cycle_record_editor_focus(true, window, cx)
-                        },
-                    ))
-                    .w(px(width))
-                    .max_h(px(height))
-                    .p(px(20.))
-                    .rounded(px(8.))
-                    .border_1()
-                    .border_color(rgb(CONTROL_LINE))
-                    .bg(rgb(PAPER))
-                    .flex()
-                    .flex_col()
-                    .gap(px(16.))
-                    .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                        if !this.time_picker.read(cx).is_open()
-                            && !this.record_editor.picker.read(cx).is_open()
-                        {
-                            this.suspend_record_editor(window, cx);
+    pub(crate) fn record_editor(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let creating = self.record_editor.original.is_none();
+        let no_activities = creating && !self.tags.iter().any(|tag| tag.kind == TagKind::Focus);
+        let panel =
+            editor_dialog::panel("record-editor", window)
+                .track_focus(&self.record_editor.focus)
+                .key_context("RecordEditor")
+                // Single-line inputs propagate Enter. Consume ordinary Return here
+                // so it cannot fall through to text input as a newline.
+                .on_action(cx.listener(
+                    |this, action: &gpui_component::input::Enter, window, cx| {
+                        if action.secondary {
+                            this.save_record_editor(window, cx);
                         }
-                    }))
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .justify_between()
-                            .flex_shrink_0()
-                            .child(
+                        cx.stop_propagation();
+                    },
+                ))
+                .on_action(cx.listener(
+                    |this, _: &crate::record_editor_model::NextField, window, cx| {
+                        this.cycle_record_editor_focus(false, window, cx)
+                    },
+                ))
+                .on_action(cx.listener(
+                    |this, _: &crate::record_editor_model::PreviousField, window, cx| {
+                        this.cycle_record_editor_focus(true, window, cx)
+                    },
+                ))
+                .capture_action(cx.listener(
+                    |this, _: &gpui_component::input::IndentInline, window, cx| {
+                        this.cycle_record_editor_focus(false, window, cx);
+                        cx.stop_propagation();
+                    },
+                ))
+                .capture_action(cx.listener(
+                    |this, _: &gpui_component::input::OutdentInline, window, cx| {
+                        this.cycle_record_editor_focus(true, window, cx);
+                        cx.stop_propagation();
+                    },
+                ))
+                .on_mouse_down_out(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                    if event.position.y < px(68.) {
+                        return;
+                    }
+                    if !this.time_picker.read(cx).is_open()
+                        && !this.record_editor.picker.read(cx).is_open()
+                    {
+                        this.suspend_record_editor(window, cx);
+                    }
+                }))
+                .child(editor_dialog::heading(
+                    if creating { "新建" } else { "编辑记录" },
+                    button("close-record-editor")
+                        .debug_selector(|| "close-record-editor".into())
+                        .custom(crate::view::quiet_variant(cx))
+                        .size(px(26.))
+                        .icon(control_icon(IconName::Close, MUTED))
+                        .tooltip("关闭并保留草稿")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.suspend_record_editor(window, cx)
+                        })),
+                ))
+                .when(creating, |panel| {
+                    panel.child(self.creation_tabs(CreationKind::Record, cx))
+                })
+                .child(
+                    editor_dialog::fields("record-editor-scroll", &self.record_editor.scroll)
+                        .child(record_field("活动").child(if no_activities {
+                            outlined_button("record-editor-add-activity")
+                                .debug_selector(|| "record-editor-add-activity".into())
+                                .h(px(40.))
+                                .w_full()
+                                .child(control_label("添加活动", INK))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.open_tag_settings(window, cx)
+                                }))
+                                .into_any_element()
+                        } else {
+                            div()
+                                .debug_selector(|| "record-editor-activity".into())
+                                .w_full()
+                                .h(px(40.))
+                                .flex_shrink_0()
+                                .child(self.record_editor.picker.clone())
+                                .into_any_element()
+                        }))
+                        .child(
+                            record_field("说明（可选）").child(
                                 div()
-                                    .text_size(px(18.))
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .child(if self.record_editor.original.is_some() {
-                                        "编辑记录"
-                                    } else {
-                                        "补记"
-                                    }),
-                            )
-                            .child(
-                                button("close-record-editor")
-                                    .debug_selector(|| "close-record-editor".into())
-                                    .custom(crate::view::quiet_variant(cx))
-                                    .size(px(28.))
-                                    .icon(control_icon(IconName::Close, MUTED))
-                                    .tooltip("关闭并保留草稿")
-                                    .on_click(cx.listener(|this, _, window, cx| {
-                                        this.suspend_record_editor(window, cx)
-                                    })),
+                                    .debug_selector(|| "record-editor-description".into())
+                                    .child(field(&self.record_editor.description)),
                             ),
-                    )
-                    .child(
-                        div()
-                            .id("record-editor-scroll")
-                            .min_h_0()
-                            .debug_selector(|| "record-editor-scroll".into())
-                            .max_h(px((height - 162.).max(220.)))
-                            .overflow_y_scroll()
-                            .track_scroll(&self.record_editor.scroll)
-                            .pr(px(4.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(16.))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.))
-                                    .child(field_label("活动"))
-                                    .child(
-                                        div()
-                                            .debug_selector(|| "record-editor-activity".into())
-                                            .w_full()
-                                            .h(px(40.))
-                                            .flex_shrink_0()
-                                            .child(self.record_editor.picker.clone()),
-                                    ),
-                            )
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_col()
-                                    .gap(px(6.))
-                                    .child(field_label("说明（可选）"))
-                                    .child(
-                                        div()
-                                            .debug_selector(|| "record-editor-description".into())
-                                            .child(field(&self.record_editor.description)),
-                                    ),
-                            )
-                            .children(self.record_editor.intervals.iter().enumerate().map(
-                                |(index, interval)| {
-                                    self.record_interval_fields(index, interval, cx)
-                                },
-                            ))
-                            .child(
-                                div()
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .whitespace_normal()
-                                    .child(self.record_editor_time_hint()),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .gap(px(10.))
-                            .flex_shrink_0()
-                            .when_some(self.record_editor.error.as_ref(), |footer, error| {
-                                footer.child(
-                                    div()
-                                        .debug_selector(|| "record-editor-error".into())
-                                        .text_size(px(13.))
-                                        .text_color(rgb(DESTRUCTIVE))
-                                        .whitespace_normal()
-                                        .child(error.clone()),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(8.))
-                                    .child(
-                                        primary_button("save-record-editor")
-                                            .debug_selector(|| "save-record-editor".into())
-                                            .h(px(36.))
-                                            .px(px(18.))
-                                            .unavailable(self.storage_failed)
-                                            .child(control_label("保存", PAPER))
-                                            .tooltip(crate::view::shortcut(
-                                                "保存", "Enter", "Enter",
-                                            ))
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.save_record_editor(window, cx);
-                                            })),
-                                    )
-                                    .child(
-                                        button("cancel-record-editor")
-                                            .debug_selector(|| "cancel-record-editor".into())
-                                            .custom(crate::view::quiet_variant(cx))
-                                            .h(px(36.))
-                                            .px(px(12.))
-                                            .child(control_label("取消", MUTED))
-                                            .on_click(cx.listener(|this, _, window, cx| {
-                                                this.cancel_record_editor(window, cx)
-                                            })),
-                                    ),
-                            ),
-                    ),
-            )
+                        )
+                        .children(self.record_editor.intervals.iter().enumerate().map(
+                            |(index, interval)| self.record_interval_fields(index, interval, cx),
+                        ))
+                        .child(
+                            div()
+                                .text_size(px(12.))
+                                .text_color(rgb(MUTED))
+                                .whitespace_normal()
+                                .child(self.record_editor_time_hint()),
+                        ),
+                )
+                .child(editor_dialog::validation(
+                    "record-editor-error",
+                    self.record_editor.error.as_deref(),
+                ))
+                .child(
+                    editor_dialog::footer("record-editor-actions")
+                        .child(
+                            button("cancel-record-editor")
+                                .debug_selector(|| "cancel-record-editor".into())
+                                .custom(crate::view::quiet_variant(cx))
+                                .h(px(36.))
+                                .px(px(12.))
+                                .child(control_label("取消", MUTED))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.cancel_record_editor(window, cx)
+                                })),
+                        )
+                        .child(
+                            primary_button("save-record-editor")
+                                .debug_selector(|| "save-record-editor".into())
+                                .h(px(36.))
+                                .px(px(18.))
+                                .unavailable(self.storage_failed || no_activities)
+                                .child(control_label("保存", PAPER))
+                                .tooltip(crate::view::shortcut("保存", "Enter", "Enter"))
+                                .on_click(cx.listener(|this, _, window, cx| {
+                                    this.save_record_editor(window, cx);
+                                })),
+                        ),
+                );
+        editor_dialog::overlay("record-editor-overlay", window, panel)
     }
 
     fn record_interval_fields(
@@ -212,6 +159,7 @@ impl ForceView {
         let key = interval.key;
         div()
             .debug_selector(move || format!("record-editor-interval-{index}"))
+            .flex_shrink_0()
             .pt(px(12.))
             .border_t_1()
             .border_color(rgb(LINE))
@@ -317,4 +265,14 @@ impl ForceView {
                 }),
             )
     }
+}
+
+fn record_field(label: &'static str) -> Div {
+    div()
+        .w_full()
+        .flex_shrink_0()
+        .flex()
+        .flex_col()
+        .gap(px(6.))
+        .child(field_label(label))
 }

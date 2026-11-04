@@ -92,7 +92,8 @@ fn moment_ui_multiline_note_saves_as_a_point_without_starting_or_counting_time(
         view.refresh(cx);
     });
     settle(&mut manager);
-    manager.click("global-new-moment");
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
     manager.cx.simulate_input("A small observation");
     manager.cx.simulate_keystrokes("enter");
     manager.cx.simulate_input("Keep the second line");
@@ -183,7 +184,8 @@ fn moment_ui_cat_task_reveal_suspends_note_without_losing_either_draft(cx: &mut 
     });
     settle(&mut manager);
     assert!(!manager.cx.has_pending_prompt());
-    manager.click("global-new-moment");
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert!(view.moments.visible);
         assert!(view.moments.editing.is_none());
@@ -207,7 +209,8 @@ fn moment_ui_invalid_and_suspended_drafts_survive_navigation_and_window_reopenin
     bind_editor_actions(&mut manager);
     let day = Local::now().date_naive();
     let existing = seed_moment(&mut manager, day, "Existing point");
-    manager.click("global-new-moment");
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
     manager.cx.simulate_input("Keep this unsaved thought");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.moments
@@ -250,7 +253,8 @@ fn moment_ui_invalid_and_suspended_drafts_survive_navigation_and_window_reopenin
     manager.cx.simulate_keystrokes("secondary-enter");
     settle(&mut manager);
     manager.click("records-tab");
-    manager.click("global-new-moment");
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         assert_eq!(
             view.moments.content.read(cx).value(),
@@ -500,7 +504,8 @@ fn moment_ui_editor_delete_preserves_calendar_plan_draft_and_running_timer(
 fn moment_ui_editor_fits_and_record_search_does_not_classify_point_notes(cx: &mut TestAppContext) {
     for (width, height) in [(1040., 780.), (780., 620.)] {
         let mut manager = ManagerHarness::new_on_page(cx, width, height, Page::Records);
-        manager.click("global-new-moment");
+        manager.click("global-new-task");
+        manager.click("creation-type-moment");
         assert!(manager.cx.debug_bounds("delete-moment-editor").is_none());
         manager
             .cx
@@ -598,4 +603,40 @@ fn moment_modal_tab_cycle_never_reaches_background_task(cx: &mut TestAppContext)
             });
         }
     }
+}
+
+#[gpui::test]
+fn moment_ui_storage_failure_preserves_valid_draft_and_rejects_all_save_paths(
+    cx: &mut TestAppContext,
+) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    bind_editor_actions(&mut manager);
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
+    manager.cx.simulate_input("Keep this valid note");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.storage_failed = true;
+        assert!(!view.save_moment(window, cx));
+        cx.notify();
+    });
+    settle(&mut manager);
+    manager.click("save-moment");
+    manager.cx.simulate_keystrokes("secondary-enter");
+    settle(&mut manager);
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.moments.active && view.moments.visible);
+        assert_eq!(
+            view.moments.content.read(cx).value(),
+            "Keep this valid note"
+        );
+        assert!(view.record_moments.is_empty());
+        assert!(view.tasks.is_empty() && view.active.is_empty());
+        assert!(view.storage_failed);
+    });
+    manager.click("cancel-moment");
+    manager.click("retry-storage");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.storage_failed);
+        assert!(view.record_moments.is_empty());
+    });
 }

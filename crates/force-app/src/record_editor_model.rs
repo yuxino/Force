@@ -198,11 +198,25 @@ impl RecordEditorState {
 
 impl ForceView {
     pub(crate) fn begin_record_entry(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.record_editor.active && self.record_editor.original.is_some() {
+            if self.confirm_record_editor_switch(None, window, cx) {
+                return;
+            }
+            self.record_editor.active = false;
+        }
         if !self.record_editor.active {
-            let now = Local::now().timestamp();
+            let now = Local::now();
+            self.record_date = self
+                .creation_date(crate::creation::CreationKind::Record)
+                .unwrap_or(self.record_date)
+                .min(now.date_naive());
+            let now = now.timestamp();
             let (_, day_end) = day_bounds(self.record_date);
             let end = if day_end <= now { day_end - 60 } else { now };
             self.load_record_editor(None, vec![(end - 1800, end)], window, cx);
+            self.seed_creation(crate::creation::CreationKind::Record, window, cx);
+        } else {
+            self.clear_creation_seed();
         }
         self.reveal_record_editor(window, cx);
     }
@@ -232,46 +246,7 @@ impl ForceView {
             self.reveal_record_editor(window, cx);
             return;
         }
-        if self.record_editor.changed(cx) {
-            self.reveal_record_editor(window, cx);
-            let generation = self.record_editor.generation;
-            let fields = self.record_editor.fields(cx);
-            let answer = window.prompt(
-                PromptLevel::Info,
-                "保存记录修改？",
-                None,
-                &[
-                    PromptButton::cancel("取消"),
-                    PromptButton::new("不保存"),
-                    PromptButton::new("保存"),
-                ],
-                cx,
-            );
-            cx.spawn_in(window, async move |this, cx| {
-                if let Ok(choice) = answer.await {
-                    let _ = cx.update(|window, cx| {
-                        let _ = this.update(cx, |this, cx| {
-                            if this.record_editor.generation != generation
-                                || this.record_editor.fields(cx) != fields
-                            {
-                                return;
-                            }
-                            if choice == 0 {
-                                this.focus_record_editor(window, cx);
-                                return;
-                            }
-                            if choice == 2 && !this.save_record_editor(window, cx) {
-                                return;
-                            }
-                            if choice == 1 || choice == 2 {
-                                this.record_editor.active = false;
-                                this.edit_record(record, window, cx);
-                            }
-                        });
-                    });
-                }
-            })
-            .detach();
+        if self.confirm_record_editor_switch(Some(record.clone()), window, cx) {
             return;
         }
         let snapshot = match self
@@ -293,6 +268,63 @@ impl ForceView {
             .collect();
         self.load_record_editor(Some(snapshot), intervals, window, cx);
         self.reveal_record_editor(window, cx);
+    }
+
+    fn confirm_record_editor_switch(
+        &mut self,
+        next_record: Option<Session>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        if !self.record_editor.changed(cx) {
+            return false;
+        }
+        self.reveal_record_editor(window, cx);
+        let generation = self.record_editor.generation;
+        let fields = self.record_editor.fields(cx);
+        let answer = window.prompt(
+            PromptLevel::Info,
+            "保存记录修改？",
+            None,
+            &[
+                PromptButton::cancel("取消"),
+                PromptButton::new("不保存"),
+                PromptButton::new("保存"),
+            ],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            if let Ok(choice) = answer.await {
+                let _ = cx.update(|window, cx| {
+                    let _ = this.update(cx, |this, cx| {
+                        if this.record_editor.generation != generation
+                            || this.record_editor.fields(cx) != fields
+                        {
+                            return;
+                        }
+                        if choice == 0 {
+                            if next_record.is_none() {
+                                this.clear_creation_seed();
+                            }
+                            this.focus_record_editor(window, cx);
+                            return;
+                        }
+                        if choice == 2 && !this.save_record_editor(window, cx) {
+                            return;
+                        }
+                        if choice == 1 || choice == 2 {
+                            this.record_editor.active = false;
+                            match next_record {
+                                Some(record) => this.edit_record(record, window, cx),
+                                None => this.begin_record_entry(window, cx),
+                            }
+                        }
+                    });
+                });
+            }
+        })
+        .detach();
+        true
     }
 
     fn load_record_editor(
@@ -337,6 +369,7 @@ impl ForceView {
     }
 
     fn reveal_record_editor(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_task_dialog(window, cx);
         self.suspend_completion_editor(window, cx);
         self.suspend_moment(window, cx);
         self.suspend_agenda_popup(window, cx);
@@ -350,7 +383,9 @@ impl ForceView {
     }
 
     pub(crate) fn focus_record_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.record_editor.activity == 0 {
+        if self.record_editor.activity == 0
+            && self.tags.iter().any(|tag| tag.kind == TagKind::Focus)
+        {
             self.record_editor
                 .picker
                 .read(cx)
@@ -430,7 +465,7 @@ impl ForceView {
             });
             self.record_editor.options = options;
         }
-        let width = (f32::from(window.viewport_size().width) - 88.).min(520.);
+        let width = crate::editor_dialog::content_width(window);
         self.record_editor
             .picker
             .update(cx, |picker, cx| picker.set_trigger_width(width, cx));
@@ -444,6 +479,7 @@ impl ForceView {
             .update(cx, |picker, cx| picker.dismiss(window, false, cx));
         if self.record_editor.visible {
             self.record_editor.visible = false;
+            self.record_editor.generation = self.record_editor.generation.wrapping_add(1);
             window.focus(&self.focus_handle);
             cx.notify();
         }
@@ -491,6 +527,7 @@ impl ForceView {
         if !self.record_editor.visible
             || !self.record_editor.active
             || self.compact
+            || self.storage_failed
             || self.time_picker.read(cx).is_open()
             || self.record_editor.picker.read(cx).is_open()
         {

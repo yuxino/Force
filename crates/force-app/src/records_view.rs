@@ -1,11 +1,7 @@
 use chrono::{Days, Local};
 use force_core::{Session, TagClass, TagKind};
 use gpui::{prelude::*, *};
-use gpui_component::{
-    Icon, IconName,
-    button::{Button, ButtonVariants},
-    tooltip::Tooltip,
-};
+use gpui_component::{Icon, IconName, button::ButtonVariants, tooltip::Tooltip};
 
 use crate::{
     label::single_line,
@@ -81,16 +77,6 @@ impl ForceView {
                         })),
                 )
             })
-            .child(
-                crate::view::outlined_button("record-add-entry")
-                    .debug_selector(|| "record-add-entry".into())
-                    .h(px(32.))
-                    .px(px(10.))
-                    .child(control_label("补记", INK))
-                    .on_click(
-                        cx.listener(|this, _, window, cx| this.begin_record_entry(window, cx)),
-                    ),
-            )
     }
 
     fn clear_record_search(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -179,8 +165,7 @@ impl ForceView {
                             .child(div().min_w_0().flex().items_center().gap(px(12.))
                                 .child(div().text_size(px(14.)).text_color(rgb(MUTED))
                                     .child(if query.is_empty() && self.record_class_filter.is_none() { format!("{} 条计时记录", self.history.len()) }
-                                        else { format!("匹配 {} 条计时记录", records.len()) }))
-                                .when(self.record_moments.is_empty(), |toolbar| toolbar.child(self.record_moment_button(cx))))
+                                        else { format!("匹配 {} 条计时记录", records.len()) })))
                             .child(
                                 div().w(px(240.)).flex_shrink_0()
                                     .child(field(&self.record_search)
@@ -235,20 +220,6 @@ impl ForceView {
             )
     }
 
-    fn record_moment_button(&self, cx: &mut Context<Self>) -> Button {
-        button("record-add-moment")
-            .debug_selector(|| "record-add-moment".into())
-            .custom(crate::view::quiet_variant(cx))
-            .h(px(32.))
-            .px(px(8.))
-            .unavailable(self.storage_failed)
-            .icon(control_icon(Icon::new(IconName::Plus).size(px(14.)), INK))
-            .child(control_label("随手记", INK))
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.begin_moment(Some(this.record_date), window, cx)
-            }))
-    }
-
     fn record_moment_section(&self, query: &str, cx: &mut Context<Self>) -> Div {
         let moments: Vec<_> = self
             .record_moments
@@ -292,8 +263,7 @@ impl ForceView {
                                         .child(format!("{} 条", moments.len())),
                                 )
                             }),
-                    )
-                    .child(self.record_moment_button(cx)),
+                    ),
             )
             .children(
                 moments

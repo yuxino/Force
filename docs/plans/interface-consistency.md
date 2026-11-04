@@ -79,10 +79,10 @@ Use spacing between columns without a full-height dividing line.
   single-line labels against final bounds with fresh text runs; GPUI 0.2.2
   built-in ellipsis can keep shortened runs from an earlier width measurement.
   Complete titles remain available in tooltips; two-line operation headings wrap.
-- The header always offers a compact dark 新任务 button (Cmd/Ctrl+N), without
-  requiring a calendar plan. Calendar creation uses a secondary outlined
-  安排日程 button with a calendar icon, including day and popover views.
-  Opening 新任务 preserves task drafts and suspends any changed calendar draft.
+- The header offers one compact dark 新建 button (Cmd/Ctrl+N). Its shared
+  dialog switches between 任务, 安排, 补记 and 随手记 while preserving drafts.
+  Calendar day and popover 新建 actions supply the selected date. Month and
+  records toolbars do not duplicate creation actions. See [unified editors](unified-editors.md).
 - The task sidebar contains selection only; do not duplicate the header entry.
   Repeated menu/shortcut requests focus the same draft without clearing its fields.
   Selected inactive tasks can be removed from the list while retaining their records. Ending a round
@@ -95,7 +95,7 @@ Use spacing between columns without a full-height dividing line.
 
 Use the system font, white working surfaces and soft-white navigation chrome and neutral black/gray hierarchy. The
 68-point header aligns the geometric wordmark, two destinations and settings
-with the content grid. The global 新任务 action is quiet; primary emphasis belongs
+with the content grid. The global 新建 action is compact; primary emphasis belongs
 to the current task action. Date navigation sits beside its date. Tag menus match
 their triggers, and open menus have no redundant trigger tooltip. Today uses a 14-point heading, 13-point date, 20-point
 accumulated time and a full-width two-point goal line. Task headings and calendar dates are 28 points;
