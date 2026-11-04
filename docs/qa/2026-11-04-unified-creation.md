@@ -30,12 +30,18 @@ certificate trust state.
 ## Delivery and evidence limits
 
 The user explicitly approved merging to main and updating the formal app. The
-feature was fast-forwarded into main. The release bundle replaced the installed
+feature was fast-forwarded into local main. The release bundle replaced the installed
 app at its existing location with the same bundle identity and complete signing
 requirement. Strict installed-signature and executable byte checks passed. The
 updated native app launched, showed the unified entry and four types, and the
 pre-existing task draft was restored without saving or starting a timer.
 Production records were not written for QA; no public release was published.
+
+Remote delivery remains pending: repeated pushes returned GitHub internal server
+errors, and the live remote main still pointed to `1db9766` at 11:21 UTC. GitHub's
+[active incident](https://www.githubstatus.com/incidents/smtdswd1h2w4) reports Git
+Operations and API degradation. Keep the local task branch until a successful
+push is verified; no remote task branch or open task PR exists.
 
 The disposable QA data, preview bundle, temporary logs, obsolete incremental
 state, installation rollback and duplicate release bundle were removed after
