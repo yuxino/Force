@@ -27,14 +27,20 @@ production bundle's identifier and complete designated requirement match the
 installed app. Strict signature verification passed with access to the local
 certificate trust state.
 
-## Pending delivery and evidence limits
+## Delivery and evidence limits
 
-Automatic approval review requires confirmation before merging/pushing this
-feature to main under the project's substantial-change rule. It also rejected
-quitting the installed app because unsaved drafts are not proven to persist
-on exit. The feature branch and verified production bundle are retained for
-those next steps. Production records were not written for QA; no public release
-was published.
+The user explicitly approved merging to main and updating the formal app. The
+feature was fast-forwarded into main. The release bundle replaced the installed
+app at its existing location with the same bundle identity and complete signing
+requirement. Strict installed-signature and executable byte checks passed. The
+updated native app launched, showed the unified entry and four types, and the
+pre-existing task draft was restored without saving or starting a timer.
+Production records were not written for QA; no public release was published.
+
+The disposable QA data, preview bundle, temporary logs, obsolete incremental
+state, installation rollback and duplicate release bundle were removed after
+verification. Source, current build dependencies, installed app and external
+preview evidence remain.
 
 Native resizing did not establish the minimum size; minimum-layout evidence is
 TestPlatform-only. Real IME composition and Windows/Linux native interaction
