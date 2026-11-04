@@ -37,11 +37,11 @@ updated native app launched, showed the unified entry and four types, and the
 pre-existing task draft was restored without saving or starting a timer.
 Production records were not written for QA; no public release was published.
 
-Remote delivery remains pending: repeated pushes returned GitHub internal server
-errors, and the live remote main still pointed to `1db9766` at 11:21 UTC. GitHub's
-[active incident](https://www.githubstatus.com/incidents/smtdswd1h2w4) reports Git
-Operations and API degradation. Keep the local task branch until a successful
-push is verified; no remote task branch or open task PR exists.
+The initial pushes were blocked by GitHub internal server errors during its
+[Git Operations incident](https://www.githubstatus.com/incidents/smtdswd1h2w4).
+A later retry succeeded and live remote main matched `aed3750`. The user then
+explicitly requested publication. Version 0.1.5 retains the verified application
+changes; release notes are in `docs/releases/v0.1.5.md`.
 
 The disposable QA data, preview bundle, temporary logs, obsolete incremental
 state, installation rollback and duplicate release bundle were removed after
