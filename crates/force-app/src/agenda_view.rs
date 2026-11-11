@@ -4,7 +4,7 @@ use gpui::{prelude::*, *};
 use gpui_component::{
     Icon, IconName,
     button::{ButtonCustomVariant, ButtonVariants},
-    scroll::{Scrollbar, ScrollbarShow},
+    scroll::{ScrollableElement, Scrollbar, ScrollbarShow},
     tooltip::Tooltip,
 };
 
@@ -16,7 +16,7 @@ use crate::{
     view::{
         CHROME, ControlState, DESTRUCTIVE, HOVER, INK, LINE, MUTED, PAPER, PRESSED, SURFACE,
         action_icon, button, choice_button, clock, control_icon, control_label, field_label,
-        outlined_button, primary_button, section_heading, short_time, timer_font,
+        primary_button, section_heading, short_time, timer_font,
     },
 };
 
@@ -151,7 +151,17 @@ impl ForceView {
         let week_count = (month.weekday().num_days_from_monday() + last.day()).div_ceil(7);
         let width = f32::from(window.bounds().size.width).min(976.) - 80.;
         let cell_width = width / 7.;
-        let cell_height = (f32::from(window.bounds().size.height) - 200.) / week_count as f32;
+        let summary_height = self.life_summary_height();
+        let extra_height = if summary_height > 0. {
+            summary_height + 16.
+        } else {
+            0.
+        };
+        // Keep the original minimum day-cell size; shorter windows scroll
+        // rather than clipping calendar entries to make room for habits.
+        let cell_height = ((f32::from(window.bounds().size.height) - 200. - extra_height)
+            / week_count as f32)
+            .max(70.);
         let available_rows = ((cell_height - 28.) / 21.).floor().max(1.) as usize;
         let today = Local::now().date_naive();
         let mut weeks = Vec::new();
@@ -180,6 +190,11 @@ impl ForceView {
                     .iter()
                     .filter(|item| !item.planned && !item.moved && !item.rest)
                     .fold(0_i64, |total, item| total.saturating_add(item.seconds));
+                let check_ins: u64 = self
+                    .life
+                    .check_ins_on(date)
+                    .map(|(_, entry)| entry.count)
+                    .sum();
                 let in_month = date.month() == month.month();
                 let foreground = if in_month { INK } else { MUTED };
                 let mut content = div()
@@ -220,6 +235,22 @@ impl ForceView {
                                     .when(date == today, |label| label.bg(rgb(INK)))
                                     .child(date.day().to_string()),
                             )
+                            .when(check_ins > 0, |header| {
+                                header.child(
+                                    div()
+                                        .id(SharedString::from(format!("agenda-check-in-{date}")))
+                                        .debug_selector(move || format!("agenda-check-in-{date}"))
+                                        .flex_shrink_0()
+                                        .tooltip(move |window, cx| {
+                                            Tooltip::new(format!("打卡 {check_ins} 次"))
+                                                .build(window, cx)
+                                        })
+                                        .child(control_icon(
+                                            Icon::new(IconName::Check).size(px(12.)),
+                                            MUTED,
+                                        )),
+                                )
+                            })
                             .when(invested > 0, |header| {
                                 header.child(
                                     div()
@@ -356,20 +387,25 @@ impl ForceView {
                                 .rounded(px(0.))
                                 .overflow_hidden()
                                 .child(content)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.open_agenda_day(date, window, cx);
-                                })),
+                                .on_click(cx.listener(
+                                    move |this, event: &ClickEvent, window, cx| {
+                                        this.open_agenda_day_from_cell(
+                                            date,
+                                            event.position(),
+                                            window,
+                                            cx,
+                                        );
+                                    },
+                                )),
                         ),
                 );
             }
             weeks.push(div().flex_1().min_h_0().w_full().flex().children(cells));
         }
-        div()
+        let content = div()
             .debug_selector(|| "manager-content".into())
             .track_focus(&self.agenda.calendar_focus)
             .tab_stop(false)
-            .flex_1()
-            .min_h_0()
             .w_full()
             .max_w(px(976.))
             .mx_auto()
@@ -456,51 +492,72 @@ impl ForceView {
                                 })),
                         )
                     })
-                    .child(
-                        outlined_button("open-life-dashboard")
-                            .debug_selector(|| "open-life-dashboard".into())
-                            .h(px(32.))
-                            .icon(control_icon(IconName::LayoutDashboard, INK))
-                            .child(control_label("生活看板", INK))
-                            .on_click(cx.listener(|this, _, window, cx| {
-                                this.navigate(Page::Life, window, cx);
-                            })),
-                    ),
+                    .when(summary_height == 0. && !self.storage_failed, |header| {
+                        header.child(self.life_add_button(cx))
+                    }),
             )
             .when(self.storage_failed, |body| {
                 body.child(self.storage_notice(cx))
             })
             .when(!self.storage_failed, |body| {
-                body.child(
-                    div()
-                        .debug_selector(|| "agenda-overview-grid".into())
-                        .flex_1()
-                        .min_h_0()
-                        .flex()
-                        .flex_col()
-                        .child(div().h(px(28.)).flex_shrink_0().flex().children(
-                            ["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map(|day| {
+                body.when_some(self.life_summary(cx), |body, summary| body.child(summary))
+                    .child(
+                        div()
+                            .debug_selector(|| "agenda-overview-grid".into())
+                            .h(px(28. + cell_height * week_count as f32))
+                            .flex_shrink_0()
+                            .flex()
+                            .flex_col()
+                            .child(div().h(px(28.)).flex_shrink_0().flex().children(
+                                ["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map(
+                                    |day| {
+                                        div()
+                                            .flex_1()
+                                            .pl(px(9.))
+                                            .text_size(px(12.))
+                                            .text_color(rgb(MUTED))
+                                            .child(day)
+                                    },
+                                ),
+                            ))
+                            .child(
                                 div()
                                     .flex_1()
-                                    .pl(px(9.))
-                                    .text_size(px(12.))
-                                    .text_color(rgb(MUTED))
-                                    .child(day)
-                            }),
-                        ))
-                        .child(
-                            div()
-                                .flex_1()
-                                .min_h_0()
-                                .flex()
-                                .flex_col()
-                                .border_t_1()
-                                .border_l_1()
-                                .border_color(rgb(LINE))
-                                .children(weeks),
-                        ),
-                )
-            })
+                                    .min_h_0()
+                                    .flex()
+                                    .flex_col()
+                                    .border_t_1()
+                                    .border_l_1()
+                                    .border_color(rgb(LINE))
+                                    .children(weeks),
+                            ),
+                    )
+                    .when_some(self.life_statistics(cx), |body, stats| body.child(stats))
+            });
+        div()
+            .debug_selector(|| "manager-viewport".into())
+            .relative()
+            .flex_1()
+            .min_h_0()
+            .child(
+                div()
+                    .relative()
+                    .size_full()
+                    .child(
+                        div()
+                            .id("agenda-month-scroll")
+                            .size_full()
+                            .overflow_y_scroll()
+                            .track_scroll(&self.agenda.month_scroll)
+                            .on_scroll_wheel(cx.listener(|this, _, window, cx| {
+                                if this.agenda.popup_open && !this.agenda.editor_visible {
+                                    this.suspend_agenda_popup(window, cx);
+                                }
+                            }))
+                            .child(content),
+                    )
+                    .vertical_scrollbar(&self.agenda.month_scroll),
+            )
             .when(
                 self.agenda.popup_open && (self.agenda.editor_visible || !self.storage_failed),
                 |body| body.child(self.agenda_popover(window, cx)),

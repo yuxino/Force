@@ -21,7 +21,6 @@ use gpui_component::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Page {
     Agenda,
-    Life,
     Focus,
     Records,
     Analysis,
@@ -146,7 +145,7 @@ pub(crate) struct ForceView {
     pub(crate) countdown: bool,
     pub(crate) sound_enabled: bool,
     pub(crate) focus_handle: FocusHandle,
-    pub(crate) panel_scroll: [gpui::ScrollHandle; 5],
+    pub(crate) panel_scroll: [gpui::ScrollHandle; 4],
     pub(crate) task_scroll: gpui::ScrollHandle,
     pub(crate) tag_scroll: gpui::ScrollHandle,
     pub(crate) tag_form_anchor: gpui::ScrollAnchor,
@@ -326,7 +325,7 @@ impl ForceView {
         let classification = crate::classification_model::ClassificationState::new(window, cx);
         let life = crate::life_model::LifeState::new(window, cx);
         let time_picker = cx.new(crate::time_picker::TimePicker::new);
-        let panel_scroll: [gpui::ScrollHandle; 5] = std::array::from_fn(|_| Default::default());
+        let panel_scroll: [gpui::ScrollHandle; 4] = std::array::from_fn(|_| Default::default());
         let tag_form_anchor = gpui::ScrollAnchor::for_handle(panel_scroll[2].clone());
         let mut view = Self {
             agenda,
@@ -704,7 +703,7 @@ impl ForceView {
                 }
                 self.refresh_agenda(cx);
                 self.refresh_analysis(cx);
-                if self.page == Page::Life {
+                if self.page == Page::Agenda {
                     self.refresh_life(cx);
                 }
                 cx.notify();
@@ -1403,7 +1402,7 @@ impl ForceView {
             self.moments
                 .content
                 .update(cx, |input, cx| input.focus(window, cx));
-        } else if self.page == Page::Life && self.life.editor_visible {
+        } else if self.page == Page::Agenda && self.life.editor_visible {
             self.focus_life_editor(window, cx);
         } else if self.page == Page::Settings && self.classification.editing.is_some() {
             self.classification
@@ -2233,11 +2232,8 @@ impl ForceView {
             self.suspend_record_editor(window, cx);
         } else if self.moments.visible {
             self.suspend_moment(window, cx);
-        } else if self.page == Page::Life && self.life.editor_visible {
+        } else if self.page == Page::Agenda && self.life.editor_visible {
             self.suspend_life_editor(window, cx);
-        } else if self.page == Page::Life && self.life.customizing {
-            self.life.customizing = false;
-            cx.notify();
         } else if self.page == Page::Agenda && self.agenda.tag_picker.read(cx).is_open() {
             self.agenda
                 .tag_picker
@@ -2247,7 +2243,7 @@ impl ForceView {
         } else if self.editing_duration.is_some() {
             self.cancel_duration_edit(window, cx);
         } else if self.page == Page::Agenda && !self.agenda.month_overview
-            || matches!(self.page, Page::Focus | Page::Life)
+            || self.page == Page::Focus
         {
             self.navigate(Page::Agenda, window, cx);
         } else if self.page == Page::Settings && self.classification.editing.is_some() {

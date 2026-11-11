@@ -3,8 +3,7 @@ use force_core::{LifeBoard, LifeItem, LifeKind, LifeModule, LifeOccurrence, Life
 use gpui::{prelude::*, *};
 use gpui_component::{
     IconName,
-    button::ButtonVariants,
-    checkbox::Checkbox,
+    button::{Button, ButtonVariants},
     menu::{DropdownMenu, PopupMenuItem},
     tooltip::Tooltip,
 };
@@ -13,7 +12,7 @@ use crate::{
     editor_dialog,
     label::single_line,
     life_model::{LifeEdit, NextField, PreviousField},
-    model::ForceView,
+    model::{ForceView, Page},
     view::{
         ControlState, DESTRUCTIVE, INK, LINE, MUTED, PAPER, SURFACE, button, choice_button,
         control_icon, control_label, field, field_label, outlined_button, primary_button,
@@ -21,166 +20,200 @@ use crate::{
     },
 };
 
-const MODULES: [(LifeModule, &str, &str); 3] = [
-    (LifeModule::Table, "事项表", "life-toggle-table"),
-    (LifeModule::Trend, "趋势", "life-toggle-trend"),
-    (LifeModule::Total, "累计", "life-toggle-total"),
+const DISPLAY_MODULES: [(LifeModule, &str); 2] = [
+    (LifeModule::Trend, "趋势图"),
+    (LifeModule::Total, "累计统计"),
 ];
-const STREAK_WIDTH: f32 = 128.;
-const COUNT_WIDTH: f32 = 104.;
+const SUMMARY_HEADER_HEIGHT: f32 = 32.;
+const SUMMARY_ROW_HEIGHT: f32 = 40.;
+const PROGRESS_WIDTH: f32 = 220.;
 const ACTION_WIDTH: f32 = 154.;
 const PLOT_HEIGHT: f32 = 120.;
 const SPANS_SHOWN: usize = 8;
 
 impl ForceView {
-    pub(crate) fn life_toolbar(&self, cx: &mut Context<Self>) -> Div {
+    pub(crate) fn life_add_button(&self, cx: &mut Context<Self>) -> Button {
         let unavailable = self.storage_failed || self.life.load_failed || self.life.board.is_none();
-        div()
-            .flex()
-            .items_center()
-            .gap(px(8.))
-            .child(
-                outlined_button("life-customize")
-                    .debug_selector(|| "life-customize".into())
-                    .h(px(36.))
-                    .unavailable(unavailable)
-                    .icon(control_icon(IconName::Settings2, INK))
-                    .child(control_label(
-                        if self.life.customizing {
-                            "完成"
-                        } else {
-                            "自定义"
-                        },
-                        INK,
-                    ))
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.life.customizing = !this.life.customizing;
-                        cx.notify();
-                    })),
-            )
-            .child(
-                primary_button("life-add")
-                    .debug_selector(|| "life-add".into())
-                    .h(px(36.))
-                    .unavailable(unavailable)
-                    .when(self.life.edit.is_none(), |button| {
-                        button.icon(control_icon(IconName::Plus, PAPER))
-                    })
-                    .child(control_label(
-                        if self.life.edit.is_some() {
-                            "继续编辑"
-                        } else {
-                            "添加事项"
-                        },
-                        PAPER,
-                    ))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        this.begin_life_editor(LifeEdit::Add, window, cx);
-                    })),
-            )
+        button("life-add")
+            .debug_selector(|| "life-add".into())
+            .custom(quiet_variant(cx))
+            .h(px(30.))
+            .unavailable(unavailable)
+            .when(self.life.edit.is_none(), |button| {
+                button.icon(control_icon(IconName::Plus, INK))
+            })
+            .child(control_label(
+                if self.life.edit.is_some() {
+                    "继续编辑"
+                } else {
+                    "添加坚持事项"
+                },
+                INK,
+            ))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.begin_life_editor(LifeEdit::Add, window, cx);
+            }))
     }
 
-    pub(crate) fn life_panel(&self, cx: &mut Context<Self>) -> Div {
-        let panel = div()
-            .debug_selector(|| "life-dashboard".into())
-            .w_full()
-            .flex()
-            .flex_col()
-            .gap(px(28.))
-            .when_some(self.timer_context(cx), |panel, context| {
-                panel.child(context)
-            });
-        let Some(board) = self.life.board.as_ref().filter(|_| !self.life.load_failed) else {
-            return panel.child(
+    pub(crate) fn life_summary_height(&self) -> f32 {
+        if self.life.load_failed {
+            return SUMMARY_HEADER_HEIGHT;
+        }
+        self.life
+            .board
+            .as_ref()
+            .filter(|board| !board.items.is_empty())
+            .map_or(0., |board| {
+                SUMMARY_HEADER_HEIGHT + SUMMARY_ROW_HEIGHT * board.items.len() as f32
+            })
+    }
+
+    pub(crate) fn life_summary(&self, cx: &mut Context<Self>) -> Option<Div> {
+        if self.life.load_failed {
+            return Some(
                 div()
+                    .h(px(SUMMARY_HEADER_HEIGHT))
+                    .flex_shrink_0()
                     .flex()
                     .items_center()
                     .gap(px(12.))
-                    .child("读取生活看板失败。")
+                    .child(control_label("无法读取坚持事项。", MUTED))
                     .child(
-                        outlined_button("life-retry")
-                            .h(px(32.))
+                        button("life-retry")
+                            .custom(quiet_variant(cx))
+                            .h(px(30.))
                             .child(control_label("重试", INK))
                             .on_click(cx.listener(|this, _, _, cx| this.refresh_life(cx))),
                     ),
             );
-        };
-        let panel = panel.when(self.life.customizing, |panel| {
-            panel.child(
-                div()
-                    .debug_selector(|| "life-module-picker".into())
-                    .flex()
-                    .items_center()
-                    .gap(px(24.))
-                    .px(px(16.))
-                    .py(px(12.))
-                    .rounded(px(6.))
-                    .bg(rgb(SURFACE))
-                    .child(field_label("显示模块"))
-                    .children(MODULES.map(|(module, label, id)| {
-                        div().debug_selector(move || id.into()).child(
-                            Checkbox::new(id)
-                                .checked(board.shows(module))
-                                .label(label)
-                                .on_click(cx.listener(move |this, visible: &bool, _, cx| {
-                                    this.set_life_module(module, *visible, cx);
-                                })),
-                        )
-                    })),
-            )
-        });
-        if board.items.is_empty() {
-            return panel.child(life_empty("添加想坚持的事项，查看连续天数和打卡记录。"));
         }
-        let table = board.shows(LifeModule::Table);
-        let trend = board.shows(LifeModule::Trend);
-        let total = board.shows(LifeModule::Total);
-        if !table && !trend && !total {
-            return panel.child(life_empty("当前未显示模块。可在「自定义」中选择。"));
-        }
-        panel
-            .when(table, |panel| panel.child(self.life_table(board, cx)))
-            .when(trend || total, |panel| {
-                panel.child(
+        let board = self
+            .life
+            .board
+            .as_ref()
+            .filter(|board| !board.items.is_empty())?;
+        let options = DISPLAY_MODULES.map(|(module, label)| (module, label, board.shows(module)));
+        let model = cx.entity().downgrade();
+        Some(
+            div()
+                .debug_selector(|| "life-table".into())
+                .w_full()
+                .flex_shrink_0()
+                .flex()
+                .flex_col()
+                .child(
                     div()
+                        .h(px(SUMMARY_HEADER_HEIGHT))
+                        .flex_shrink_0()
                         .flex()
-                        .items_start()
-                        .gap(px(32.))
-                        .when(trend, |row| row.child(self.life_trend(board, cx)))
-                        .when(total, |row| row.child(self.life_total(board, trend, cx))),
+                        .items_center()
+                        .gap(px(8.))
+                        .child(section_heading("坚持"))
+                        .child(div().flex_1())
+                        .child(self.life_add_button(cx))
+                        .child(
+                            button("life-display")
+                                .debug_selector(|| "life-display".into())
+                                .custom(quiet_variant(cx))
+                                .h(px(30.))
+                                .icon(control_icon(IconName::Settings2, MUTED))
+                                .child(control_label("显示", MUTED))
+                                .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                                    options.into_iter().fold(
+                                        menu.min_w(px(144.)),
+                                        |menu, (module, label, visible)| {
+                                            let model = model.clone();
+                                            menu.item(
+                                                PopupMenuItem::new(label)
+                                                    .checked(visible)
+                                                    .on_click(move |_, _, cx| {
+                                                        let _ = model.update(cx, |this, cx| {
+                                                            this.set_life_module(
+                                                                module, !visible, cx,
+                                                            )
+                                                        });
+                                                    }),
+                                            )
+                                        },
+                                    )
+                                }),
+                        ),
                 )
-            })
+                .children(board.items.iter().map(|item| self.life_row(item, cx))),
+        )
     }
 
-    fn life_table(&self, board: &LifeBoard, cx: &mut Context<Self>) -> Div {
-        div()
-            .debug_selector(|| "life-table".into())
-            .flex()
-            .flex_col()
-            .gap(px(10.))
-            .child(section_heading("我的事项"))
-            .child(
-                div()
-                    .border_t_1()
-                    .border_color(rgb(LINE))
-                    .child(
-                        table_row()
-                            .h(px(34.))
-                            .text_size(px(13.))
-                            .text_color(rgb(MUTED))
-                            .child(div().flex_1().child("事项"))
-                            .child(div().w(px(STREAK_WIDTH)).child("坚持"))
-                            .child(div().w(px(COUNT_WIDTH)).child("打卡次数"))
-                            .child(div().w(px(ACTION_WIDTH))),
-                    )
-                    .children(board.items.iter().map(|item| self.life_row(item, cx))),
-            )
+    pub(crate) fn life_statistics(&self, cx: &mut Context<Self>) -> Option<Div> {
+        let board = self
+            .life
+            .board
+            .as_ref()
+            .filter(|board| !self.life.load_failed && !board.items.is_empty())?;
+        let trend = board.shows(LifeModule::Trend);
+        let total = board.shows(LifeModule::Total);
+        (trend || total).then(|| {
+            div()
+                .w_full()
+                .flex_shrink_0()
+                .pt(px(20.))
+                .border_t_1()
+                .border_color(rgb(LINE))
+                .flex()
+                .items_start()
+                .gap(px(32.))
+                .when(trend, |row| row.child(self.life_trend(board, cx)))
+                .when(total, |row| row.child(self.life_total(board, trend, cx)))
+        })
+    }
+
+    pub(crate) fn life_day_records(&self, day: NaiveDate, cx: &mut Context<Self>) -> Option<Div> {
+        let mut check_ins = self.life.check_ins_on(day).peekable();
+        check_ins.peek()?;
+        Some(
+            div()
+                .debug_selector(|| "agenda-day-checkins".into())
+                .pt(px(6.))
+                .flex()
+                .flex_col()
+                .child(
+                    div()
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .child(section_heading("打卡"))
+                        .child(
+                            button("agenda-check-in-records")
+                                .debug_selector(|| "agenda-check-in-records".into())
+                                .custom(quiet_variant(cx))
+                                .h(px(28.))
+                                .child(control_label("查看记录", MUTED))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.select_record_date(day, cx);
+                                    this.navigate(Page::Records, window, cx);
+                                })),
+                        ),
+                )
+                .children(check_ins.map(|(item, entry)| {
+                    let id = item.id;
+                    let detail = match entry.minutes {
+                        Some(minutes) => {
+                            format!("{} 次 · {}", entry.count, check_in_duration(minutes))
+                        }
+                        None => format!("{} 次", entry.count),
+                    };
+                    table_row()
+                        .debug_selector(move || format!("agenda-day-checkin-{id}"))
+                        .min_h(px(34.))
+                        .child(life_name(item, "life-day-name").flex_1().min_w_0())
+                        .child(control_label(detail, MUTED).flex_shrink_0())
+                })),
+        )
     }
 
     fn life_row(&self, item: &LifeItem, cx: &mut Context<Self>) -> Div {
         let id = item.id;
         let check_in = item.kind == LifeKind::CheckIn;
-        let (label, count, detail) = if let Some(last) = item.last_occurrence() {
+        let (label, detail) = if let Some(last) = item.last_occurrence() {
             let elapsed = item.elapsed_at(self.now);
             let label = if last.is_day() {
                 estimated_interval(last, None, self.now)
@@ -190,46 +223,40 @@ impl ForceView {
                 format!("{} 天", elapsed / 86_400)
             };
             let detail = format!("上次发生：{}", occurrence_timestamp(last));
-            (label, "—".to_owned(), detail)
+            (label, detail)
         } else {
             let summary = item.check_in_summary(Local::now().date_naive());
             (
-                format!("连续 {} 天", summary.streak_days),
-                format!("{} 次", summary.count),
+                format!(
+                    "连续 {} 天 · 打卡 {} 次",
+                    summary.streak_days, summary.count
+                ),
                 "今天还没打卡时，连续天数保留到今天结束。".to_owned(),
             )
         };
         table_row()
             .debug_selector(move || format!("life-row-{id}"))
-            .min_h(px(51.))
+            .h(px(SUMMARY_ROW_HEIGHT))
+            .flex_shrink_0()
             .child(
                 div()
                     .flex_1()
                     .min_w_0()
                     .flex()
-                    .flex_col()
-                    .gap(px(3.))
-                    .child(life_name(item, "life-table-name"))
-                    .child(field_label(if check_in {
-                        "坚持做"
-                    } else {
-                        "坚持不做"
-                    })),
+                    .items_center()
+                    .gap(px(8.))
+                    .child(life_name(item, "life-table-name").min_w_0())
+                    .when(!check_in, |row| {
+                        row.child(field_label("坚持不做").flex_shrink_0())
+                    }),
             )
             .child(
                 single_line(label, 14.)
                     .id(("life-streak", id as u64))
-                    .w(px(STREAK_WIDTH))
+                    .w(px(PROGRESS_WIDTH))
                     .flex_shrink_0()
                     .font_weight(FontWeight::MEDIUM)
                     .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx)),
-            )
-            .child(
-                div()
-                    .w(px(COUNT_WIDTH))
-                    .flex_shrink_0()
-                    .text_size(px(14.))
-                    .child(count),
             )
             .child(
                 div()
@@ -764,16 +791,6 @@ fn check_in_duration(minutes: u64) -> String {
         (hours, 0) => format!("{hours} 小时"),
         (hours, minutes) => format!("{hours} 小时 {minutes} 分钟"),
     }
-}
-
-fn life_empty(message: &'static str) -> Div {
-    div()
-        .debug_selector(|| "life-empty".into())
-        .border_t_1()
-        .border_color(rgb(LINE))
-        .pt(px(20.))
-        .text_color(rgb(MUTED))
-        .child(message)
 }
 
 fn table_row() -> Div {

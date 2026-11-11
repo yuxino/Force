@@ -1,5 +1,4 @@
 //! Day details stay contextual; arrangement editing uses a roomy centered dialog.
-use chrono::{Datelike, Days};
 use force_core::TagKind;
 use gpui::{prelude::*, *};
 use gpui_component::{IconName, button::ButtonVariants};
@@ -22,36 +21,19 @@ impl ForceView {
         let size = window.viewport_size();
         let width = 360_f32.min(f32::from(size.width) - 24.);
         let max_height = (f32::from(size.height) - 100.).max(240.);
-        let month = self.agenda.month;
-        let first = month
-            .checked_sub_days(Days::new(u64::from(month.weekday().num_days_from_monday())))
-            .unwrap_or(month);
-        let last = month
-            .checked_add_days(Days::new(31))
-            .and_then(|day| day.with_day(1))
-            .and_then(|day| day.pred_opt())
-            .unwrap_or(month);
-        let weeks = (month.weekday().num_days_from_monday() + last.day()).div_ceil(7);
-        let content_width = f32::from(size.width).min(976.) - 80.;
-        let cell_width = content_width / 7.;
-        let cell_height = (f32::from(size.height) - 200.) / weeks as f32;
-        let index = self
+        // The calendar can scroll; use the actual activated cell position.
+        let anchor = self
             .agenda
-            .date
-            .signed_duration_since(first)
-            .num_days()
-            .clamp(0, 41) as usize;
-        let cell_left =
-            (f32::from(size.width) - content_width) / 2. + index as f32 % 7. * cell_width;
-        let right = cell_left + cell_width + 8.;
+            .popup_anchor
+            .unwrap_or(point(size.width / 2., px(176.)));
+        let right = f32::from(anchor.x) + 16.;
         let left = if right + width <= f32::from(size.width) - 12. {
             right
         } else {
-            cell_left - width - 8.
+            f32::from(anchor.x) - width - 16.
         }
         .clamp(12., f32::from(size.width) - width - 12.);
-        let top =
-            (176. + (index / 7) as f32 * cell_height).clamp(80., f32::from(size.height) - 100.);
+        let top = f32::from(anchor.y).clamp(80., f32::from(size.height) - 100.);
         let selected_detail = self.agenda.selected_plan.is_some()
             || self.agenda.selected_record.is_some()
             || self.agenda.selected_completion.is_some();
@@ -472,12 +454,13 @@ impl ForceView {
                 })),
             );
         }
+        let check_ins = self.life_day_records(self.agenda.date, cx);
         div()
             .flex()
             .flex_col()
             .gap(px(2.))
             .when(
-                rows.is_empty() && self.agenda.day_moments.is_empty(),
+                rows.is_empty() && self.agenda.day_moments.is_empty() && check_ins.is_none(),
                 |body| {
                     body.child(
                         div()
@@ -488,6 +471,7 @@ impl ForceView {
                     )
                 },
             )
+            .when_some(check_ins, |body, check_ins| body.child(check_ins))
             .children(rows)
             .children(
                 self.agenda

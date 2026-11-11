@@ -234,7 +234,6 @@ impl ForceView {
             Page::Records => 1,
             Page::Settings => 2,
             Page::Analysis => 3,
-            Page::Life => 4,
         }];
         div()
             .debug_selector(|| "manager-viewport".into())
@@ -265,17 +264,11 @@ impl ForceView {
                                     .justify_between()
                                     .child(page_heading(match self.page {
                                         Page::Agenda => "日历",
-                                        Page::Life => "生活看板",
                                         Page::Focus => "计时",
                                         Page::Records => "记录",
                                         Page::Settings => "设置",
                                         Page::Analysis => "分析",
                                     }))
-                                    .when(self.page == Page::Life, |row| {
-                                        row.min_h(px(36.)).when(!self.life.editor_visible, |row| {
-                                            row.child(self.life_toolbar(cx))
-                                        })
-                                    })
                                     .when(self.page == Page::Records, |row| {
                                         row.child(
                                             button("export-records")
@@ -318,7 +311,6 @@ impl ForceView {
                                     Page::Analysis => {
                                         self.analysis_panel(window, cx).into_any_element()
                                     }
-                                    Page::Life => self.life_panel(cx).into_any_element(),
                                     Page::Settings => self
                                         .settings_panel(
                                             window.viewport_size().width >= px(920.),
@@ -366,7 +358,7 @@ impl Render for ForceView {
                 self.life
                     .edit
                     .as_ref()
-                    .filter(|_| self.page == Page::Life && self.life.editor_visible),
+                    .filter(|_| self.page == Page::Agenda && self.life.editor_visible),
                 |body, edit| body.child(self.life_editor(edit, window, cx)),
             )
             .when_some(self.toast.as_ref(), |body, (message, _)| {

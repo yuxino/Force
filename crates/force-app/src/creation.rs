@@ -41,6 +41,9 @@ impl ForceView {
     pub(crate) fn open_creation(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.clear_creation_seed();
         self.show_manager(window, cx);
+        if self.page == Page::Agenda && self.life.editor_visible {
+            return;
+        }
         match self.visible_creation() {
             Some(CreationKind::Task) => self.focus_task_dialog(window, cx),
             Some(CreationKind::Plan) => self.focus_agenda_editor(window, cx),

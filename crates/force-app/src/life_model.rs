@@ -1,5 +1,7 @@
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
-use force_core::{Error, LifeBoard, LifeItem, LifeKind, LifeModule, LifeOccurrence, Store};
+use force_core::{
+    CheckInDay, Error, LifeBoard, LifeItem, LifeKind, LifeModule, LifeOccurrence, Store,
+};
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, KeyBinding, PromptButton,
     PromptLevel, ScrollHandle, Subscription, Window, point, px,
@@ -36,7 +38,6 @@ impl LifeEdit {
 pub(crate) struct LifeState {
     pub(crate) board: Option<LifeBoard>,
     pub(crate) load_failed: bool,
-    pub(crate) customizing: bool,
     pub(crate) editor_visible: bool,
     pub(crate) edit: Option<LifeEdit>,
     pub(crate) name: Entity<InputState>,
@@ -67,7 +68,7 @@ impl LifeState {
             .into_iter()
             .map(|field| {
                 cx.subscribe_in(field, window, |this, _, event, window, cx| {
-                    if this.page != Page::Life || !this.life.editor_visible {
+                    if this.page != Page::Agenda || !this.life.editor_visible {
                         return;
                     }
                     match event {
@@ -86,7 +87,6 @@ impl LifeState {
         Self {
             board: None,
             load_failed: false,
-            customizing: false,
             editor_visible: false,
             edit: None,
             name,
@@ -102,6 +102,21 @@ impl LifeState {
             generation: 0,
             _subscriptions: subscriptions,
         }
+    }
+
+    pub(crate) fn check_ins_on(
+        &self,
+        day: NaiveDate,
+    ) -> impl Iterator<Item = (&LifeItem, CheckInDay)> {
+        self.board
+            .iter()
+            .filter(|_| !self.load_failed)
+            .flat_map(|board| &board.items)
+            .filter_map(move |item| {
+                let history = item.check_in_days();
+                let index = history.binary_search_by_key(&day, |entry| entry.day).ok()?;
+                Some((item, history[index]))
+            })
     }
 
     fn changed(&self, cx: &App) -> bool {
@@ -187,6 +202,7 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        self.suspend_agenda_popup(window, cx);
         if self.life.edit.is_some() {
             self.resume_life_editor(window, cx);
             return;
@@ -280,7 +296,7 @@ impl ForceView {
     }
 
     pub(crate) fn save_life_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page != Page::Life
+        if self.page != Page::Agenda
             || self.compact
             || self.storage_failed
             || self.life.load_failed
@@ -375,7 +391,7 @@ impl ForceView {
                     if this.life.generation != generation || !this.life.editor_visible {
                         return;
                     }
-                    if !this.compact && this.page == Page::Life {
+                    if !this.compact && this.page == Page::Agenda {
                         window.activate_window();
                         this.focus_life_editor(window, cx);
                     }
