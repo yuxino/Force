@@ -1,18 +1,25 @@
 //! Point-in-time notes have an independent draft and never create timer intervals.
-use crate::model::ForceView;
-use chrono::{Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
-use force_core::Moment;
+use crate::model::{ForceView, Page};
+use chrono::{Datelike, Local, NaiveDate, NaiveDateTime, NaiveTime, TimeZone};
+use force_core::{DailyEntry, Moment};
 use gpui::Focusable as _;
 use gpui::{AppContext as _, Context, Entity, PromptButton, PromptLevel, Subscription, Window};
 use gpui_component::input::{InputEvent, InputState};
 
 gpui::actions!(moment_editor, [NextField, PreviousField]);
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Default, PartialEq)]
 struct MomentDraft {
     content: String,
     date: String,
     time: String,
+    day_only: bool,
+    minutes: String,
+}
+
+enum SavedNote {
+    Timed(Moment),
+    Daily(DailyEntry),
 }
 
 pub(crate) struct MomentState {
@@ -20,9 +27,12 @@ pub(crate) struct MomentState {
     pub(crate) visible: bool,
     pub(crate) active: bool,
     pub(crate) editing: Option<i64>,
+    pub(crate) daily_original: Option<DailyEntry>,
+    pub(crate) day_only: bool,
     pub(crate) content: Entity<InputState>,
     pub(crate) date: Entity<InputState>,
     pub(crate) time: Entity<InputState>,
+    pub(crate) minutes: Entity<InputState>,
     pub(crate) error: Option<String>,
     pub(crate) editor_scroll: gpui::ScrollHandle,
     baseline: Option<MomentDraft>,
@@ -45,8 +55,9 @@ impl MomentState {
         });
         let date = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
         let time = cx.new(|cx| InputState::new(window, cx).placeholder("HH:MM"));
+        let minutes = cx.new(|cx| InputState::new(window, cx).placeholder("例如 60"));
         let mut subscriptions = Vec::new();
-        for input in [&content, &date, &time] {
+        for input in [&content, &date, &time, &minutes] {
             subscriptions.push(cx.subscribe(input, |this, _, event: &InputEvent, cx| {
                 if matches!(event, InputEvent::Change) {
                     this.moments.error = None;
@@ -59,9 +70,12 @@ impl MomentState {
             visible: false,
             active: false,
             editing: None,
+            daily_original: None,
+            day_only: false,
             content,
             date,
             time,
+            minutes,
             error: None,
             editor_scroll: gpui::ScrollHandle::default(),
             baseline: None,
@@ -70,11 +84,17 @@ impl MomentState {
             _subscriptions: subscriptions,
         }
     }
+    pub(crate) fn is_editing(&self) -> bool {
+        self.editing.is_some() || self.daily_original.is_some()
+    }
+
     fn draft(&self, cx: &gpui::App) -> MomentDraft {
         MomentDraft {
             content: self.content.read(cx).value().to_string(),
             date: self.date.read(cx).value().to_string(),
             time: self.time.read(cx).value().to_string(),
+            day_only: self.day_only,
+            minutes: self.minutes.read(cx).value().to_string(),
         }
     }
     fn changed(&self, cx: &gpui::App) -> bool {
@@ -117,14 +137,14 @@ impl ForceView {
         cx: &mut Context<Self>,
     ) {
         // A new note must never silently resume editing an existing note.
-        if self.moments.active && self.moments.editing.is_some() {
+        if self.moments.active && self.moments.is_editing() {
             if self.moments.changed(cx) {
                 self.reveal_moment(window, cx);
                 let generation = self.moments.generation;
                 let draft = self.moments.draft(cx);
                 let answer = window.prompt(
                     PromptLevel::Info,
-                    "保存当前随记？",
+                    "保存当前记录？",
                     None,
                     &[
                         PromptButton::cancel("取消"),
@@ -173,6 +193,7 @@ impl ForceView {
                     content: String::new(),
                     date: day.format("%Y-%m-%d").to_string(),
                     time: now.format("%H:%M").to_string(),
+                    ..MomentDraft::default()
                 },
                 (day == now.date_naive()).then_some(now.timestamp()),
                 window,
@@ -192,7 +213,28 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.moments.active && self.moments.editing == Some(moment.id) {
+        self.edit_saved_note(SavedNote::Timed(moment), window, cx);
+    }
+
+    pub(crate) fn edit_daily_entry(
+        &mut self,
+        entry: DailyEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.edit_saved_note(SavedNote::Daily(entry), window, cx);
+    }
+
+    fn edit_saved_note(&mut self, note: SavedNote, window: &mut Window, cx: &mut Context<Self>) {
+        let same_entry = match &note {
+            SavedNote::Timed(moment) => self.moments.editing == Some(moment.id),
+            SavedNote::Daily(entry) => self
+                .moments
+                .daily_original
+                .as_ref()
+                .is_some_and(|original| original.id == entry.id),
+        };
+        if self.moments.active && same_entry {
             self.reveal_moment(window, cx);
             return;
         }
@@ -202,7 +244,7 @@ impl ForceView {
             let draft = self.moments.draft(cx);
             let answer = window.prompt(
                 PromptLevel::Info,
-                "保存当前随记？",
+                "保存当前记录？",
                 None,
                 &[
                     PromptButton::cancel("取消"),
@@ -224,7 +266,7 @@ impl ForceView {
                                 return;
                             }
                             this.moments.active = false;
-                            this.edit_moment(moment, window, cx);
+                            this.edit_saved_note(note, window, cx);
                         });
                     });
                 }
@@ -232,20 +274,43 @@ impl ForceView {
             .detach();
             return;
         }
-        let Some(stamp) = Local.timestamp_opt(moment.occurred_at, 0).single() else {
-            return;
-        };
-        self.load_moment_draft(
-            Some(moment.id),
-            MomentDraft {
-                content: moment.content,
-                date: stamp.format("%Y-%m-%d").to_string(),
-                time: stamp.format("%H:%M").to_string(),
-            },
-            Some(moment.occurred_at),
-            window,
-            cx,
-        );
+        match note {
+            SavedNote::Timed(moment) => {
+                let Some(stamp) = Local.timestamp_opt(moment.occurred_at, 0).single() else {
+                    return;
+                };
+                self.load_moment_draft(
+                    Some(moment.id),
+                    MomentDraft {
+                        content: moment.content,
+                        date: stamp.format("%Y-%m-%d").to_string(),
+                        time: stamp.format("%H:%M").to_string(),
+                        ..MomentDraft::default()
+                    },
+                    Some(moment.occurred_at),
+                    window,
+                    cx,
+                );
+            }
+            SavedNote::Daily(entry) => {
+                self.load_moment_draft(
+                    None,
+                    MomentDraft {
+                        content: entry.content.clone(),
+                        date: entry.day.to_string(),
+                        day_only: true,
+                        minutes: entry
+                            .duration_minutes
+                            .map_or_else(String::new, |minutes| minutes.to_string()),
+                        ..MomentDraft::default()
+                    },
+                    None,
+                    window,
+                    cx,
+                );
+                self.moments.daily_original = Some(entry);
+            }
+        }
         self.reveal_moment(window, cx);
     }
 
@@ -261,10 +326,14 @@ impl ForceView {
             content,
             date,
             time,
+            day_only,
+            minutes,
         } = draft;
         self.moments.generation = self.moments.generation.wrapping_add(1);
         self.moments.active = true;
         self.moments.editing = id;
+        self.moments.daily_original = None;
+        self.moments.day_only = day_only;
         self.moments.source_timestamp = source_timestamp;
         self.moments.error = None;
         self.moments
@@ -276,6 +345,9 @@ impl ForceView {
         self.moments
             .time
             .update(cx, |input, cx| input.set_value(time, window, cx));
+        self.moments
+            .minutes
+            .update(cx, |input, cx| input.set_value(minutes, window, cx));
         self.moments.baseline = Some(self.moments.draft(cx));
     }
 
@@ -311,6 +383,7 @@ impl ForceView {
         self.moments.visible = false;
         self.moments.active = false;
         self.moments.editing = None;
+        self.moments.daily_original = None;
         self.moments.baseline = None;
         self.moments.source_timestamp = None;
         self.moments.error = None;
@@ -340,6 +413,14 @@ impl ForceView {
         } else {
             None
         };
+        if draft.day_only {
+            if let Some(error) = error {
+                self.moments.error = Some(error.to_owned());
+                cx.notify();
+                return false;
+            }
+            return self.save_daily_note(&draft, window, cx);
+        }
         let stamp = resolve_moment_time(
             &draft,
             self.moments.baseline.as_ref(),
@@ -366,6 +447,80 @@ impl ForceView {
         } else {
             false
         }
+    }
+
+    fn save_daily_note(
+        &mut self,
+        draft: &MomentDraft,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let today = Local::now().date_naive();
+        let parsed = parse_daily_fields(&draft.date, &draft.minutes, today);
+        let (day, minutes) = match parsed {
+            Ok(fields) => fields,
+            Err(error) => {
+                self.moments.error = Some(error.to_owned());
+                cx.notify();
+                return false;
+            }
+        };
+        let original = self.moments.daily_original.clone();
+        if !self.write(
+            |store| match &original {
+                Some(entry) => store.update_daily_entry(entry, day, &draft.content, minutes, today),
+                None => store.create_daily_entry(day, &draft.content, minutes, today),
+            },
+            cx,
+        ) {
+            return false;
+        }
+        self.cancel_moment(window, cx);
+        self.select_record_date(day, cx);
+        if self.page != Page::Records {
+            self.navigate(Page::Records, window, cx);
+        }
+        self.notify("按日记录已保存。", cx);
+        true
+    }
+
+    pub(crate) fn delete_daily_entry(
+        &mut self,
+        entry: DailyEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let generation = self.moments.generation;
+        let return_focus = window.focused(cx);
+        let answer = window.prompt(
+            PromptLevel::Warning,
+            "删除这条按日记录？",
+            None,
+            &[PromptButton::cancel("取消"), PromptButton::new("删除")],
+            cx,
+        );
+        cx.spawn_in(window, async move |this, cx| {
+            let choice = answer.await;
+            let _ = cx.update(|window, cx| {
+                let _ = this.update(cx, |this, cx| {
+                    if !this.compact {
+                        window.activate_window();
+                        if let Some(focus) = &return_focus {
+                            focus.focus(window);
+                        }
+                    }
+                    if matches!(choice, Ok(1))
+                        && this.write(|store| store.delete_daily_entry(&entry), cx)
+                    {
+                        if this.moments.generation == generation {
+                            this.cancel_moment(window, cx);
+                        }
+                        this.notify("按日记录已删除。", cx);
+                    }
+                });
+            });
+        })
+        .detach();
     }
 
     pub(crate) fn delete_moment(&mut self, id: i64, window: &mut Window, cx: &mut Context<Self>) {
@@ -423,18 +578,46 @@ fn resolve_moment_time(
 }
 
 fn parse_moment_time(date: &str, time: &str) -> Result<i64, &'static str> {
-    let date = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d")
-        .map_err(|_| "日期格式为 YYYY-MM-DD。")?;
-    use chrono::Datelike as _;
-    if !(1..=9999).contains(&date.year()) {
-        return Err("日期年份需在 1–9999 之间。");
-    }
+    let date = parse_note_date(date)?;
     let time = NaiveTime::parse_from_str(time.trim(), "%H:%M").map_err(|_| "时间格式为 HH:MM。")?;
     Local
         .from_local_datetime(&NaiveDateTime::new(date, time))
         .single()
         .map(|stamp| stamp.timestamp())
         .ok_or("这个本地时间不存在或有歧义，请调整时间。")
+}
+
+fn parse_note_date(value: &str) -> Result<NaiveDate, &'static str> {
+    let day = NaiveDate::parse_from_str(value.trim(), "%Y-%m-%d")
+        .map_err(|_| "日期格式为 YYYY-MM-DD。")?;
+    if !(1..=9999).contains(&day.year()) {
+        return Err("日期年份需在 1–9999 之间。");
+    }
+    Ok(day)
+}
+
+fn parse_daily_fields(
+    date: &str,
+    minutes: &str,
+    today: NaiveDate,
+) -> Result<(NaiveDate, Option<u16>), &'static str> {
+    let day = parse_note_date(date)?;
+    if day > today {
+        return Err("记录日期不能晚于今天。");
+    }
+    let minutes = minutes.trim();
+    let duration = if minutes.is_empty() {
+        None
+    } else {
+        Some(
+            minutes
+                .parse::<u16>()
+                .ok()
+                .filter(|minutes| (1..=1440).contains(minutes))
+                .ok_or("请输入 1–1440 之间的分钟数，或留空。")?,
+        )
+    };
+    Ok((day, duration))
 }
 
 #[cfg(test)]
@@ -463,6 +646,7 @@ mod tests {
             content: "Before".into(),
             date: "2026-11-01".into(),
             time: "01:30".into(),
+            ..MomentDraft::default()
         };
         let edited = MomentDraft {
             content: "After, with more detail".into(),
@@ -494,6 +678,7 @@ mod tests {
             content: "Note".into(),
             date: "2026-10-28".into(),
             time: "09:15".into(),
+            ..MomentDraft::default()
         };
         let source = parse_moment_time(&baseline.date, &baseline.time).unwrap() + 37;
         let changed = MomentDraft {

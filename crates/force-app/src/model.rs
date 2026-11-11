@@ -79,6 +79,7 @@ pub(crate) struct ForceView {
     pub(crate) record_editor: crate::record_editor_model::RecordEditorState,
     pub(crate) completion_editor: crate::completion_editor_model::CompletionEditorState,
     pub(crate) record_moments: Vec<force_core::Moment>,
+    pub(crate) record_daily_entries: Vec<force_core::DailyEntry>,
     pub(crate) store: Option<Store>,
     pub(crate) data_dir: PathBuf,
     pub(crate) storage_failed: bool,
@@ -335,6 +336,7 @@ impl ForceView {
             record_editor,
             completion_editor,
             record_moments: Vec::new(),
+            record_daily_entries: Vec::new(),
             store: None,
             data_dir,
             analysis: Default::default(),
@@ -604,6 +606,7 @@ impl ForceView {
                 active,
                 store.sessions_overlapping(start, end, self.now)?,
                 store.moments_between(start, end)?,
+                store.daily_entries(self.record_date)?,
                 store.goal_minutes()?,
                 load_stats(store, self.record_date, self.now)?,
                 completed,
@@ -624,6 +627,7 @@ impl ForceView {
                 active,
                 history,
                 record_moments,
+                record_daily_entries,
                 goal,
                 (today, record_stats),
                 completed,
@@ -640,6 +644,7 @@ impl ForceView {
                 self.active = active;
                 self.history = history;
                 self.record_moments = record_moments;
+                self.record_daily_entries = record_daily_entries;
                 if self.editing_duration.is_some_and(|id| {
                     self.preparing
                         || self.selected_session != Some(id)

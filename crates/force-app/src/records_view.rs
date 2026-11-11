@@ -8,8 +8,8 @@ use crate::{
     model::{ForceView, day_bounds},
     view::{
         ControlState, INK, LINE, MUTED, SURFACE, button, choice_button, clock, control_icon,
-        control_label, destructive_button, field, record_detail, record_timestamp, session_times,
-        short_time, timer_font,
+        control_label, destructive_button, field, record_detail, record_timestamp, section_heading,
+        session_times, short_time, timer_font,
     },
 };
 
@@ -180,6 +180,7 @@ impl ForceView {
                                         ))),
                             ),
                     )
+                    .when(!self.record_daily_entries.is_empty(), |body| body.child(self.record_daily_section(&query, cx)))
                     .when(!self.record_moments.is_empty(), |body| body.child(self.record_moment_section(&query, cx)))
                     .child(div().debug_selector(|| "record-class-filters".into()).flex().flex_wrap().gap(px(6.)).py(px(8.))
                         .children([
@@ -218,6 +219,66 @@ impl ForceView {
                             )),
                     )),
             )
+    }
+
+    fn record_daily_section(&self, query: &str, cx: &mut Context<Self>) -> Div {
+        let entries: Vec<_> = self
+            .record_daily_entries
+            .iter()
+            .filter(|entry| query.is_empty() || entry.content.to_lowercase().contains(query))
+            .collect();
+        div()
+            .debug_selector(|| "record-daily-entries".into())
+            .py(px(8.))
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(section_heading("按日记录"))
+            .when(entries.is_empty(), |section| {
+                section.child(
+                    div()
+                        .py(px(8.))
+                        .text_color(rgb(MUTED))
+                        .child("没有匹配的按日记录"),
+                )
+            })
+            .children(entries.into_iter().map(|entry| {
+                let id = entry.id;
+                let original = entry.clone();
+                div()
+                    .debug_selector(move || format!("record-daily-entry-{id}"))
+                    .min_h(px(44.))
+                    .flex()
+                    .items_center()
+                    .gap(px(12.))
+                    .border_b_1()
+                    .border_color(rgb(LINE))
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .whitespace_normal()
+                            .child(entry.content.clone()),
+                    )
+                    .when_some(entry.duration_minutes, |row, minutes| {
+                        row.child(
+                            div()
+                                .flex_shrink_0()
+                                .text_color(rgb(MUTED))
+                                .child(short_time(i64::from(minutes) * 60)),
+                        )
+                    })
+                    .child(
+                        button(("record-edit-daily", id as u64))
+                            .debug_selector(move || format!("record-edit-daily-{id}"))
+                            .custom(crate::view::quiet_variant(cx))
+                            .h(px(32.))
+                            .child(control_label("编辑", MUTED))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.edit_daily_entry(original.clone(), window, cx);
+                            })),
+                    )
+            }))
     }
 
     fn record_moment_section(&self, query: &str, cx: &mut Context<Self>) -> Div {

@@ -13,12 +13,13 @@ pub const HISTORY_LIMIT: usize = 500;
 pub const MAX_GOAL_MINUTES: u32 = 24 * 60;
 pub const MIN_TARGET_SECONDS: i64 = 60;
 pub const MAX_TARGET_SECONDS: i64 = 24 * 60 * 60;
-const SCHEMA_VERSION: i64 = 9;
+const SCHEMA_VERSION: i64 = 10;
 
 mod agenda;
 mod analysis;
 mod classification;
 mod completed_task_edit;
+mod daily;
 mod life;
 mod moment;
 mod record_edit;
@@ -27,7 +28,8 @@ pub use agenda::{PlanDraft, PlanEntry};
 pub use analysis::{DailyAnalysis, PeriodAnalysis};
 pub use classification::ClassColors;
 pub use completed_task_edit::CompletedTaskEditSnapshot;
-pub use life::{LifeBoard, LifeItem, LifeModule, LifeSpan};
+pub use daily::DailyEntry;
+pub use life::{LifeBoard, LifeItem, LifeModule, LifeOccurrence, LifeSpan};
 pub use moment::{MOMENT_CONTENT_LIMIT, Moment};
 pub use record_edit::{RecordEditSnapshot, RecordIntervalEdit};
 pub use task::Task;
@@ -253,8 +255,11 @@ impl Store {
         if (1..8).contains(&version) {
             classification::migrate_v7(&mut connection)?;
         }
-        if (1..SCHEMA_VERSION).contains(&version) {
+        if (1..9).contains(&version) {
             life::migrate_v8(&mut connection)?;
+        }
+        if (1..10).contains(&version) {
+            daily::migrate_v9(&mut connection)?;
         }
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "synchronous", "FULL")?;
@@ -920,6 +925,8 @@ fn initialize(connection: &mut Connection) -> Result<()> {
     transaction.execute_batch(moment::SCHEMA)?;
     transaction.execute_batch(classification::SCHEMA)?;
     transaction.execute_batch(life::SCHEMA)?;
+    transaction.execute_batch(life::DAY_SCHEMA)?;
+    transaction.execute_batch(daily::SCHEMA)?;
     transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     transaction.commit()?;
     Ok(())

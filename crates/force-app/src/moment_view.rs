@@ -12,6 +12,20 @@ use gpui_component::{IconName, button::ButtonVariants};
 
 impl ForceView {
     pub(crate) fn moment_editor(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
+        let editing = self.moments.is_editing();
+        let day_only = self.moments.day_only;
+        let content_height = px(if day_only {
+            80.
+        } else if editing {
+            200.
+        } else {
+            192.
+        });
+        let (precision_id, precision_label) = if day_only {
+            ("moment-exact", "填具体时刻")
+        } else {
+            ("moment-day-only", "只记日期")
+        };
         let close = button("close-moment")
             .debug_selector(|| "close-moment".into())
             .custom(crate::view::quiet_variant(cx))
@@ -29,10 +43,31 @@ impl ForceView {
                         .flex()
                         .flex_col()
                         .gap(px(6.))
-                        .child(field_label("内容"))
+                        .child(
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_between()
+                                .child(field_label("内容"))
+                                .when(!editing, |row| {
+                                    row.child(
+                                        button(precision_id)
+                                            .debug_selector(move || precision_id.into())
+                                            .custom(crate::view::quiet_variant(cx))
+                                            .h(px(24.))
+                                            .px(px(8.))
+                                            .child(control_label(precision_label, MUTED))
+                                            .on_click(cx.listener(move |this, _, _, cx| {
+                                                this.moments.day_only = !day_only;
+                                                this.moments.error = None;
+                                                cx.notify();
+                                            })),
+                                    )
+                                }),
+                        )
                         .child(Styled::h(
-                            field(&self.moments.content).h(px(200.)),
-                            px(200.),
+                            field(&self.moments.content).h(content_height),
+                            content_height,
                         )),
                 )
                 .child(
@@ -54,27 +89,31 @@ impl ForceView {
                                         .child(field(&self.moments.date)),
                                 ),
                         )
-                        .child(
-                            div()
-                                .w(px(148.))
-                                .flex()
-                                .flex_col()
-                                .gap(px(6.))
-                                .child(field_label("时刻"))
-                                .child(
-                                    div()
-                                        .debug_selector(|| "moment-time".into())
-                                        .flex()
-                                        .items_center()
-                                        .gap(px(6.))
-                                        .child(
-                                            div()
-                                                .flex_1()
-                                                .min_w_0()
-                                                .child(field(&self.moments.time)),
-                                        )
-                                        .child(
-                                            crate::time_picker::trigger("moment-time-picker", cx)
+                        .when(!day_only, |row| {
+                            row.child(
+                                div()
+                                    .w(px(148.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.))
+                                    .child(field_label("时刻"))
+                                    .child(
+                                        div()
+                                            .debug_selector(|| "moment-time".into())
+                                            .flex()
+                                            .items_center()
+                                            .gap(px(6.))
+                                            .child(
+                                                div()
+                                                    .flex_1()
+                                                    .min_w_0()
+                                                    .child(field(&self.moments.time)),
+                                            )
+                                            .child(
+                                                crate::time_picker::trigger(
+                                                    "moment-time-picker",
+                                                    cx,
+                                                )
                                                 .on_click(cx.listener(|this, _, window, cx| {
                                                     let input = this.moments.time.clone();
                                                     this.time_picker.update(cx, |picker, cx| {
@@ -83,9 +122,22 @@ impl ForceView {
                                                         )
                                                     });
                                                 })),
-                                        ),
-                                ),
-                        ),
+                                            ),
+                                    ),
+                            )
+                        })
+                        .when(day_only, |row| {
+                            row.child(
+                                div()
+                                    .debug_selector(|| "moment-duration".into())
+                                    .w(px(168.))
+                                    .flex()
+                                    .flex_col()
+                                    .gap(px(6.))
+                                    .child(field_label("时长（分钟，可选）"))
+                                    .child(field(&self.moments.minutes)),
+                            )
+                        }),
                 );
         let footer = crate::editor_dialog::footer("moment-editor-actions")
             .when_some(self.moments.editing, |row, id| {
@@ -100,6 +152,24 @@ impl ForceView {
                         .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                             if event.click_count() == 1 {
                                 this.delete_moment(id, window, cx);
+                            }
+                        })),
+                )
+                .child(div().flex_1())
+            })
+            .when_some(self.moments.daily_original.as_ref(), |row, original| {
+                let original = original.clone();
+                row.child(
+                    button("delete-daily-entry")
+                        .debug_selector(|| "delete-daily-entry".into())
+                        .custom(crate::view::quiet_variant(cx))
+                        .h(px(36.))
+                        .px(px(12.))
+                        .unavailable(self.storage_failed)
+                        .child(control_label("删除", DESTRUCTIVE))
+                        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                            if event.click_count() == 1 {
+                                this.delete_daily_entry(original.clone(), window, cx);
                             }
                         })),
                 )
@@ -158,14 +228,16 @@ impl ForceView {
                 }
             }))
             .child(crate::editor_dialog::heading(
-                if self.moments.editing.is_some() {
+                if self.moments.daily_original.is_some() {
+                    "编辑按日记录"
+                } else if editing {
                     "编辑随记"
                 } else {
                     "新建"
                 },
                 close,
             ))
-            .when(self.moments.editing.is_none(), |panel| {
+            .when(!editing, |panel| {
                 panel.child(self.creation_tabs(crate::creation::CreationKind::Moment, cx))
             })
             .child(fields)

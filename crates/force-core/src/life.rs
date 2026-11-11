@@ -1,5 +1,7 @@
 //! User-tracked occurrences and dashboard preferences, independent of timers.
 
+use chrono::{Datelike, NaiveDate};
+
 use super::*;
 
 const LIFE_TITLE_LIMIT: usize = 100;
@@ -23,6 +25,16 @@ CREATE TABLE IF NOT EXISTS life_board (
 INSERT OR IGNORE INTO life_board (id, visible_modules) VALUES (1, 7);
 ";
 
+pub(super) const DAY_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS life_day_occurrences (
+    item_id INTEGER NOT NULL REFERENCES life_items(id) ON DELETE CASCADE,
+    day TEXT NOT NULL,
+    earliest INTEGER NOT NULL,
+    latest INTEGER NOT NULL CHECK (latest >= earliest),
+    PRIMARY KEY (item_id, day)
+);
+";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LifeModule {
     Table = 1,
@@ -34,18 +46,69 @@ pub enum LifeModule {
 pub struct LifeItem {
     pub id: i64,
     pub title: String,
-    occurrences: Vec<i64>,
+    occurrences: Vec<LifeOccurrence>,
+}
+
+/// A date preserves the range in which the event could have occurred.
+/// The bounds reflect the local day and the time at which it was recorded.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum LifeOccurrence {
+    Exact(i64),
+    Day {
+        date: NaiveDate,
+        earliest: i64,
+        latest: i64,
+    },
+}
+
+impl From<i64> for LifeOccurrence {
+    fn from(value: i64) -> Self {
+        Self::Exact(value)
+    }
+}
+
+impl LifeOccurrence {
+    fn earliest(self) -> i64 {
+        match self {
+            Self::Exact(at) => at,
+            Self::Day { earliest, .. } => earliest,
+        }
+    }
+
+    fn latest(self) -> i64 {
+        match self {
+            Self::Exact(at) => at,
+            Self::Day { latest, .. } => latest,
+        }
+    }
+
+    fn order_key(self) -> (i64, bool, Option<NaiveDate>) {
+        match self {
+            Self::Exact(at) => (at, true, None),
+            Self::Day { date, latest, .. } => (latest, false, Some(date)),
+        }
+    }
+
+    pub fn is_day(self) -> bool {
+        matches!(self, Self::Day { .. })
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct LifeSpan {
-    pub start: i64,
-    pub end: Option<i64>,
+    pub start: LifeOccurrence,
+    pub end: Option<LifeOccurrence>,
     pub seconds: i64,
 }
 
+impl LifeSpan {
+    pub fn is_estimated(self) -> bool {
+        self.start.is_day() || self.end.is_some_and(LifeOccurrence::is_day)
+    }
+}
+
 impl LifeItem {
-    pub fn last_occurred_at(&self) -> i64 {
+    pub fn last_occurrence(&self) -> LifeOccurrence {
         *self
             .occurrences
             .last()
@@ -53,14 +116,20 @@ impl LifeItem {
     }
 
     pub fn elapsed_at(&self, now: i64) -> i64 {
-        elapsed(self.last_occurred_at(), now)
+        elapsed(self.last_occurrence().latest(), now)
+    }
+
+    pub fn has_date_only_entries(&self) -> bool {
+        self.occurrences
+            .iter()
+            .any(|occurrence| occurrence.is_day())
     }
 
     pub fn cumulative_days(&self, now: i64) -> i64 {
         let finished: i64 = self
             .occurrences
             .windows(2)
-            .map(|pair| elapsed(pair[0], pair[1]) / SECONDS_PER_DAY)
+            .map(|pair| elapsed(pair[0].latest(), pair[1].earliest()) / SECONDS_PER_DAY)
             .sum();
         finished + self.elapsed_at(now) / SECONDS_PER_DAY
     }
@@ -76,7 +145,7 @@ impl LifeItem {
                 LifeSpan {
                     start,
                     end,
-                    seconds: elapsed(start, end.unwrap_or(now)),
+                    seconds: elapsed(start.latest(), end.map_or(now, LifeOccurrence::earliest)),
                 }
             })
             .collect()
@@ -102,10 +171,9 @@ pub(super) fn migrate_v8(connection: &mut Connection) -> Result<()> {
     match version {
         8 => {
             transaction.execute_batch(SCHEMA)?;
-            load_board(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 9)?;
         }
-        SCHEMA_VERSION => (),
+        9..=SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -120,15 +188,21 @@ impl Store {
         Ok(board)
     }
 
-    pub fn create_life_item(&mut self, title: &str, occurred_at: i64, now: i64) -> Result<i64> {
+    pub fn create_life_item(
+        &mut self,
+        title: &str,
+        occurrence: impl Into<LifeOccurrence>,
+        now: i64,
+    ) -> Result<i64> {
         let title = valid_title(title)?;
-        validate_time(occurred_at, now)?;
+        let occurrence = occurrence.into();
+        validate_time(occurrence, now)?;
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         transaction.execute("INSERT INTO life_items (title) VALUES (?1)", [title])?;
         let id = transaction.last_insert_rowid();
-        insert_occurrence(&transaction, id, occurred_at)?;
+        insert_occurrence(&transaction, id, occurrence)?;
         transaction.commit()?;
         Ok(id)
     }
@@ -136,18 +210,20 @@ impl Store {
     pub fn record_life_occurrence(
         &mut self,
         original: &LifeItem,
-        occurred_at: i64,
+        occurrence: impl Into<LifeOccurrence>,
         now: i64,
     ) -> Result<()> {
-        validate_time(occurred_at, now)?;
-        if occurred_at <= original.last_occurred_at() {
+        let occurrence = occurrence.into();
+        validate_time(occurrence, now)?;
+        reject_duplicate_day(&original.occurrences, occurrence)?;
+        if occurrence.order_key() <= original.last_occurrence().order_key() {
             return Err(Error::Validation("Choose a time after the last occurrence"));
         }
         let transaction = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         verify_baseline(&transaction, original)?;
-        insert_occurrence(&transaction, original.id, occurred_at)?;
+        insert_occurrence(&transaction, original.id, occurrence)?;
         transaction.commit()?;
         Ok(())
     }
@@ -156,17 +232,20 @@ impl Store {
         &mut self,
         original: &LifeItem,
         title: &str,
-        occurred_at: i64,
+        occurrence: impl Into<LifeOccurrence>,
         now: i64,
     ) -> Result<()> {
         let title = valid_title(title)?;
-        validate_time(occurred_at, now)?;
+        let occurrence = occurrence.into();
+        validate_time(occurrence, now)?;
+        let earlier = &original.occurrences[..original.occurrences.len() - 1];
+        reject_duplicate_day(earlier, occurrence)?;
         if original
             .occurrences
             .iter()
             .rev()
             .nth(1)
-            .is_some_and(|&previous| occurred_at <= previous)
+            .is_some_and(|&previous| occurrence.order_key() <= previous.order_key())
         {
             return Err(Error::Validation(
                 "Choose a time after the previous occurrence",
@@ -180,10 +259,10 @@ impl Store {
             "UPDATE life_items SET title = ?1 WHERE id = ?2",
             params![title, original.id],
         )?;
-        transaction.execute(
-            "UPDATE life_occurrences SET occurred_at = ?1 WHERE item_id = ?2 AND occurred_at = ?3",
-            params![occurred_at, original.id, original.last_occurred_at()],
-        )?;
+        if occurrence != original.last_occurrence() {
+            remove_occurrence(&transaction, original.id, original.last_occurrence())?;
+            insert_occurrence(&transaction, original.id, occurrence)?;
+        }
         transaction.commit()?;
         Ok(())
     }
@@ -227,6 +306,19 @@ fn elapsed(start: i64, end: i64) -> i64 {
     end.saturating_sub(start).max(0)
 }
 
+fn reject_duplicate_day(existing: &[LifeOccurrence], occurrence: LifeOccurrence) -> Result<()> {
+    if let LifeOccurrence::Day { date, .. } = occurrence
+        && existing.iter().any(
+            |previous| matches!(previous, LifeOccurrence::Day { date: day, .. } if *day == date),
+        )
+    {
+        return Err(Error::Validation(
+            "This date already has a date-only occurrence",
+        ));
+    }
+    Ok(())
+}
+
 fn valid_title(title: &str) -> Result<&str> {
     let message = "Enter an item name of 1–100 characters on one line";
     let title = valid_text(title, LIFE_TITLE_LIMIT, message)?;
@@ -236,8 +328,15 @@ fn valid_title(title: &str) -> Result<&str> {
     Ok(title)
 }
 
-fn validate_time(occurred_at: i64, now: i64) -> Result<()> {
-    if DateTime::<Utc>::from_timestamp(occurred_at, 0).is_none() || occurred_at > now {
+fn validate_time(occurrence: LifeOccurrence, now: i64) -> Result<()> {
+    let earliest = occurrence.earliest();
+    let latest = occurrence.latest();
+    if DateTime::<Utc>::from_timestamp(earliest, 0).is_none()
+        || DateTime::<Utc>::from_timestamp(latest, 0).is_none()
+        || latest < earliest
+        || latest > now
+        || matches!(occurrence, LifeOccurrence::Day { date, .. } if !(1..=9999).contains(&date.year()))
+    {
         return Err(Error::Validation(
             "Choose an occurrence time at or before now",
         ));
@@ -245,33 +344,42 @@ fn validate_time(occurred_at: i64, now: i64) -> Result<()> {
     Ok(())
 }
 
-fn insert_occurrence(connection: &Connection, id: i64, occurred_at: i64) -> Result<()> {
-    connection.execute(
-        "INSERT INTO life_occurrences (item_id, occurred_at) VALUES (?1, ?2)",
-        params![id, occurred_at],
-    )?;
+fn insert_occurrence(connection: &Connection, id: i64, occurrence: LifeOccurrence) -> Result<()> {
+    match occurrence {
+        LifeOccurrence::Exact(at) => connection.execute(
+            "INSERT INTO life_occurrences (item_id, occurred_at) VALUES (?1, ?2)", params![id, at],
+        )?,
+        LifeOccurrence::Day { date, earliest, latest } => connection.execute(
+            "INSERT INTO life_day_occurrences (item_id, day, earliest, latest) VALUES (?1, ?2, ?3, ?4)",
+            params![id, date.to_string(), earliest, latest],
+        )?,
+    };
+    Ok(())
+}
+
+fn remove_occurrence(connection: &Connection, id: i64, occurrence: LifeOccurrence) -> Result<()> {
+    match occurrence {
+        LifeOccurrence::Exact(at) => connection.execute(
+            "DELETE FROM life_occurrences WHERE item_id = ?1 AND occurred_at = ?2",
+            params![id, at],
+        )?,
+        LifeOccurrence::Day { date, .. } => connection.execute(
+            "DELETE FROM life_day_occurrences WHERE item_id = ?1 AND day = ?2",
+            params![id, date.to_string()],
+        )?,
+    };
     Ok(())
 }
 
 fn verify_baseline(connection: &Connection, original: &LifeItem) -> Result<()> {
-    let current: Option<(String, i64)> = connection
-        .query_row(
-            "SELECT title, (SELECT MAX(occurred_at) FROM life_occurrences WHERE item_id = life_items.id)
-             FROM life_items WHERE id = ?1",
-            [original.id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        )
-        .optional()?;
-    match current {
-        Some((title, time)) if title == original.title && time == original.last_occurred_at() => {
-            Ok(())
-        }
+    match load_items(connection, Some(original.id))?.first() {
+        Some(item) if item == original => Ok(()),
         Some(_) => Err(Error::InvalidTransition),
         None => Err(Error::NotFound),
     }
 }
 
-fn load_board(connection: &Connection) -> Result<LifeBoard> {
+pub(super) fn load_board(connection: &Connection) -> Result<LifeBoard> {
     let (visible_modules, chart_item) = connection.query_row(
         "SELECT visible_modules, chart_item FROM life_board WHERE id = 1",
         [],
@@ -280,36 +388,57 @@ fn load_board(connection: &Connection) -> Result<LifeBoard> {
     if visible_modules > 7 {
         return Err(Error::InvalidData);
     }
+    Ok(LifeBoard {
+        items: load_items(connection, None)?,
+        chart_item,
+        visible_modules,
+    })
+}
+
+fn load_items(connection: &Connection, only_id: Option<i64>) -> Result<Vec<LifeItem>> {
     let mut statement = connection.prepare(
-        "SELECT item.id, item.title, occurrence.occurred_at FROM life_items AS item
-         LEFT JOIN life_occurrences AS occurrence ON occurrence.item_id = item.id
-         ORDER BY item.id, occurrence.occurred_at",
+        "WITH occurrences AS (
+            SELECT item_id, occurred_at, NULL AS day, occurred_at AS earliest, occurred_at AS latest
+            FROM life_occurrences
+            UNION ALL
+            SELECT item_id, NULL, day, earliest, latest FROM life_day_occurrences
+         )
+         SELECT item.id, item.title, occurrence.occurred_at, occurrence.day,
+                occurrence.earliest, occurrence.latest
+         FROM life_items AS item
+         LEFT JOIN occurrences AS occurrence ON occurrence.item_id = item.id
+         WHERE ?1 IS NULL OR item.id = ?1
+         ORDER BY item.id, occurrence.latest, occurrence.occurred_at IS NOT NULL, occurrence.day",
     )?;
-    let mut rows = statement.query([])?;
+    let mut rows = statement.query([only_id])?;
     let mut items: Vec<LifeItem> = Vec::new();
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
-        let occurred_at: i64 = row.get(2)?;
-        if DateTime::<Utc>::from_timestamp(occurred_at, 0).is_none() {
-            return Err(Error::InvalidData);
-        }
+        let occurrence = if let Some(at) = row.get::<_, Option<i64>>(2)? {
+            LifeOccurrence::Exact(at)
+        } else {
+            let day: String = row.get(3)?;
+            LifeOccurrence::Day {
+                date: NaiveDate::parse_from_str(&day, "%Y-%m-%d")
+                    .map_err(|_| Error::InvalidData)?,
+                earliest: row.get(4)?,
+                latest: row.get(5)?,
+            }
+        };
+        validate_time(occurrence, i64::MAX).map_err(|_| Error::InvalidData)?;
         if let Some(item) = items.last_mut().filter(|item| item.id == id) {
-            item.occurrences.push(occurred_at);
+            item.occurrences.push(occurrence);
         } else {
             let title: String = row.get(1)?;
             valid_title(&title).map_err(|_| Error::InvalidData)?;
             items.push(LifeItem {
                 id,
                 title,
-                occurrences: vec![occurred_at],
+                occurrences: vec![occurrence],
             });
         }
     }
-    Ok(LifeBoard {
-        items,
-        chart_item,
-        visible_modules,
-    })
+    Ok(items)
 }
 
 #[cfg(test)]

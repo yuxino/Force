@@ -29,12 +29,12 @@ fn life_counts_full_elapsed_days_in_each_interval() {
         item.recent_spans(now, 8),
         [
             LifeSpan {
-                start,
-                end: Some(second),
+                start: LifeOccurrence::Exact(start),
+                end: Some(LifeOccurrence::Exact(second)),
                 seconds: second - start,
             },
             LifeSpan {
-                start: second,
+                start: LifeOccurrence::Exact(second),
                 end: None,
                 seconds: now - second,
             },
@@ -81,7 +81,10 @@ fn life_rejects_future_and_stale_edits_and_persists_preferences() {
     assert!(!board.shows(LifeModule::Total));
     assert_eq!(board.chart_item, Some(id));
     assert_eq!(board.items[0].title, "刷短视频");
-    assert_eq!(board.items[0].occurrences, [80, 88]);
+    assert_eq!(
+        board.items[0].occurrences,
+        [LifeOccurrence::Exact(80), LifeOccurrence::Exact(88)]
+    );
     reopened.delete_life_item(&board.items[0]).unwrap();
     let board = reopened.life_board().unwrap();
     assert_eq!(board.chart_item, None);
@@ -116,4 +119,32 @@ fn life_v8_upgrade_preserves_timer_and_preferences() {
     assert!(board.shows(LifeModule::Table));
     assert!(board.shows(LifeModule::Trend));
     assert!(board.shows(LifeModule::Total));
+}
+
+#[test]
+fn date_only_occurrences_keep_uncertainty_when_mixed_with_exact_records() {
+    let (directory, mut store) = fixture();
+    let date = NaiveDate::from_ymd_opt(2026, 2, 2).unwrap();
+    let start = 10 * SECONDS_PER_DAY;
+    let only_date = LifeOccurrence::Day {
+        date,
+        earliest: start,
+        latest: start + SECONDS_PER_DAY,
+    };
+    let now = start + 2 * SECONDS_PER_DAY + 3_600;
+    store.create_life_item("阅读", only_date, now).unwrap();
+    let item = store.life_board().unwrap().items.remove(0);
+    assert_eq!(item.last_occurrence(), only_date);
+    assert!(item.recent_spans(now, 1)[0].is_estimated());
+    assert_eq!(item.cumulative_days(now), 1);
+    store.record_life_occurrence(&item, now, now).unwrap();
+    drop(store);
+
+    let store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+    let item = store.life_board().unwrap().items.remove(0);
+    assert_eq!(item.last_occurrence(), LifeOccurrence::Exact(now));
+    assert_eq!(item.cumulative_days(now), 1);
+    assert!(item.has_date_only_entries());
+    assert!(item.recent_spans(now, 2)[0].is_estimated());
+    assert!(!item.recent_spans(now, 1)[0].is_estimated());
 }

@@ -1,5 +1,5 @@
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
-use force_core::{Error, LifeBoard, LifeItem, LifeModule, Store};
+use force_core::{Error, LifeBoard, LifeItem, LifeModule, LifeOccurrence, Store};
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, KeyBinding, PromptButton,
     PromptLevel, ScrollHandle, Subscription, Window, point, px,
@@ -35,10 +35,11 @@ pub(crate) struct LifeState {
     pub(crate) name: Entity<InputState>,
     pub(crate) date: Entity<InputState>,
     pub(crate) time: Entity<InputState>,
+    pub(crate) day_only: bool,
     pub(crate) focus: FocusHandle,
     pub(crate) scroll: ScrollHandle,
     pub(crate) error: Option<&'static str>,
-    initial_at: i64,
+    initial_at: LifeOccurrence,
     generation: u64,
     _subscriptions: Vec<Subscription>,
 }
@@ -84,7 +85,8 @@ impl LifeState {
             focus: cx.focus_handle().tab_stop(false),
             scroll: ScrollHandle::new(),
             error: None,
-            initial_at: 0,
+            initial_at: LifeOccurrence::Exact(0),
+            day_only: false,
             generation: 0,
             _subscriptions: subscriptions,
         }
@@ -94,9 +96,10 @@ impl LifeState {
         let Some(edit) = &self.edit else {
             return false;
         };
-        let (date, time) = time_fields(self.initial_at);
+        let (date, time) = occurrence_fields(self.initial_at);
         self.name.read(cx).value().as_ref() != edit.initial_name()
             || self.date.read(cx).value().as_ref() != date
+            || self.day_only != self.initial_at.is_day()
             || self.time.read(cx).value().as_ref() != time
     }
 }
@@ -175,10 +178,10 @@ impl ForceView {
             return;
         }
         let at = match &edit {
-            LifeEdit::Edit(item) => item.last_occurred_at(),
-            LifeEdit::Add | LifeEdit::Record(_) => Local::now().timestamp(),
+            LifeEdit::Edit(item) => item.last_occurrence(),
+            LifeEdit::Add | LifeEdit::Record(_) => LifeOccurrence::Exact(Local::now().timestamp()),
         };
-        let (date, time) = time_fields(at);
+        let (date, time) = occurrence_fields(at);
         self.life.name.update(cx, |input, cx| {
             input.set_value(edit.initial_name().to_owned(), window, cx)
         });
@@ -189,6 +192,7 @@ impl ForceView {
             .time
             .update(cx, |input, cx| input.set_value(time, window, cx));
         self.life.initial_at = at;
+        self.life.day_only = at.is_day();
         self.life.error = None;
         self.life.generation = self.life.generation.wrapping_add(1);
         self.life.edit = Some(edit);
@@ -269,15 +273,16 @@ impl ForceView {
         let name = self.life.name.read(cx).value();
         let date = self.life.date.read(cx).value();
         let time = self.life.time.read(cx).value();
-        let occurred_at = match resolve_time(&date, &time, self.life.initial_at) {
-            Ok(at) => at,
-            Err(error) => {
-                self.life.error = Some(error);
-                cx.notify();
-                return;
-            }
-        };
         let now = Local::now().timestamp();
+        let occurred_at =
+            match resolve_occurrence(&date, &time, self.life.day_only, self.life.initial_at, now) {
+                Ok(at) => at,
+                Err(error) => {
+                    self.life.error = Some(error);
+                    cx.notify();
+                    return;
+                }
+            };
         let edit = edit.clone();
         match self.write_life(
             |store| match edit {
@@ -340,6 +345,13 @@ impl ForceView {
     }
 }
 
+fn occurrence_fields(occurrence: LifeOccurrence) -> (String, String) {
+    match occurrence {
+        LifeOccurrence::Exact(at) => time_fields(at),
+        LifeOccurrence::Day { date, .. } => (date.to_string(), String::new()),
+    }
+}
+
 fn time_fields(at: i64) -> (String, String) {
     Local.timestamp_opt(at, 0).single().map_or_else(
         || (String::new(), String::new()),
@@ -352,15 +364,36 @@ fn time_fields(at: i64) -> (String, String) {
     )
 }
 
-fn resolve_time(date: &str, time: &str, initial_at: i64) -> Result<i64, &'static str> {
-    let (initial_date, initial_time) = time_fields(initial_at);
-    if date == initial_date && time == initial_time && !date.is_empty() {
+fn resolve_occurrence(
+    date: &str,
+    time: &str,
+    day_only: bool,
+    initial_at: LifeOccurrence,
+    now: i64,
+) -> Result<LifeOccurrence, &'static str> {
+    let (initial_date, initial_time) = occurrence_fields(initial_at);
+    if date == initial_date
+        && day_only == initial_at.is_day()
+        && (day_only || time == initial_time)
+        && !date.is_empty()
+    {
         return Ok(initial_at);
     }
     let date = NaiveDate::parse_from_str(date.trim(), "%Y-%m-%d")
         .map_err(|_| "日期格式为 YYYY-MM-DD。")?;
     if !(1..=9999).contains(&date.year()) {
         return Err("日期年份需在 1–9999 之间。");
+    }
+    if day_only {
+        let (earliest, end) = crate::model::day_bounds(date);
+        if earliest >= end {
+            return Err("这个本地日期不存在，请调整日期。");
+        }
+        return Ok(LifeOccurrence::Day {
+            date,
+            earliest,
+            latest: end.min(now),
+        });
     }
     let time = NaiveTime::parse_from_str(time.trim(), "%H:%M:%S")
         .or_else(|_| NaiveTime::parse_from_str(time.trim(), "%H:%M"))
@@ -371,7 +404,7 @@ fn resolve_time(date: &str, time: &str, initial_at: i64) -> Result<i64, &'static
     Local
         .from_local_datetime(&date.and_time(time))
         .single()
-        .map(|at| at.timestamp())
+        .map(|at| LifeOccurrence::Exact(at.timestamp()))
         .ok_or("这个本地时间不存在或有歧义，请调整时间。")
 }
 
@@ -386,6 +419,9 @@ fn life_error(error: Error) -> &'static str {
         Error::Validation("Choose a time after the last occurrence") => "发生时间须晚于上次记录。",
         Error::Validation("Choose a time after the previous occurrence") => {
             "上次时间须晚于它的前一次记录。"
+        }
+        Error::Validation("This date already has a date-only occurrence") => {
+            "该日期已有一笔仅日期记录。"
         }
         Error::InvalidTransition | Error::NotFound => "事项已变更，请取消后重新打开。",
         _ => "保存失败。已有记录已保留，请重试。",

@@ -31,7 +31,7 @@ impl ForceView {
             Some(CreationKind::Plan)
         } else if self.record_editor.visible && self.record_editor.original.is_none() {
             Some(CreationKind::Record)
-        } else if self.moments.visible && self.moments.editing.is_none() {
+        } else if self.moments.visible && !self.moments.is_editing() {
             Some(CreationKind::Moment)
         } else {
             None

@@ -1,5 +1,5 @@
 use chrono::{Local, TimeDelta};
-use force_core::LifeModule;
+use force_core::{LifeModule, LifeOccurrence};
 use gpui::{TestAppContext, px};
 
 use crate::{headless_ui_tests::ManagerHarness, model::Page};
@@ -68,5 +68,49 @@ fn life_dashboard_tracks_occurrences_and_restores_its_layout(cx: &mut TestAppCon
         assert!(!board.shows(LifeModule::Table));
         assert!(board.shows(LifeModule::Total));
         assert_eq!(board.items[0].recent_spans(view.now, 8).len(), 2);
+    });
+}
+
+#[gpui::test]
+fn date_only_entries_support_duration_without_creating_a_timer(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let day = Local::now().date_naive().pred_opt().unwrap();
+
+    manager.click("open-life-dashboard");
+    manager.click("life-add");
+    manager.cx.simulate_input("阅读");
+    manager.click("life-day-only");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.life
+            .date
+            .update(cx, |input, cx| input.set_value(day.to_string(), window, cx));
+    });
+    manager.click("life-save");
+    manager.view.read_with(&manager.cx, |view, _| {
+        let item = &view.life.board.as_ref().unwrap().items[0];
+        assert!(matches!(item.last_occurrence(), LifeOccurrence::Day { date, .. } if date == day));
+    });
+
+    manager.click("records-tab");
+    manager.click("global-new-task");
+    manager.click("creation-type-moment");
+    manager.cx.simulate_input("散步");
+    manager.click("moment-day-only");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.moments
+            .date
+            .update(cx, |input, cx| input.set_value(day.to_string(), window, cx));
+        view.moments
+            .minutes
+            .update(cx, |input, cx| input.set_value("35", window, cx));
+    });
+    manager.click("save-moment");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.record_date, day);
+        assert_eq!(view.record_daily_entries[0].content, "散步");
+        assert_eq!(view.record_daily_entries[0].duration_minutes, Some(35));
+        assert!(view.record_moments.is_empty());
+        assert!(view.history.is_empty());
+        assert_eq!(view.record_stats.focus_seconds, 0);
     });
 }

@@ -1,5 +1,5 @@
-use chrono::{Local, TimeZone};
-use force_core::{LifeBoard, LifeItem, LifeModule, LifeSpan};
+use chrono::{Local, NaiveDate, TimeZone};
+use force_core::{LifeBoard, LifeItem, LifeModule, LifeOccurrence, LifeSpan};
 use gpui::{prelude::*, *};
 use gpui_component::{
     IconName,
@@ -15,9 +15,9 @@ use crate::{
     life_model::{LifeEdit, NextField, PreviousField},
     model::ForceView,
     view::{
-        ControlState, DESTRUCTIVE, INK, LINE, MUTED, PAPER, SURFACE, button, control_icon,
-        control_label, field, field_label, outlined_button, primary_button, quiet_variant,
-        record_timestamp, section_heading, timer_font,
+        ControlState, DESTRUCTIVE, INK, LINE, MUTED, PAPER, SURFACE, button, choice_button,
+        control_icon, control_label, field, field_label, outlined_button, primary_button,
+        quiet_variant, record_timestamp, section_heading, timer_font,
     },
 };
 
@@ -180,6 +180,17 @@ impl ForceView {
     fn life_row(&self, item: &LifeItem, cx: &mut Context<Self>) -> Div {
         let id = item.id;
         let elapsed = item.elapsed_at(self.now);
+        let last = item.last_occurrence();
+        let label = if last.is_day() {
+            estimated_interval(last, None, self.now)
+        } else {
+            life_duration(elapsed, false)
+        };
+        let detail = if last.is_day() {
+            label.clone()
+        } else {
+            life_duration(elapsed, true)
+        };
         table_row()
             .debug_selector(move || format!("life-row-{id}"))
             .min_h(px(51.))
@@ -195,17 +206,15 @@ impl ForceView {
                     .flex_shrink_0()
                     .text_color(rgb(MUTED))
                     .text_size(px(13.))
-                    .child(record_timestamp(item.last_occurred_at())),
+                    .child(occurrence_timestamp(last)),
             )
             .child(
-                single_line(life_duration(elapsed, false), 14.)
+                single_line(label, 14.)
                     .id(("life-elapsed", id as u64))
                     .w(px(ELAPSED_WIDTH))
                     .flex_shrink_0()
                     .font_weight(FontWeight::MEDIUM)
-                    .tooltip(move |window, cx| {
-                        Tooltip::new(life_duration(elapsed, true)).build(window, cx)
-                    }),
+                    .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx)),
             )
             .child(
                 div()
@@ -243,7 +252,16 @@ impl ForceView {
             .find(|item| Some(item.id) == board.chart_item)
             .unwrap_or(&board.items[0]);
         let spans = item.recent_spans(self.now, SPANS_SHOWN);
-        let peak = spans.iter().map(|span| span.seconds).max().unwrap_or(0);
+        let peak = spans
+            .iter()
+            .map(|span| chart_seconds(*span, self.now))
+            .max()
+            .unwrap_or(0);
+        let peak = if spans.iter().any(|span| span.is_estimated()) {
+            ((peak as u64).div_ceil(86_400).max(1) * 86_400) as i64
+        } else {
+            peak
+        };
         let axis = div()
             .w(px(88.))
             .flex_shrink_0()
@@ -287,7 +305,13 @@ impl ForceView {
                                 .border_t_1()
                                 .border_color(rgb(LINE))
                                 .flex()
-                                .children(spans.iter().copied().map(|span| life_bar(span, peak))),
+                                .children(
+                                    spans
+                                        .iter()
+                                        .copied()
+                                        .enumerate()
+                                        .map(|(index, span)| life_bar(index, span, peak, self.now)),
+                                ),
                         )
                         .child(
                             div()
@@ -299,12 +323,17 @@ impl ForceView {
                                     let label = span.end.map_or_else(
                                         || "当前".to_owned(),
                                         |at| {
-                                            Local.timestamp_opt(at, 0).single().map_or_else(
+                                            occurrence_date(at).map_or_else(
                                                 || "—".to_owned(),
                                                 |time| time.format("%-m/%-d").to_string(),
                                             )
                                         },
                                     );
+                                    let label = if span.is_estimated() {
+                                        format!("约 · {label}")
+                                    } else {
+                                        label
+                                    };
                                     div().flex_1().min_w_0().text_center().child(label)
                                 })),
                         ),
@@ -332,7 +361,7 @@ impl ForceView {
                             .custom(quiet_variant(cx))
                             .size(px(24.))
                             .icon(control_icon(IconName::Info, MUTED))
-                            .tooltip("每段满 24 小时计 1 天，累计各段及当前已满的天数。"),
+                            .tooltip("每段满 24 小时计 1 天。只有日期时，累计能确认的整天。"),
                     ),
             )
             .child(
@@ -354,6 +383,14 @@ impl ForceView {
                                     .flex()
                                     .items_baseline()
                                     .gap(px(5.))
+                                    .when(item.has_date_only_entries(), |row| {
+                                        row.child(
+                                            div()
+                                                .text_size(px(13.))
+                                                .text_color(rgb(MUTED))
+                                                .child("至少"),
+                                        )
+                                    })
                                     .child(
                                         div()
                                             .font(timer_font(cx))
@@ -401,6 +438,34 @@ impl ForceView {
                 )
             })
             .child(
+                div().flex().gap(px(6.)).children(
+                    [
+                        (false, "日期和时间", "life-exact"),
+                        (true, "只记日期", "life-day-only"),
+                    ]
+                    .into_iter()
+                    .map(|(day_only, label, id)| {
+                        choice_button(id, self.life.day_only == day_only, SURFACE, cx)
+                            .debug_selector(move || id.into())
+                            .h(px(32.))
+                            .px(px(10.))
+                            .child(control_label(
+                                label,
+                                if self.life.day_only == day_only {
+                                    INK
+                                } else {
+                                    MUTED
+                                },
+                            ))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.life.day_only = day_only;
+                                this.life.error = None;
+                                cx.notify();
+                            }))
+                    }),
+                ),
+            )
+            .child(
                 div()
                     .mt(px(4.))
                     .flex()
@@ -420,16 +485,18 @@ impl ForceView {
                             }))
                             .child(field(&self.life.date)),
                     )
-                    .child(
-                        div()
-                            .debug_selector(|| "life-time".into())
-                            .w(px(148.))
-                            .flex()
-                            .flex_col()
-                            .gap(px(6.))
-                            .child(field_label("时间"))
-                            .child(field(&self.life.time)),
-                    ),
+                    .when(!self.life.day_only, |row| {
+                        row.child(
+                            div()
+                                .debug_selector(|| "life-time".into())
+                                .w(px(148.))
+                                .flex()
+                                .flex_col()
+                                .gap(px(6.))
+                                .child(field_label("时间"))
+                                .child(field(&self.life.time)),
+                        )
+                    }),
             );
         let footer = editor_dialog::footer("life-editor-actions")
             .when(matches!(edit, LifeEdit::Edit(_)), |footer| {
@@ -570,19 +637,27 @@ fn life_chart_picker(
         .into_any_element()
 }
 
-fn life_bar(span: LifeSpan, peak: i64) -> Stateful<Div> {
-    let ratio = span.seconds as f32 / peak.max(1) as f32;
-    let height = if span.seconds == 0 {
+fn life_bar(index: usize, span: LifeSpan, peak: i64, now: i64) -> Stateful<Div> {
+    let seconds = chart_seconds(span, now);
+    let ratio = seconds as f32 / peak.max(1) as f32;
+    let height = if seconds == 0 {
         0.
     } else {
         (ratio * (PLOT_HEIGHT - 2.)).max(2.)
     };
     let current = span.end.is_none();
-    let from = record_timestamp(span.start);
-    let until = span.end.map_or_else(|| "当前".to_owned(), record_timestamp);
-    let detail = format!("{from} 至 {until} · {}", life_duration(span.seconds, true));
+    let from = occurrence_timestamp(span.start);
+    let until = span
+        .end
+        .map_or_else(|| "当前".to_owned(), occurrence_timestamp);
+    let label = if span.is_estimated() {
+        estimated_interval(span.start, span.end, now)
+    } else {
+        life_duration(span.seconds, true)
+    };
+    let detail = format!("{from} 至 {until} · {label}");
     div()
-        .id(("life-chart-span", span.start as u64))
+        .id(("life-chart-span", index as u64))
         .flex_1()
         .min_w_0()
         .h_full()
@@ -594,8 +669,56 @@ fn life_bar(span: LifeSpan, peak: i64) -> Stateful<Div> {
             div()
                 .w(px(18.))
                 .h(px(height))
-                .bg(rgb(if current { INK } else { 0xa8a8a8 })),
+                .bg(rgb(if span.is_estimated() {
+                    0xbdbdbd
+                } else if current {
+                    INK
+                } else {
+                    0xa8a8a8
+                })),
         )
+}
+
+fn occurrence_date(occurrence: LifeOccurrence) -> Option<NaiveDate> {
+    match occurrence {
+        LifeOccurrence::Exact(at) => Local
+            .timestamp_opt(at, 0)
+            .single()
+            .map(|at| at.date_naive()),
+        LifeOccurrence::Day { date, .. } => Some(date),
+    }
+}
+
+fn occurrence_timestamp(occurrence: LifeOccurrence) -> String {
+    match occurrence {
+        LifeOccurrence::Exact(at) => record_timestamp(at),
+        LifeOccurrence::Day { date, .. } => format!("{} · 仅日期", date.format("%Y/%m/%d")),
+    }
+}
+
+fn estimate_days(start: LifeOccurrence, end: Option<LifeOccurrence>, now: i64) -> i64 {
+    let start = occurrence_date(start);
+    let end = occurrence_date(end.unwrap_or(LifeOccurrence::Exact(now)));
+    start
+        .zip(end)
+        .map_or(0, |(start, end)| (end - start).num_days().max(0))
+}
+
+fn estimated_interval(start: LifeOccurrence, end: Option<LifeOccurrence>, now: i64) -> String {
+    let days = estimate_days(start, end, now);
+    if days == 0 {
+        "同一天".to_owned()
+    } else {
+        format!("约 {days} 天")
+    }
+}
+
+fn chart_seconds(span: LifeSpan, now: i64) -> i64 {
+    if span.is_estimated() {
+        estimate_days(span.start, span.end, now) * 86_400
+    } else {
+        span.seconds
+    }
 }
 
 fn life_duration(seconds: i64, exact: bool) -> String {
