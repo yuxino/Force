@@ -64,7 +64,7 @@ impl LifeState {
                             this.life.error = None;
                             cx.notify();
                         }
-                        InputEvent::PressEnter { secondary: false } => {
+                        InputEvent::PressEnter { .. } => {
                             this.save_life_item(window, cx);
                         }
                         _ => {}

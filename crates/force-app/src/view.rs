@@ -271,10 +271,11 @@ impl ForceView {
                                         Page::Settings => "设置",
                                         Page::Analysis => "分析",
                                     }))
-                                    .when(
-                                        self.page == Page::Life && !self.life.editor_visible,
-                                        |row| row.child(self.life_toolbar(cx)),
-                                    )
+                                    .when(self.page == Page::Life, |row| {
+                                        row.min_h(px(36.)).when(!self.life.editor_visible, |row| {
+                                            row.child(self.life_toolbar(cx))
+                                        })
+                                    })
                                     .when(self.page == Page::Records, |row| {
                                         row.child(
                                             button("export-records")

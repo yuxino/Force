@@ -33,7 +33,9 @@ fn life_dashboard_tracks_occurrences_and_restores_its_layout(cx: &mut TestAppCon
     manager.view.read_with(&manager.cx, |view, cx| {
         assert_eq!(view.life.name.read(cx).value(), "喝咖啡");
     });
-    manager.click("life-save");
+    manager.cx.simulate_keystrokes("secondary-enter");
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
 
     let table = manager.bounds("life-table");
     let trend = manager.bounds("life-trend");
