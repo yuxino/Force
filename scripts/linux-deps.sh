@@ -14,12 +14,30 @@ fi
 apt_options=()
 update_options=()
 if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
-  # Avoid the hosted runner's Azure mirror, which can time out on each package.
+  # Probe once so a runner DNS failure does not stall every index and package.
+  # Use Ubuntu archive mirrors; keep the image's suites and signing keyring.
   ubuntu_sources=/etc/apt/sources.list.d/ubuntu.sources
   if [[ -f "$ubuntu_sources" ]]; then
+    . /etc/os-release
+    archive=
+    for candidate in https://archive.ubuntu.com/ubuntu \
+      https://mirrors.edge.kernel.org/ubuntu \
+      https://mirror.math.princeton.edu/pub/ubuntu; do
+      if "${privilege[@]}" curl --fail --silent --show-error --location --head \
+        --proto '=https' --proto-redir '=https' --connect-timeout 4 --max-time 8 \
+        --output /dev/null "$candidate/dists/$VERSION_CODENAME-security/InRelease"; then
+        archive="$candidate"
+        break
+      fi
+    done
+    if [[ -z "$archive" ]]; then
+      echo 'No Ubuntu archive mirror is reachable from this runner.' >&2
+      exit 1
+    fi
+    printf 'Using Ubuntu archive %s\n' "$archive"
     "${privilege[@]}" sed -Ei \
-      -e 's|mirror\+file:/etc/apt/apt-mirrors\.txt|https://archive.ubuntu.com/ubuntu/|g' \
-      -e 's|https?://azure\.archive\.ubuntu\.com/ubuntu/?|https://archive.ubuntu.com/ubuntu/|g' \
+      -e "s|mirror\+file:/etc/apt/apt-mirrors\.txt|$archive/|g" \
+      -e "s#https?://(azure\.archive|archive|security)\.ubuntu\.com/ubuntu/?#$archive/#g" \
       "$ubuntu_sources"
   fi
   apt_options=(-o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
