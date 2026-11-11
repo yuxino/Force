@@ -1,5 +1,5 @@
 use chrono::{Local, TimeDelta};
-use force_core::{LifeModule, LifeOccurrence};
+use force_core::{LifeKind, LifeModule, LifeOccurrence};
 use gpui::{TestAppContext, px};
 
 use crate::{headless_ui_tests::ManagerHarness, model::Page};
@@ -17,6 +17,7 @@ fn life_dashboard_tracks_occurrences_and_restores_its_layout(cx: &mut TestAppCon
     });
     let first = Local::now() - TimeDelta::hours(49);
     manager.cx.simulate_input("喝咖啡");
+    manager.click("life-kind-abstain");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.life.date.update(cx, |input, cx| {
             input.set_value(first.format("%Y-%m-%d").to_string(), window, cx)
@@ -79,6 +80,7 @@ fn date_only_entries_support_duration_without_creating_a_timer(cx: &mut TestAppC
     manager.click("open-life-dashboard");
     manager.click("life-add");
     manager.cx.simulate_input("阅读");
+    manager.click("life-kind-abstain");
     manager.click("life-day-only");
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
         view.life
@@ -88,7 +90,9 @@ fn date_only_entries_support_duration_without_creating_a_timer(cx: &mut TestAppC
     manager.click("life-save");
     manager.view.read_with(&manager.cx, |view, _| {
         let item = &view.life.board.as_ref().unwrap().items[0];
-        assert!(matches!(item.last_occurrence(), LifeOccurrence::Day { date, .. } if date == day));
+        assert!(
+            matches!(item.last_occurrence(), Some(LifeOccurrence::Day { date, .. }) if date == day)
+        );
     });
 
     manager.click("records-tab");
@@ -112,5 +116,41 @@ fn date_only_entries_support_duration_without_creating_a_timer(cx: &mut TestAppC
         assert!(view.record_moments.is_empty());
         assert!(view.history.is_empty());
         assert_eq!(view.record_stats.focus_seconds, 0);
+    });
+}
+
+#[gpui::test]
+fn life_dashboard_uses_dated_check_ins_for_a_positive_habit(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let today = Local::now().date_naive();
+    manager.view.update_in(&mut manager.cx, |view, _, cx| {
+        assert!(view.write(
+            |store| store.create_daily_entry(today.pred_opt().unwrap(), "拉伸", Some(35), today),
+            cx,
+        ));
+    });
+    manager.click("open-life-dashboard");
+    manager.click("life-add");
+    manager.cx.simulate_input("拉伸");
+    manager.click("life-save");
+    manager.click("life-record-1");
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.life
+            .minutes
+            .update(cx, |input, cx| input.set_value("25", window, cx));
+    });
+    manager.click("life-save");
+    manager.view.read_with(&manager.cx, |view, _| {
+        let item = &view.life.board.as_ref().unwrap().items[0];
+        let summary = item.check_in_summary(today);
+        assert_eq!(item.kind, LifeKind::CheckIn);
+        assert_eq!(summary.streak_days, 2);
+        assert_eq!(summary.count, 2);
+        assert_eq!(summary.minutes, Some(60));
+        assert!(view.active.is_empty());
+    });
+    manager.click("records-tab");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.record_daily_entries[0].duration_minutes, Some(25));
     });
 }

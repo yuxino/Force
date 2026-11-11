@@ -100,8 +100,12 @@ fn life_v8_upgrade_preserves_timer_and_preferences() {
     store
         .connection
         .execute_batch(
-            "DROP TABLE life_board;
+            "DROP TABLE life_check_ins;
+             DROP TABLE life_habits;
+             DROP TABLE life_board;
              DROP TABLE life_occurrences;
+             DROP TABLE life_day_occurrences;
+             DROP TABLE daily_entries;
              DROP TABLE life_items;
              PRAGMA user_version = 8;",
         )
@@ -134,7 +138,7 @@ fn date_only_occurrences_keep_uncertainty_when_mixed_with_exact_records() {
     let now = start + 2 * SECONDS_PER_DAY + 3_600;
     store.create_life_item("阅读", only_date, now).unwrap();
     let item = store.life_board().unwrap().items.remove(0);
-    assert_eq!(item.last_occurrence(), only_date);
+    assert_eq!(item.last_occurrence(), Some(only_date));
     assert!(item.recent_spans(now, 1)[0].is_estimated());
     assert_eq!(item.cumulative_days(now), 1);
     store.record_life_occurrence(&item, now, now).unwrap();
@@ -142,9 +146,67 @@ fn date_only_occurrences_keep_uncertainty_when_mixed_with_exact_records() {
 
     let store = Store::open(directory.path().join("force.sqlite3")).unwrap();
     let item = store.life_board().unwrap().items.remove(0);
-    assert_eq!(item.last_occurrence(), LifeOccurrence::Exact(now));
+    assert_eq!(item.last_occurrence(), Some(LifeOccurrence::Exact(now)));
     assert_eq!(item.cumulative_days(now), 1);
     assert!(item.has_date_only_entries());
     assert!(item.recent_spans(now, 2)[0].is_estimated());
     assert!(!item.recent_spans(now, 1)[0].is_estimated());
+}
+
+#[test]
+fn habit_counts_check_ins_separately_from_calendar_days_and_preserves_notes() {
+    let (directory, mut store) = fixture();
+    let today = NaiveDate::from_ymd_opt(2026, 2, 3).unwrap();
+    let yesterday = today.pred_opt().unwrap();
+    store.create_life_item("喝咖啡", 100, 200).unwrap();
+    store
+        .create_daily_entry(yesterday, "拉伸", Some(40), today)
+        .unwrap();
+    store
+        .create_daily_entry(today, "拉伸", Some(20), today)
+        .unwrap();
+    store
+        .connection
+        .execute_batch(
+            "DROP TABLE life_check_ins; DROP TABLE life_habits; PRAGMA user_version = 10;",
+        )
+        .unwrap();
+    drop(store);
+
+    let mut store = Store::open(directory.path().join("force.sqlite3")).unwrap();
+    let old = store.life_board().unwrap().items.remove(0);
+    assert_eq!(old.kind, LifeKind::Abstain);
+    assert_eq!(old.last_occurrence(), Some(LifeOccurrence::Exact(100)));
+    let id = store.create_life_habit("拉伸").unwrap();
+    assert!(store.create_life_habit("拉伸").is_err());
+    let mut habit = store.life_board().unwrap().items.remove(1);
+    assert_eq!(habit.id, id);
+    assert_eq!(habit.check_in_summary(today).streak_days, 2);
+    store
+        .record_life_check_in(&habit, today, None, today)
+        .unwrap();
+    store
+        .create_daily_entry(today, "拉伸", Some(15), today)
+        .unwrap();
+    habit = store.life_board().unwrap().items.remove(1);
+    assert_eq!(
+        habit.check_in_summary(today),
+        CheckInSummary {
+            streak_days: 2,
+            total_days: 2,
+            count: 4,
+            minutes: Some(75),
+        }
+    );
+    let tomorrow = today.succ_opt().unwrap();
+    assert_eq!(habit.check_in_summary(tomorrow).streak_days, 2);
+    assert_eq!(
+        habit
+            .check_in_summary(tomorrow.succ_opt().unwrap())
+            .streak_days,
+        0
+    );
+    store.delete_life_item(&habit).unwrap();
+    assert_eq!(store.daily_entries(yesterday).unwrap().len(), 1);
+    assert_eq!(store.daily_entries(today).unwrap().len(), 3);
 }

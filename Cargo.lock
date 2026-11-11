@@ -1887,7 +1887,7 @@ dependencies = [
 
 [[package]]
 name = "force-app"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "force-core"
-version = "0.1.5"
+version = "0.1.6"
 dependencies = [
  "chrono",
  "rusqlite",

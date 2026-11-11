@@ -30,10 +30,11 @@ pub(super) fn migrate_v9(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch(SCHEMA)?;
             transaction.execute_batch(life::DAY_SCHEMA)?;
             transaction.prepare("SELECT id, day, content, duration_minutes FROM daily_entries")?;
-            life::load_board(&transaction)?;
+            transaction
+                .prepare("SELECT item_id, day, earliest, latest FROM life_day_occurrences")?;
             transaction.pragma_update(None, "user_version", 10)?;
         }
-        SCHEMA_VERSION => (),
+        10..=SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
@@ -64,10 +65,21 @@ impl Store {
         today: NaiveDate,
     ) -> Result<()> {
         let content = validate_entry(day, content, duration_minutes, today)?;
-        self.connection.execute(
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        transaction.execute(
             "INSERT INTO daily_entries (day, content, duration_minutes) VALUES (?1, ?2, ?3)",
             params![day.to_string(), content, duration_minutes],
         )?;
+        transaction.execute(
+            "INSERT INTO life_check_ins (item_id, entry_id)
+             SELECT item.id, ?1 FROM life_items item
+             JOIN life_habits habit ON habit.item_id = item.id
+             WHERE item.title = ?2",
+            params![transaction.last_insert_rowid(), content],
+        )?;
+        transaction.commit()?;
         Ok(())
     }
 
@@ -117,7 +129,7 @@ impl Store {
     }
 }
 
-fn validate_entry(
+pub(super) fn validate_entry(
     day: NaiveDate,
     content: &str,
     minutes: Option<u16>,
@@ -146,9 +158,12 @@ mod tests {
         let path = dir.path().join("force.sqlite3");
         let mut old = Store::open(&path).unwrap();
         old.create_life_item("阅读", 100, 200).unwrap();
-        old.connection.execute_batch(
-            "DROP TABLE daily_entries; DROP TABLE life_day_occurrences; PRAGMA user_version = 9;",
-        ).unwrap();
+        old.connection
+            .execute_batch(
+                "DROP TABLE life_check_ins; DROP TABLE life_habits; DROP TABLE daily_entries;
+             DROP TABLE life_day_occurrences; PRAGMA user_version = 9;",
+            )
+            .unwrap();
         drop(old);
 
         let today = NaiveDate::from_ymd_opt(2026, 2, 3).unwrap();
@@ -156,7 +171,7 @@ mod tests {
         let mut store = Store::open(&path).unwrap();
         assert_eq!(
             store.life_board().unwrap().items[0].last_occurrence(),
-            LifeOccurrence::Exact(100)
+            Some(LifeOccurrence::Exact(100))
         );
         store
             .create_daily_entry(day, "  拉伸  ", Some(45), today)

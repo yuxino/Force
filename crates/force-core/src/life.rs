@@ -35,6 +35,17 @@ CREATE TABLE IF NOT EXISTS life_day_occurrences (
 );
 ";
 
+pub(super) const CHECK_IN_SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS life_habits (
+    item_id INTEGER PRIMARY KEY REFERENCES life_items(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS life_check_ins (
+    entry_id INTEGER PRIMARY KEY REFERENCES daily_entries(id) ON DELETE CASCADE,
+    item_id INTEGER NOT NULL REFERENCES life_habits(item_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS life_check_ins_by_item ON life_check_ins(item_id);
+";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LifeModule {
     Table = 1,
@@ -42,11 +53,35 @@ pub enum LifeModule {
     Total = 4,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LifeKind {
+    #[default]
+    CheckIn,
+    Abstain,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CheckInDay {
+    pub day: NaiveDate,
+    pub count: u64,
+    pub minutes: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct CheckInSummary {
+    pub streak_days: usize,
+    pub total_days: usize,
+    pub count: u64,
+    pub minutes: Option<u64>,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct LifeItem {
     pub id: i64,
     pub title: String,
+    pub kind: LifeKind,
     occurrences: Vec<LifeOccurrence>,
+    check_in_days: Vec<CheckInDay>,
 }
 
 /// A date preserves the range in which the event could have occurred.
@@ -108,15 +143,46 @@ impl LifeSpan {
 }
 
 impl LifeItem {
-    pub fn last_occurrence(&self) -> LifeOccurrence {
-        *self
-            .occurrences
-            .last()
-            .expect("a tracked item has a baseline")
+    pub fn last_occurrence(&self) -> Option<LifeOccurrence> {
+        self.occurrences.last().copied()
     }
 
     pub fn elapsed_at(&self, now: i64) -> i64 {
-        elapsed(self.last_occurrence().latest(), now)
+        self.last_occurrence()
+            .map_or(0, |last| elapsed(last.latest(), now))
+    }
+
+    pub fn check_in_days(&self) -> &[CheckInDay] {
+        &self.check_in_days
+    }
+
+    pub fn check_in_summary(&self, today: NaiveDate) -> CheckInSummary {
+        let mut summary = CheckInSummary::default();
+        let mut next_day = today;
+        let mut streak_open = true;
+        for entry in self
+            .check_in_days
+            .iter()
+            .rev()
+            .filter(|entry| entry.day <= today)
+        {
+            summary.total_days += 1;
+            summary.count += entry.count;
+            if let Some(minutes) = entry.minutes {
+                summary.minutes = Some(summary.minutes.unwrap_or_default() + minutes);
+            }
+            if streak_open {
+                // Until today ends, yesterday's streak can still be continued.
+                let gap = next_day.signed_duration_since(entry.day).num_days();
+                if gap == 1 || (summary.streak_days == 0 && gap == 0) {
+                    summary.streak_days += 1;
+                    next_day = entry.day;
+                } else {
+                    streak_open = false;
+                }
+            }
+        }
+        summary
     }
 
     pub fn has_date_only_entries(&self) -> bool {
@@ -180,6 +246,22 @@ pub(super) fn migrate_v8(connection: &mut Connection) -> Result<()> {
     Ok(())
 }
 
+pub(super) fn migrate_v10(connection: &mut Connection) -> Result<()> {
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let version: i64 = transaction.pragma_query_value(None, "user_version", |row| row.get(0))?;
+    match version {
+        10 => {
+            transaction.execute_batch(CHECK_IN_SCHEMA)?;
+            load_board(&transaction)?;
+            transaction.pragma_update(None, "user_version", 11)?;
+        }
+        SCHEMA_VERSION => (),
+        _ => return Err(Error::UnsupportedSchema),
+    }
+    transaction.commit()?;
+    Ok(())
+}
+
 impl Store {
     pub fn life_board(&self) -> Result<LifeBoard> {
         let transaction = self.connection.unchecked_transaction()?;
@@ -207,6 +289,71 @@ impl Store {
         Ok(id)
     }
 
+    pub fn create_life_habit(&mut self, title: &str) -> Result<i64> {
+        let title = valid_title(title)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        ensure_unique_habit(&transaction, title, None)?;
+        transaction.execute("INSERT INTO life_items (title) VALUES (?1)", [title])?;
+        let id = transaction.last_insert_rowid();
+        transaction.execute("INSERT INTO life_habits (item_id) VALUES (?1)", [id])?;
+        transaction.execute(
+            "INSERT INTO life_check_ins (item_id, entry_id)
+             SELECT ?1, entry.id FROM daily_entries entry
+             WHERE entry.content = ?2
+               AND NOT EXISTS (SELECT 1 FROM life_check_ins WHERE entry_id = entry.id)",
+            params![id, title],
+        )?;
+        transaction.commit()?;
+        Ok(id)
+    }
+
+    pub fn record_life_check_in(
+        &mut self,
+        original: &LifeItem,
+        day: NaiveDate,
+        minutes: Option<u16>,
+        today: NaiveDate,
+    ) -> Result<()> {
+        if original.kind != LifeKind::CheckIn {
+            return Err(Error::InvalidTransition);
+        }
+        let title = daily::validate_entry(day, &original.title, minutes, today)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_baseline(&transaction, original)?;
+        transaction.execute(
+            "INSERT INTO daily_entries (day, content, duration_minutes) VALUES (?1, ?2, ?3)",
+            params![day.to_string(), title, minutes],
+        )?;
+        transaction.execute(
+            "INSERT INTO life_check_ins (item_id, entry_id) VALUES (?1, ?2)",
+            params![original.id, transaction.last_insert_rowid()],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn rename_life_habit(&mut self, original: &LifeItem, title: &str) -> Result<()> {
+        if original.kind != LifeKind::CheckIn {
+            return Err(Error::InvalidTransition);
+        }
+        let title = valid_title(title)?;
+        let transaction = self
+            .connection
+            .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        verify_baseline(&transaction, original)?;
+        ensure_unique_habit(&transaction, title, Some(original.id))?;
+        transaction.execute(
+            "UPDATE life_items SET title = ?1 WHERE id = ?2",
+            params![title, original.id],
+        )?;
+        transaction.commit()?;
+        Ok(())
+    }
+
     pub fn record_life_occurrence(
         &mut self,
         original: &LifeItem,
@@ -216,7 +363,8 @@ impl Store {
         let occurrence = occurrence.into();
         validate_time(occurrence, now)?;
         reject_duplicate_day(&original.occurrences, occurrence)?;
-        if occurrence.order_key() <= original.last_occurrence().order_key() {
+        let last = original.last_occurrence().ok_or(Error::InvalidTransition)?;
+        if occurrence.order_key() <= last.order_key() {
             return Err(Error::Validation("Choose a time after the last occurrence"));
         }
         let transaction = self
@@ -238,7 +386,10 @@ impl Store {
         let title = valid_title(title)?;
         let occurrence = occurrence.into();
         validate_time(occurrence, now)?;
-        let earlier = &original.occurrences[..original.occurrences.len() - 1];
+        let (&last, earlier) = original
+            .occurrences
+            .split_last()
+            .ok_or(Error::InvalidTransition)?;
         reject_duplicate_day(earlier, occurrence)?;
         if original
             .occurrences
@@ -259,8 +410,8 @@ impl Store {
             "UPDATE life_items SET title = ?1 WHERE id = ?2",
             params![title, original.id],
         )?;
-        if occurrence != original.last_occurrence() {
-            remove_occurrence(&transaction, original.id, original.last_occurrence())?;
+        if occurrence != last {
+            remove_occurrence(&transaction, original.id, last)?;
             insert_occurrence(&transaction, original.id, occurrence)?;
         }
         transaction.commit()?;
@@ -304,6 +455,21 @@ impl Store {
 
 fn elapsed(start: i64, end: i64) -> i64 {
     end.saturating_sub(start).max(0)
+}
+
+fn ensure_unique_habit(connection: &Connection, title: &str, except: Option<i64>) -> Result<()> {
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS (
+            SELECT 1 FROM life_habits habit JOIN life_items item ON item.id = habit.item_id
+            WHERE item.title = ?1 AND (?2 IS NULL OR item.id != ?2)
+        )",
+        params![title, except],
+        |row| row.get(0),
+    )?;
+    if exists {
+        return Err(Error::Validation("A habit with this name already exists"));
+    }
+    Ok(())
 }
 
 fn reject_duplicate_day(existing: &[LifeOccurrence], occurrence: LifeOccurrence) -> Result<()> {
@@ -404,9 +570,10 @@ fn load_items(connection: &Connection, only_id: Option<i64>) -> Result<Vec<LifeI
             SELECT item_id, NULL, day, earliest, latest FROM life_day_occurrences
          )
          SELECT item.id, item.title, occurrence.occurred_at, occurrence.day,
-                occurrence.earliest, occurrence.latest
+                occurrence.earliest, occurrence.latest, habit.item_id IS NOT NULL
          FROM life_items AS item
          LEFT JOIN occurrences AS occurrence ON occurrence.item_id = item.id
+         LEFT JOIN life_habits AS habit ON habit.item_id = item.id
          WHERE ?1 IS NULL OR item.id = ?1
          ORDER BY item.id, occurrence.latest, occurrence.occurred_at IS NOT NULL, occurrence.day",
     )?;
@@ -414,29 +581,63 @@ fn load_items(connection: &Connection, only_id: Option<i64>) -> Result<Vec<LifeI
     let mut items: Vec<LifeItem> = Vec::new();
     while let Some(row) = rows.next()? {
         let id: i64 = row.get(0)?;
-        let occurrence = if let Some(at) = row.get::<_, Option<i64>>(2)? {
-            LifeOccurrence::Exact(at)
+        let kind = if row.get::<_, bool>(6)? {
+            LifeKind::CheckIn
         } else {
-            let day: String = row.get(3)?;
-            LifeOccurrence::Day {
+            LifeKind::Abstain
+        };
+        let occurrence = if let Some(at) = row.get::<_, Option<i64>>(2)? {
+            Some(LifeOccurrence::Exact(at))
+        } else if let Some(day) = row.get::<_, Option<String>>(3)? {
+            Some(LifeOccurrence::Day {
                 date: NaiveDate::parse_from_str(&day, "%Y-%m-%d")
                     .map_err(|_| Error::InvalidData)?,
                 earliest: row.get(4)?,
                 latest: row.get(5)?,
-            }
+            })
+        } else {
+            None
         };
-        validate_time(occurrence, i64::MAX).map_err(|_| Error::InvalidData)?;
+        if let Some(occurrence) = occurrence {
+            validate_time(occurrence, i64::MAX).map_err(|_| Error::InvalidData)?;
+        }
+        if (kind == LifeKind::Abstain) != occurrence.is_some() {
+            return Err(Error::InvalidData);
+        }
         if let Some(item) = items.last_mut().filter(|item| item.id == id) {
-            item.occurrences.push(occurrence);
+            item.occurrences.extend(occurrence);
         } else {
             let title: String = row.get(1)?;
             valid_title(&title).map_err(|_| Error::InvalidData)?;
             items.push(LifeItem {
                 id,
                 title,
-                occurrences: vec![occurrence],
+                kind,
+                occurrences: occurrence.into_iter().collect(),
+                check_in_days: Vec::new(),
             });
         }
+    }
+    let mut statement = connection.prepare(
+        "SELECT link.item_id, entry.day, COUNT(*), SUM(entry.duration_minutes)
+         FROM life_check_ins link JOIN daily_entries entry ON entry.id = link.entry_id
+         WHERE ?1 IS NULL OR link.item_id = ?1
+         GROUP BY link.item_id, entry.day
+         ORDER BY link.item_id, entry.day",
+    )?;
+    let mut rows = statement.query([only_id])?;
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let day: String = row.get(1)?;
+        let day = NaiveDate::parse_from_str(&day, "%Y-%m-%d").map_err(|_| Error::InvalidData)?;
+        let index = items
+            .binary_search_by_key(&id, |item| item.id)
+            .map_err(|_| Error::InvalidData)?;
+        items[index].check_in_days.push(CheckInDay {
+            day,
+            count: row.get(2)?,
+            minutes: row.get(3)?,
+        });
     }
     Ok(items)
 }

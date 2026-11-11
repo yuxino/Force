@@ -1,5 +1,5 @@
 use chrono::{Datelike, Local, NaiveDate, NaiveTime, TimeZone, Timelike};
-use force_core::{Error, LifeBoard, LifeItem, LifeModule, LifeOccurrence, Store};
+use force_core::{Error, LifeBoard, LifeItem, LifeKind, LifeModule, LifeOccurrence, Store};
 use gpui::{
     App, AppContext as _, Context, Entity, FocusHandle, Focusable as _, KeyBinding, PromptButton,
     PromptLevel, ScrollHandle, Subscription, Window, point, px,
@@ -18,6 +18,13 @@ pub(crate) enum LifeEdit {
 }
 
 impl LifeEdit {
+    pub(crate) fn kind(&self, add_kind: LifeKind) -> LifeKind {
+        match self {
+            Self::Add => add_kind,
+            Self::Record(item) | Self::Edit(item) => item.kind,
+        }
+    }
+
     fn initial_name(&self) -> &str {
         match self {
             Self::Edit(item) => &item.title,
@@ -35,6 +42,8 @@ pub(crate) struct LifeState {
     pub(crate) name: Entity<InputState>,
     pub(crate) date: Entity<InputState>,
     pub(crate) time: Entity<InputState>,
+    pub(crate) minutes: Entity<InputState>,
+    pub(crate) add_kind: LifeKind,
     pub(crate) day_only: bool,
     pub(crate) focus: FocusHandle,
     pub(crate) scroll: ScrollHandle,
@@ -50,10 +59,11 @@ impl LifeState {
             KeyBinding::new("tab", NextField, Some("LifeEditor")),
             KeyBinding::new("shift-tab", PreviousField, Some("LifeEditor")),
         ]);
-        let name = cx.new(|cx| InputState::new(window, cx).placeholder("例如 喝咖啡"));
+        let name = cx.new(|cx| InputState::new(window, cx).placeholder("例如 健身"));
         let date = cx.new(|cx| InputState::new(window, cx).placeholder("YYYY-MM-DD"));
         let time = cx.new(|cx| InputState::new(window, cx).placeholder("HH:MM:SS"));
-        let subscriptions = [&name, &date, &time]
+        let minutes = cx.new(|cx| InputState::new(window, cx).placeholder("例如 60"));
+        let subscriptions = [&name, &date, &time, &minutes]
             .into_iter()
             .map(|field| {
                 cx.subscribe_in(field, window, |this, _, event, window, cx| {
@@ -82,6 +92,8 @@ impl LifeState {
             name,
             date,
             time,
+            minutes,
+            add_kind: LifeKind::default(),
             focus: cx.focus_handle().tab_stop(false),
             scroll: ScrollHandle::new(),
             error: None,
@@ -101,6 +113,8 @@ impl LifeState {
             || self.date.read(cx).value().as_ref() != date
             || self.day_only != self.initial_at.is_day()
             || self.time.read(cx).value().as_ref() != time
+            || !self.minutes.read(cx).value().is_empty()
+            || (matches!(edit, LifeEdit::Add) && self.add_kind != LifeKind::default())
     }
 }
 
@@ -179,8 +193,9 @@ impl ForceView {
         }
         let at = match &edit {
             LifeEdit::Edit(item) => item.last_occurrence(),
-            LifeEdit::Add | LifeEdit::Record(_) => LifeOccurrence::Exact(Local::now().timestamp()),
-        };
+            LifeEdit::Add | LifeEdit::Record(_) => None,
+        }
+        .unwrap_or_else(|| LifeOccurrence::Exact(Local::now().timestamp()));
         let (date, time) = occurrence_fields(at);
         self.life.name.update(cx, |input, cx| {
             input.set_value(edit.initial_name().to_owned(), window, cx)
@@ -191,6 +206,10 @@ impl ForceView {
         self.life
             .time
             .update(cx, |input, cx| input.set_value(time, window, cx));
+        self.life
+            .minutes
+            .update(cx, |input, cx| input.set_value("", window, cx));
+        self.life.add_kind = LifeKind::default();
         self.life.initial_at = at;
         self.life.day_only = at.is_day();
         self.life.error = None;
@@ -269,30 +288,63 @@ impl ForceView {
         {
             return;
         }
-        let Some(edit) = &self.life.edit else { return };
+        let Some(edit) = self.life.edit.clone() else {
+            return;
+        };
         let name = self.life.name.read(cx).value();
         let date = self.life.date.read(cx).value();
-        let time = self.life.time.read(cx).value();
-        let now = Local::now().timestamp();
-        let occurred_at =
-            match resolve_occurrence(&date, &time, self.life.day_only, self.life.initial_at, now) {
-                Ok(at) => at,
-                Err(error) => {
-                    self.life.error = Some(error);
-                    cx.notify();
-                    return;
+        let now = Local::now();
+        let check_in = edit.kind(self.life.add_kind) == LifeKind::CheckIn;
+        let recorded = matches!(edit, LifeEdit::Record(_)) && check_in;
+        let result = if check_in {
+            match edit {
+                LifeEdit::Add => {
+                    self.write_life(|store| store.create_life_habit(&name).map(|_| ()), cx)
                 }
-            };
-        let edit = edit.clone();
-        match self.write_life(
-            |store| match edit {
-                LifeEdit::Add => store.create_life_item(&name, occurred_at, now).map(|_| ()),
-                LifeEdit::Record(item) => store.record_life_occurrence(&item, occurred_at, now),
-                LifeEdit::Edit(item) => store.edit_life_item(&item, &name, occurred_at, now),
-            },
-            cx,
-        ) {
-            Ok(()) => self.cancel_life_editor(window, cx),
+                LifeEdit::Edit(item) => {
+                    self.write_life(|store| store.rename_life_habit(&item, &name), cx)
+                }
+                LifeEdit::Record(item) => {
+                    let minutes = self.life.minutes.read(cx).value();
+                    let today = now.date_naive();
+                    crate::moment_model::parse_daily_fields(&date, &minutes, today).and_then(
+                        |(day, minutes)| {
+                            self.write_life(
+                                |store| store.record_life_check_in(&item, day, minutes, today),
+                                cx,
+                            )
+                        },
+                    )
+                }
+            }
+        } else {
+            let time = self.life.time.read(cx).value();
+            let now = now.timestamp();
+            resolve_occurrence(&date, &time, self.life.day_only, self.life.initial_at, now)
+                .and_then(|occurred_at| {
+                    self.write_life(
+                        |store| match edit {
+                            LifeEdit::Add => {
+                                store.create_life_item(&name, occurred_at, now).map(|_| ())
+                            }
+                            LifeEdit::Record(item) => {
+                                store.record_life_occurrence(&item, occurred_at, now)
+                            }
+                            LifeEdit::Edit(item) => {
+                                store.edit_life_item(&item, &name, occurred_at, now)
+                            }
+                        },
+                        cx,
+                    )
+                })
+        };
+        match result {
+            Ok(()) => {
+                self.cancel_life_editor(window, cx);
+                if recorded {
+                    self.notify("已打卡。", cx);
+                }
+            }
             Err(error) => {
                 self.life.error = Some(error);
                 cx.notify();
@@ -309,7 +361,10 @@ impl ForceView {
         let answer = window.prompt(
             PromptLevel::Warning,
             "删除这个事项？",
-            Some("这项的发生记录也会删除。"),
+            Some(match item.kind {
+                LifeKind::CheckIn => "这项将从看板移除，已有按日记录会保留。",
+                LifeKind::Abstain => "这项的发生记录也会删除。",
+            }),
             &[PromptButton::cancel("取消"), PromptButton::new("删除")],
             cx,
         );
@@ -423,6 +478,7 @@ fn life_error(error: Error) -> &'static str {
         Error::Validation("This date already has a date-only occurrence") => {
             "该日期已有一笔仅日期记录。"
         }
+        Error::Validation("A habit with this name already exists") => "已有同名的打卡事项。",
         Error::InvalidTransition | Error::NotFound => "事项已变更，请取消后重新打开。",
         _ => "保存失败。已有记录已保留，请重试。",
     }

@@ -596,7 +596,7 @@ fn parse_note_date(value: &str) -> Result<NaiveDate, &'static str> {
     Ok(day)
 }
 
-fn parse_daily_fields(
+pub(crate) fn parse_daily_fields(
     date: &str,
     minutes: &str,
     today: NaiveDate,
