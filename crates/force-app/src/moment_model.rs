@@ -280,6 +280,7 @@ impl ForceView {
     }
 
     fn reveal_moment(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_life_editor(window, cx);
         self.suspend_task_dialog(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);

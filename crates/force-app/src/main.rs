@@ -19,6 +19,8 @@ mod editor_dialog;
 mod floating_view;
 mod focus_view;
 mod label;
+mod life_model;
+mod life_view;
 mod model;
 mod moment_model;
 mod moment_view;
@@ -46,6 +48,8 @@ mod analysis_ui_tests;
 mod completion_editor_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod headless_ui_tests;
+#[cfg(all(test, feature = "ui-test-support"))]
+mod life_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
 mod moment_ui_tests;
 #[cfg(all(test, feature = "ui-test-support"))]
@@ -367,6 +371,8 @@ fn main() -> anyhow::Result<()> {
                             this.save_record_editor(window, cx);
                         } else if this.agenda.editor_visible {
                             this.save_plan(window, cx);
+                        } else if this.life.editor_visible && this.page == model::Page::Life {
+                            this.save_life_item(window, cx);
                         } else {
                             this.save_moment(window, cx);
                         }

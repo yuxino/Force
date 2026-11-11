@@ -124,6 +124,7 @@ impl ForceView {
     }
 
     pub(crate) fn open_task_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_life_editor(window, cx);
         self.suspend_moment(window, cx);
         self.suspend_record_editor(window, cx);
         self.suspend_completion_editor(window, cx);

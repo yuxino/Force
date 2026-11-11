@@ -16,7 +16,7 @@ use crate::{
     view::{
         CHROME, ControlState, DESTRUCTIVE, HOVER, INK, LINE, MUTED, PAPER, PRESSED, SURFACE,
         action_icon, button, choice_button, clock, control_icon, control_label, field_label,
-        primary_button, section_heading, short_time, timer_font,
+        outlined_button, primary_button, section_heading, short_time, timer_font,
     },
 };
 
@@ -455,7 +455,17 @@ impl ForceView {
                                     this.select_session(id, window, cx);
                                 })),
                         )
-                    }),
+                    })
+                    .child(
+                        outlined_button("open-life-dashboard")
+                            .debug_selector(|| "open-life-dashboard".into())
+                            .h(px(32.))
+                            .icon(control_icon(IconName::LayoutDashboard, INK))
+                            .child(control_label("生活看板", INK))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.navigate(Page::Life, window, cx);
+                            })),
+                    ),
             )
             .when(self.storage_failed, |body| {
                 body.child(self.storage_notice(cx))

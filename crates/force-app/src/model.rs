@@ -21,6 +21,7 @@ use gpui_component::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Page {
     Agenda,
+    Life,
     Focus,
     Records,
     Analysis,
@@ -68,6 +69,7 @@ enum TagDestination {
 
 pub(crate) struct ForceView {
     pub(crate) analysis: crate::analysis_model::AnalysisState,
+    pub(crate) life: crate::life_model::LifeState,
     pub(crate) classification: crate::classification_model::ClassificationState,
     pub(crate) time_picker: Entity<crate::time_picker::TimePicker>,
     pub(crate) agenda: crate::agenda_model::AgendaState,
@@ -143,7 +145,7 @@ pub(crate) struct ForceView {
     pub(crate) countdown: bool,
     pub(crate) sound_enabled: bool,
     pub(crate) focus_handle: FocusHandle,
-    pub(crate) panel_scroll: [gpui::ScrollHandle; 4],
+    pub(crate) panel_scroll: [gpui::ScrollHandle; 5],
     pub(crate) task_scroll: gpui::ScrollHandle,
     pub(crate) tag_scroll: gpui::ScrollHandle,
     pub(crate) tag_form_anchor: gpui::ScrollAnchor,
@@ -321,8 +323,9 @@ impl ForceView {
         let completion_editor =
             crate::completion_editor_model::CompletionEditorState::new(window, cx);
         let classification = crate::classification_model::ClassificationState::new(window, cx);
+        let life = crate::life_model::LifeState::new(window, cx);
         let time_picker = cx.new(crate::time_picker::TimePicker::new);
-        let panel_scroll: [gpui::ScrollHandle; 4] = std::array::from_fn(|_| Default::default());
+        let panel_scroll: [gpui::ScrollHandle; 5] = std::array::from_fn(|_| Default::default());
         let tag_form_anchor = gpui::ScrollAnchor::for_handle(panel_scroll[2].clone());
         let mut view = Self {
             agenda,
@@ -335,6 +338,7 @@ impl ForceView {
             store: None,
             data_dir,
             analysis: Default::default(),
+            life,
             classification,
             time_picker,
             storage_failed: false,
@@ -695,6 +699,9 @@ impl ForceView {
                 }
                 self.refresh_agenda(cx);
                 self.refresh_analysis(cx);
+                if self.page == Page::Life {
+                    self.refresh_life(cx);
+                }
                 cx.notify();
             }
             Err(_) => {
@@ -1391,6 +1398,8 @@ impl ForceView {
             self.moments
                 .content
                 .update(cx, |input, cx| input.focus(window, cx));
+        } else if self.page == Page::Life && self.life.editor_visible {
+            self.focus_life_editor(window, cx);
         } else if self.page == Page::Settings && self.classification.editing.is_some() {
             self.classification
                 .input
@@ -2170,6 +2179,7 @@ impl ForceView {
     }
 
     pub(crate) fn navigate(&mut self, page: Page, window: &mut Window, cx: &mut Context<Self>) {
+        self.suspend_life_editor(window, cx);
         self.suspend_task_dialog(window, cx);
         self.time_picker
             .update(cx, |picker, cx| picker.dismiss(window, cx));
@@ -2218,6 +2228,11 @@ impl ForceView {
             self.suspend_record_editor(window, cx);
         } else if self.moments.visible {
             self.suspend_moment(window, cx);
+        } else if self.page == Page::Life && self.life.editor_visible {
+            self.suspend_life_editor(window, cx);
+        } else if self.page == Page::Life && self.life.customizing {
+            self.life.customizing = false;
+            cx.notify();
         } else if self.page == Page::Agenda && self.agenda.tag_picker.read(cx).is_open() {
             self.agenda
                 .tag_picker
@@ -2227,7 +2242,7 @@ impl ForceView {
         } else if self.editing_duration.is_some() {
             self.cancel_duration_edit(window, cx);
         } else if self.page == Page::Agenda && !self.agenda.month_overview
-            || self.page == Page::Focus
+            || matches!(self.page, Page::Focus | Page::Life)
         {
             self.navigate(Page::Agenda, window, cx);
         } else if self.page == Page::Settings && self.classification.editing.is_some() {

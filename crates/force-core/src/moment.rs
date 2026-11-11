@@ -40,7 +40,7 @@ pub(super) fn migrate_v6(connection: &mut Connection) -> Result<()> {
             transaction.prepare(SELECT_MOMENT)?;
             transaction.pragma_update(None, "user_version", 7)?;
         }
-        7 | SCHEMA_VERSION => (),
+        7..=SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;

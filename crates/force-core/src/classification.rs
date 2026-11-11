@@ -48,9 +48,9 @@ pub(super) fn migrate_v7(connection: &mut Connection) -> Result<()> {
             transaction.execute_batch(SCHEMA)?;
             // Validate an existing table before claiming that the upgrade succeeded.
             load_class_colors(&transaction)?;
-            transaction.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+            transaction.pragma_update(None, "user_version", 8)?;
         }
-        SCHEMA_VERSION => (),
+        8..=SCHEMA_VERSION => (),
         _ => return Err(Error::UnsupportedSchema),
     }
     transaction.commit()?;
