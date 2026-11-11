@@ -30,6 +30,7 @@ jobs:
           components: rustfmt, clippy
       - name: Linux libraries
         if: runner.os == 'Linux'
+        timeout-minutes: 5
         run: ./scripts/linux-deps.sh
       - uses: Swatinem/rust-cache@v2
       - name: Formatting
