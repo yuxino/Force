@@ -269,6 +269,9 @@ impl ForceView {
                                         Page::Settings => "设置",
                                         Page::Analysis => "分析",
                                     }))
+                                    .when(self.page == Page::Analysis, |row| {
+                                        row.child(self.analysis_scope_picker(cx))
+                                    })
                                     .when(self.page == Page::Records, |row| {
                                         row.child(
                                             button("export-records")
@@ -358,7 +361,7 @@ impl Render for ForceView {
                 self.life
                     .edit
                     .as_ref()
-                    .filter(|_| self.page == Page::Agenda && self.life.editor_visible),
+                    .filter(|_| self.life_editor_active()),
                 |body, edit| body.child(self.life_editor(edit, window, cx)),
             )
             .when_some(self.toast.as_ref(), |body, (message, _)| {

@@ -1,16 +1,17 @@
 use chrono::{Local, NaiveDate, TimeDelta};
-use force_core::{LifeKind, LifeModule, LifeOccurrence};
+use force_core::{LifeModule, LifeOccurrence};
 use gpui::{TestAppContext, px};
 
-use crate::{headless_ui_tests::ManagerHarness, model::Page};
+use crate::{headless_ui_tests::ManagerHarness, life_model::CheckInMetric, model::Page};
 
 #[gpui::test]
-fn life_dashboard_tracks_occurrences_and_restores_its_layout(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+fn habit_analysis_tracks_occurrences_and_preserves_drafts(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Analysis);
+    manager.click("analysis-scope-habits");
     manager.click("life-add");
     manager.click("life-save");
     manager.view.read_with(&manager.cx, |view, _| {
-        assert_eq!(view.page, Page::Agenda);
+        assert_eq!(view.page, Page::Analysis);
         assert!(view.life.editor_visible);
         assert!(view.life.error.is_some());
     });
@@ -27,7 +28,7 @@ fn life_dashboard_tracks_occurrences_and_restores_its_layout(cx: &mut TestAppCon
     });
     manager.click("life-close");
     manager.click("records-tab");
-    manager.click("agenda-tab");
+    manager.click("analysis-tab");
     manager.click("life-add");
     manager.view.read_with(&manager.cx, |view, cx| {
         assert_eq!(view.life.name.read(cx).value(), "喝咖啡");
@@ -36,16 +37,10 @@ fn life_dashboard_tracks_occurrences_and_restores_its_layout(cx: &mut TestAppCon
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
 
-    let table = manager.bounds("life-table");
-    let calendar = manager.bounds("agenda-overview-grid");
     let trend = manager.bounds("life-trend");
     let total = manager.bounds("life-total");
-    assert!(calendar.top() > table.bottom());
-    assert!(trend.top() > calendar.bottom());
-    assert!(total.left() >= trend.right() + px(30.));
-    assert!(total.right() <= table.right() + px(1.));
-
-    manager.click("life-record-1");
+    assert!(trend.top() > total.bottom());
+    manager.click("life-occurrence");
     manager.click("life-save");
     manager.view.read_with(&manager.cx, |view, _| {
         assert!(!view.life.editor_visible);
@@ -69,12 +64,12 @@ fn life_dashboard_tracks_occurrences_and_restores_its_layout(cx: &mut TestAppCon
         assert!(board.shows(LifeModule::Total));
         assert_eq!(board.items[0].recent_spans(view.now, 8).len(), 2);
     });
-    assert!(manager.bounds("life-table").bottom() < manager.bounds("agenda-overview-grid").top());
 }
 
 #[gpui::test]
 fn date_only_entries_support_duration_without_creating_a_timer(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Analysis);
+    manager.click("analysis-scope-habits");
     let day = Local::now().date_naive().pred_opt().unwrap();
 
     manager.click("life-add");
@@ -119,76 +114,99 @@ fn date_only_entries_support_duration_without_creating_a_timer(cx: &mut TestAppC
 }
 
 #[gpui::test]
-fn life_dashboard_uses_dated_check_ins_for_a_positive_habit(cx: &mut TestAppContext) {
-    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
-    let today = Local::now().date_naive();
-    manager.view.update_in(&mut manager.cx, |view, _, cx| {
-        assert!(view.write(
-            |store| store.create_daily_entry(today.pred_opt().unwrap(), "拉伸", Some(35), today),
-            cx,
-        ));
-    });
-    manager.click("life-add");
-    manager.cx.simulate_input("拉伸");
-    manager.click("life-save");
-    manager.click("life-record-1");
-    manager.click("global-new-task");
-    manager.view.read_with(&manager.cx, |view, _| {
-        assert!(view.life.editor_visible);
-        assert!(!view.task_editor.visible);
-    });
-    manager.view.update_in(&mut manager.cx, |view, window, cx| {
-        view.life
-            .minutes
-            .update(cx, |input, cx| input.set_value("25", window, cx));
-    });
-    manager.click("life-save");
-    manager.view.read_with(&manager.cx, |view, _| {
-        let item = &view.life.board.as_ref().unwrap().items[0];
-        let summary = item.check_in_summary(today);
-        assert_eq!(item.kind, LifeKind::CheckIn);
-        assert_eq!(summary.streak_days, 2);
-        assert_eq!(summary.count, 2);
-        assert_eq!(summary.minutes, Some(60));
-        assert!(view.active.is_empty());
-    });
-    manager.click("records-tab");
-    manager.view.read_with(&manager.cx, |view, _| {
-        assert_eq!(view.record_daily_entries[0].duration_minutes, Some(25));
-    });
-}
-
-#[gpui::test]
-fn calendar_shows_check_ins_on_their_date_after_scrolling(cx: &mut TestAppContext) {
+fn calendar_records_check_ins_on_the_activated_date(cx: &mut TestAppContext) {
     let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Agenda);
     let day = NaiveDate::from_ymd_opt(2000, 1, 31).unwrap();
-    let today = Local::now().date_naive();
     manager.view.update_in(&mut manager.cx, |view, window, cx| {
-        assert!(view.write(
-            |store| {
-                store.create_daily_entry(day, "拉伸", Some(35), today)?;
-                store.create_life_habit("拉伸").map(|_| ())
-            },
-            cx
-        ));
         view.select_agenda_date(day, window, cx);
     });
     manager.cx.update(|window, _| window.refresh());
     manager.cx.run_until_parked();
-    let viewport = manager.bounds("manager-viewport");
-    let calendar = manager.bounds("agenda-overview-grid");
-    assert!(calendar.bottom() > viewport.bottom());
-    manager.scroll("manager-viewport", -600.);
+    let grid = manager.bounds("agenda-overview-grid");
+    assert!(grid.bottom() <= px(620.));
+    manager.click("agenda-month-day-2000-01-31");
+    manager.click("agenda-check-in");
+    manager.click("agenda-check-in-add");
+    manager.cx.simulate_input("拉伸");
+    manager.click("life-save");
+    manager.click("global-new-task");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert!(view.life.editor_visible);
+        assert!(!view.task_editor.visible);
+        assert_eq!(view.life.date.read(cx).value(), day.to_string());
+    });
+    manager.view.update_in(&mut manager.cx, |view, window, cx| {
+        view.life
+            .minutes
+            .update(cx, |input, cx| input.set_value("35", window, cx));
+    });
+    manager.click("life-save");
+    assert_eq!(manager.bounds("agenda-overview-grid"), grid);
     let cell = manager.bounds("agenda-month-day-2000-01-31");
-    assert!(cell.top() >= viewport.top() && cell.bottom() <= viewport.bottom());
-    assert!(cell.contains(&manager.bounds("agenda-check-in-2000-01-31").center()));
+    assert!(
+        cell.contains(
+            &manager
+                .bounds("agenda-month-check-in-2000-01-31-1")
+                .center()
+        )
+    );
+    assert!(manager.cx.debug_bounds("life-trend").is_none());
     manager.click("agenda-month-day-2000-01-31");
     let popup = manager.bounds("agenda-popover");
     assert!(popup.contains(&manager.bounds("agenda-day-checkin-1").center()));
+    manager.click("agenda-check-in");
+    manager.click("agenda-check-in-item-1");
+    manager.view.read_with(&manager.cx, |view, cx| {
+        assert_eq!(view.life.date.read(cx).value(), day.to_string());
+    });
+    manager.click("life-cancel");
+    manager.click("agenda-month-day-2000-01-31");
     manager.click("agenda-check-in-records");
     manager.view.read_with(&manager.cx, |view, _| {
         assert_eq!(view.page, Page::Records);
         assert_eq!(view.record_date, day);
         assert_eq!(view.record_daily_entries[0].duration_minutes, Some(35));
+        assert!(view.active.is_empty());
+        assert_eq!(view.record_stats.focus_seconds, 0);
     });
+}
+
+#[gpui::test]
+fn habit_analysis_can_choose_subject_metric_and_displayed_modules(cx: &mut TestAppContext) {
+    let mut manager = ManagerHarness::new_on_page(cx, 780., 620., Page::Analysis);
+    let today = Local::now().date_naive();
+    manager.view.update_in(&mut manager.cx, |view, _, cx| {
+        assert!(view.write(
+            |store| {
+                store.create_daily_entry(today, "拉伸", Some(35), today)?;
+                store.create_life_habit("拉伸")?;
+                store.create_life_habit("散步").map(|_| ())
+            },
+            cx
+        ));
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.bounds("analysis-summary");
+    manager.click("analysis-scope-habits");
+    manager.bounds("life-analysis-item-1");
+    manager.bounds("life-analysis-log");
+    let trend_top = manager.bounds("life-trend").top();
+    manager.click("life-metric-duration");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert_eq!(view.life.metric, CheckInMetric::Duration)
+    });
+    manager.view.update_in(&mut manager.cx, |view, _, cx| {
+        view.select_life_chart_item(2, cx);
+        view.set_life_module(LifeModule::Total, false, cx);
+    });
+    manager.cx.update(|window, _| window.refresh());
+    manager.cx.run_until_parked();
+    manager.bounds("life-analysis-item-2");
+    manager.view.read_with(&manager.cx, |view, _| {
+        assert!(!view.life.board.as_ref().unwrap().shows(LifeModule::Total));
+    });
+    assert!(manager.bounds("life-trend").top() < trend_top);
+    manager.click("analysis-scope-timing");
+    manager.bounds("analysis-summary");
 }

@@ -7,6 +7,13 @@ use gpui::{Context, Window};
 use crate::model::{ForceView, Page, day_bounds};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum AnalysisScope {
+    #[default]
+    Timing,
+    Habits,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(crate) enum AnalysisPeriod {
     Week,
     #[default]
@@ -40,6 +47,7 @@ pub(crate) struct AnalysisDay {
 
 #[derive(Default)]
 pub(crate) struct AnalysisState {
+    pub(crate) scope: AnalysisScope,
     pub(crate) period: AnalysisPeriod,
     pub(crate) days: Vec<AnalysisDay>,
     pub(crate) total: DailyAnalysis,

@@ -124,6 +124,7 @@ pub(crate) struct AgendaState {
     /// Day details or a centered editor above the unchanged month calendar.
     pub(crate) popup_open: bool,
     pub(crate) popup_anchor: Option<Point<Pixels>>,
+    pub(crate) check_in_picker_open: bool,
     pub(crate) calendar_focus: FocusHandle,
     pub(crate) editor_focus: FocusHandle,
     /// `editing` retains a draft even while this editor is suspended.
@@ -153,7 +154,6 @@ pub(crate) struct AgendaState {
     pub(crate) tag_picker: Entity<TagPicker>,
     pub(crate) error: Option<String>,
     pub(crate) calendar_scroll: ScrollHandle,
-    pub(crate) month_scroll: ScrollHandle,
     pub(crate) inspector_scroll: ScrollHandle,
     pub(crate) editor_scroll: ScrollHandle,
     note_return_scroll: Option<Point<Pixels>>,
@@ -241,6 +241,7 @@ impl AgendaState {
             month_overview: true,
             popup_open: false,
             popup_anchor: None,
+            check_in_picker_open: false,
             calendar_focus: cx.focus_handle().tab_stop(false),
             editor_focus: cx.focus_handle().tab_stop(false),
             editor_visible: false,
@@ -269,7 +270,6 @@ impl AgendaState {
             tag_picker,
             error: None,
             calendar_scroll: ScrollHandle::default(),
-            month_scroll: ScrollHandle::default(),
             inspector_scroll: ScrollHandle::default(),
             editor_scroll: ScrollHandle::default(),
             note_return_scroll: None,
@@ -609,6 +609,7 @@ impl ForceView {
 
     /// Closing a contextual view never commits a plan or loses a changed draft.
     pub(crate) fn suspend_agenda_popup(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.agenda.check_in_picker_open = false;
         self.time_picker
             .update(cx, |picker, cx| picker.dismiss(window, cx));
         if self.agenda.editing && !self.agenda_has_unsaved_changes(cx) {
@@ -680,11 +681,15 @@ impl ForceView {
         if !(1..=9999).contains(&day.year()) {
             return;
         }
+        let anchor = (day == self.agenda.date)
+            .then_some(self.agenda.popup_anchor)
+            .flatten();
         self.suspend_agenda_popup(window, cx);
         self.agenda.month_overview = true;
         self.select_agenda_date(day, window, cx);
         self.clear_agenda_selection();
         self.agenda.popup_open = true;
+        self.agenda.popup_anchor = anchor;
         self.agenda.editor_visible = false;
         window.focus(&self.agenda.calendar_focus);
         cx.notify();

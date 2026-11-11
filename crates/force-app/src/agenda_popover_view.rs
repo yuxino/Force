@@ -1,4 +1,5 @@
 //! Day details stay contextual; arrangement editing uses a roomy centered dialog.
+use chrono::Local;
 use force_core::TagKind;
 use gpui::{prelude::*, *};
 use gpui_component::{IconName, button::ButtonVariants};
@@ -37,104 +38,170 @@ impl ForceView {
         let selected_detail = self.agenda.selected_plan.is_some()
             || self.agenda.selected_record.is_some()
             || self.agenda.selected_completion.is_some();
+        let picking_check_in = self.agenda.check_in_picker_open;
         let body_limit = (max_height - 142.).max(100.);
-        let popup =
-            div()
-                .id("agenda-popover")
-                .debug_selector(|| "agenda-popover".into())
-                .w(px(width))
-                .max_h(px(max_height))
-                .p(px(18.))
-                .rounded(px(8.))
-                .border_1()
-                .border_color(rgb(crate::view::CONTROL_LINE))
-                .bg(rgb(0xffffff))
-                .occlude()
-                .flex()
-                .flex_col()
-                .gap(px(12.))
-                .on_mouse_down_out(cx.listener(|this, _, window, cx| {
-                    this.suspend_agenda_popup(window, cx);
-                }))
-                .child(
-                    div()
-                        .h(px(28.))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(
-                            single_line(self.agenda.date.format("%-m月%-d日").to_string(), 16.)
-                                .flex_1()
-                                .font_weight(FontWeight::MEDIUM),
-                        )
-                        .child(
-                            button("agenda-popover-close")
-                                .debug_selector(|| "agenda-popover-close".into())
-                                .custom(crate::view::quiet_variant(cx))
-                                .size(px(28.))
-                                .icon(control_icon(IconName::Close, MUTED))
-                                .tooltip("关闭")
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.suspend_agenda_popup(window, cx)
-                                })),
-                        ),
-                )
-                .child(
-                    div()
-                        .id("agenda-popup-scroll")
-                        .max_h(px(body_limit))
-                        .min_h_0()
-                        .overflow_y_scroll()
-                        .track_scroll(&self.agenda.inspector_scroll)
-                        .when(selected_detail, |body| {
-                            body.when_some(self.agenda_selected_detail(cx), |body, detail| {
-                                body.child(detail)
-                            })
+        let popup = div()
+            .id("agenda-popover")
+            .debug_selector(|| "agenda-popover".into())
+            .w(px(width))
+            .max_h(px(max_height))
+            .p(px(18.))
+            .rounded(px(8.))
+            .border_1()
+            .border_color(rgb(crate::view::CONTROL_LINE))
+            .bg(rgb(0xffffff))
+            .occlude()
+            .flex()
+            .flex_col()
+            .gap(px(12.))
+            .on_mouse_down_out(cx.listener(|this, _, window, cx| {
+                this.suspend_agenda_popup(window, cx);
+            }))
+            .child(
+                div()
+                    .h(px(28.))
+                    .flex_shrink_0()
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(
+                        single_line(self.agenda.date.format("%-m月%-d日").to_string(), 16.)
+                            .flex_1()
+                            .font_weight(FontWeight::MEDIUM),
+                    )
+                    .child(
+                        button("agenda-popover-close")
+                            .debug_selector(|| "agenda-popover-close".into())
+                            .custom(crate::view::quiet_variant(cx))
+                            .size(px(28.))
+                            .icon(control_icon(IconName::Close, MUTED))
+                            .tooltip("关闭")
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.suspend_agenda_popup(window, cx)
+                            })),
+                    ),
+            )
+            .child(
+                div()
+                    .id("agenda-popup-scroll")
+                    .max_h(px(body_limit))
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.agenda.inspector_scroll)
+                    .when(picking_check_in, |body| {
+                        body.child(self.life_day_picker(self.agenda.date, cx))
+                    })
+                    .when(!picking_check_in && selected_detail, |body| {
+                        body.when_some(self.agenda_selected_detail(cx), |body, detail| {
+                            body.child(detail)
                         })
-                        .when(!selected_detail, |body| {
-                            body.child(self.agenda_day_summary(cx))
-                        }),
-                )
-                .child(
-                    div()
-                        .flex_shrink_0()
-                        .pt(px(12.))
-                        .border_t_1()
-                        .border_color(rgb(LINE))
-                        .flex()
-                        .items_center()
-                        .justify_between()
-                        .gap(px(8.))
-                        .child(
-                            button("agenda-popover-timeline")
-                                .debug_selector(|| "agenda-popover-timeline".into())
+                    })
+                    .when(!picking_check_in && !selected_detail, |body| {
+                        body.child(self.agenda_day_summary(cx))
+                    }),
+            )
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .pt(px(12.))
+                    .border_t_1()
+                    .border_color(rgb(LINE))
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .gap(px(8.))
+                    .when(picking_check_in, |footer| {
+                        footer.child(
+                            button("agenda-check-in-back")
                                 .custom(crate::view::quiet_variant(cx))
                                 .h(px(34.))
-                                .child(control_label("展开时间轴", MUTED))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_agenda_timeline(window, cx)
+                                .child(control_label("返回当天", MUTED))
+                                .on_click(cx.listener(|this, _, _, cx| {
+                                    this.agenda.check_in_picker_open = false;
+                                    cx.notify();
                                 })),
                         )
-                        .child(if selected_detail {
-                            button("agenda-popover-day")
-                                .custom(crate::view::quiet_variant(cx))
-                                .h(px(34.))
-                                .child(control_label("当天概览", INK))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.open_agenda_day(this.agenda.date, window, cx)
-                                }))
-                        } else {
-                            crate::view::outlined_button("agenda-add")
-                                .debug_selector(|| "agenda-add".into())
-                                .h(px(34.))
-                                .unavailable(self.storage_failed)
-                                .child(control_label("新建", INK))
-                                .on_click(cx.listener(|this, _, window, cx| {
-                                    this.begin_plan(None, window, cx)
-                                }))
-                        }),
-                );
+                    })
+                    .when(!picking_check_in, |footer| {
+                        footer
+                            .child(
+                                button("agenda-popover-timeline")
+                                    .debug_selector(|| "agenda-popover-timeline".into())
+                                    .custom(crate::view::quiet_variant(cx))
+                                    .h(px(34.))
+                                    .child(control_label("展开时间轴", MUTED))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_agenda_timeline(window, cx)
+                                    })),
+                            )
+                            .child(if selected_detail {
+                                button("agenda-popover-day")
+                                    .custom(crate::view::quiet_variant(cx))
+                                    .h(px(34.))
+                                    .child(control_label("当天概览", INK))
+                                    .on_click(cx.listener(|this, _, window, cx| {
+                                        this.open_agenda_day(this.agenda.date, window, cx)
+                                    }))
+                                    .into_any_element()
+                            } else {
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap(px(6.))
+                                    .when(
+                                        self.agenda.date <= Local::now().date_naive(),
+                                        |actions| {
+                                            actions.child(
+                                                button("agenda-check-in")
+                                                    .debug_selector(|| "agenda-check-in".into())
+                                                    .custom(crate::view::quiet_variant(cx))
+                                                    .h(px(34.))
+                                                    .unavailable(self.storage_failed)
+                                                    .child(control_label(
+                                                        if self.life.edit.is_some() {
+                                                            "继续编辑"
+                                                        } else {
+                                                            "打卡"
+                                                        },
+                                                        INK,
+                                                    ))
+                                                    .on_click(cx.listener(
+                                                        |this, _, window, cx| {
+                                                            if this.life.edit.is_some() {
+                                                                this.suspend_agenda_popup(
+                                                                    window, cx,
+                                                                );
+                                                                this.resume_life_editor(window, cx);
+                                                            } else {
+                                                                this.agenda.check_in_picker_open =
+                                                                    true;
+                                                                this.agenda
+                                                                    .inspector_scroll
+                                                                    .set_offset(point(
+                                                                        px(0.),
+                                                                        px(0.),
+                                                                    ));
+                                                                cx.notify();
+                                                            }
+                                                        },
+                                                    )),
+                                            )
+                                        },
+                                    )
+                                    .child(
+                                        crate::view::outlined_button("agenda-add")
+                                            .debug_selector(|| "agenda-add".into())
+                                            .h(px(34.))
+                                            .unavailable(self.storage_failed)
+                                            .child(control_label("新建", INK))
+                                            .on_click(cx.listener(|this, _, window, cx| {
+                                                this.begin_plan(None, window, cx)
+                                            })),
+                                    )
+                                    .into_any_element()
+                            })
+                    }),
+            );
         anchored()
             .position(point(px(left), px(top)))
             .snap_to_window_with_margin(px(12.))

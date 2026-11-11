@@ -703,7 +703,7 @@ impl ForceView {
                 }
                 self.refresh_agenda(cx);
                 self.refresh_analysis(cx);
-                if self.page == Page::Agenda {
+                if matches!(self.page, Page::Agenda | Page::Analysis) {
                     self.refresh_life(cx);
                 }
                 cx.notify();
@@ -1402,7 +1402,7 @@ impl ForceView {
             self.moments
                 .content
                 .update(cx, |input, cx| input.focus(window, cx));
-        } else if self.page == Page::Agenda && self.life.editor_visible {
+        } else if self.life_editor_active() {
             self.focus_life_editor(window, cx);
         } else if self.page == Page::Settings && self.classification.editing.is_some() {
             self.classification
@@ -2232,7 +2232,7 @@ impl ForceView {
             self.suspend_record_editor(window, cx);
         } else if self.moments.visible {
             self.suspend_moment(window, cx);
-        } else if self.page == Page::Agenda && self.life.editor_visible {
+        } else if self.life_editor_active() {
             self.suspend_life_editor(window, cx);
         } else if self.page == Page::Agenda && self.agenda.tag_picker.read(cx).is_open() {
             self.agenda

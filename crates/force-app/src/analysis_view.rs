@@ -3,7 +3,7 @@ use gpui::{prelude::*, *};
 use gpui_component::{Icon, IconName, button::ButtonVariants};
 
 use crate::{
-    analysis_model::AnalysisPeriod,
+    analysis_model::{AnalysisPeriod, AnalysisScope},
     model::ForceView,
     view::{
         INK, LINE, MUTED, SURFACE, button, choice_button, control_icon, control_label,
@@ -23,7 +23,34 @@ const CLASSES: [(TagClass, &str); 5] = [
 ];
 
 impl ForceView {
+    pub(crate) fn analysis_scope_picker(&self, cx: &mut Context<Self>) -> Div {
+        div().flex().gap(px(4.)).children(
+            [
+                (AnalysisScope::Timing, "计时", "analysis-scope-timing"),
+                (AnalysisScope::Habits, "坚持", "analysis-scope-habits"),
+            ]
+            .into_iter()
+            .map(|(scope, title, id)| {
+                let selected = self.analysis.scope == scope;
+                choice_button(id, selected, SURFACE, cx)
+                    .debug_selector(move || id.into())
+                    .h(px(32.))
+                    .px(px(12.))
+                    .child(control_label(title, if selected { INK } else { MUTED }))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.suspend_life_editor(window, cx);
+                        this.analysis.scope = scope;
+                        this.panel_scroll[3].set_offset(point(px(0.), px(0.)));
+                        cx.notify();
+                    }))
+            }),
+        )
+    }
+
     pub(crate) fn analysis_panel(&self, window: &Window, cx: &mut Context<Self>) -> Div {
+        if self.analysis.scope == AnalysisScope::Habits {
+            return self.life_analysis(cx);
+        }
         let content_width = f32::from(window.viewport_size().width).min(976.) - 80.;
         let range = self
             .analysis

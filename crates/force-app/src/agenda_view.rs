@@ -4,7 +4,7 @@ use gpui::{prelude::*, *};
 use gpui_component::{
     Icon, IconName,
     button::{ButtonCustomVariant, ButtonVariants},
-    scroll::{ScrollableElement, Scrollbar, ScrollbarShow},
+    scroll::{Scrollbar, ScrollbarShow},
     tooltip::Tooltip,
 };
 
@@ -151,17 +151,7 @@ impl ForceView {
         let week_count = (month.weekday().num_days_from_monday() + last.day()).div_ceil(7);
         let width = f32::from(window.bounds().size.width).min(976.) - 80.;
         let cell_width = width / 7.;
-        let summary_height = self.life_summary_height();
-        let extra_height = if summary_height > 0. {
-            summary_height + 16.
-        } else {
-            0.
-        };
-        // Keep the original minimum day-cell size; shorter windows scroll
-        // rather than clipping calendar entries to make room for habits.
-        let cell_height = ((f32::from(window.bounds().size.height) - 200. - extra_height)
-            / week_count as f32)
-            .max(70.);
+        let cell_height = (f32::from(window.bounds().size.height) - 200.) / week_count as f32;
         let available_rows = ((cell_height - 28.) / 21.).floor().max(1.) as usize;
         let today = Local::now().date_naive();
         let mut weeks = Vec::new();
@@ -181,7 +171,9 @@ impl ForceView {
                     .get(&date)
                     .map(Vec::as_slice)
                     .unwrap_or(&[]);
-                let item_limit = if items.len() > available_rows {
+                let check_ins: Vec<_> = self.life.check_ins_on(date).collect();
+                let item_count = items.len() + check_ins.len();
+                let item_limit = if item_count > available_rows {
                     available_rows.saturating_sub(1).max(1)
                 } else {
                     available_rows
@@ -190,9 +182,10 @@ impl ForceView {
                     .iter()
                     .filter(|item| !item.planned && !item.moved && !item.rest)
                     .fold(0_i64, |total, item| total.saturating_add(item.seconds));
-                let check_ins: u64 = self
-                    .life
-                    .check_ins_on(date)
+                let visible_check_ins = item_limit.saturating_sub(items.len());
+                let hidden_check_ins: u64 = check_ins
+                    .iter()
+                    .skip(visible_check_ins)
                     .map(|(_, entry)| entry.count)
                     .sum();
                 let in_month = date.month() == month.month();
@@ -235,14 +228,14 @@ impl ForceView {
                                     .when(date == today, |label| label.bg(rgb(INK)))
                                     .child(date.day().to_string()),
                             )
-                            .when(check_ins > 0, |header| {
+                            .when(hidden_check_ins > 0, |header| {
                                 header.child(
                                     div()
                                         .id(SharedString::from(format!("agenda-check-in-{date}")))
                                         .debug_selector(move || format!("agenda-check-in-{date}"))
                                         .flex_shrink_0()
                                         .tooltip(move |window, cx| {
-                                            Tooltip::new(format!("打卡 {check_ins} 次"))
+                                            Tooltip::new(format!("还有 {hidden_check_ins} 次打卡"))
                                                 .build(window, cx)
                                         })
                                         .child(control_icon(
@@ -354,13 +347,53 @@ impl ForceView {
                         );
                     }
                 }
-                if items.len() > item_limit {
+                for (item, entry) in check_ins.into_iter().take(visible_check_ins) {
+                    let id = item.id;
+                    let detail = match entry.minutes {
+                        Some(minutes) => format!(
+                            "{}\n打卡 {} 次 · {}",
+                            item.title,
+                            entry.count,
+                            crate::life_view::check_in_duration(minutes)
+                        ),
+                        None => format!("{}\n打卡 {} 次", item.title, entry.count),
+                    };
+                    content = content.child(
+                        div()
+                            .id(SharedString::from(format!(
+                                "agenda-month-check-in-{date}-{id}"
+                            )))
+                            .debug_selector(move || format!("agenda-month-check-in-{date}-{id}"))
+                            .w_full()
+                            .h(px(20.))
+                            .flex_shrink_0()
+                            .flex()
+                            .items_center()
+                            .gap(px(4.))
+                            .when(!self.agenda.popup_open, |row| {
+                                row.tooltip(move |window, cx| {
+                                    Tooltip::new(detail.clone()).build(window, cx)
+                                })
+                            })
+                            .child(control_icon(
+                                Icon::new(IconName::Check).size(px(11.)),
+                                MUTED,
+                            ))
+                            .child(
+                                single_line(item.title.clone(), 13.)
+                                    .w(px((cell_width - 33.).max(0.)))
+                                    .flex_shrink_0()
+                                    .text_color(rgb(foreground)),
+                            ),
+                    );
+                }
+                if item_count > item_limit {
                     content = content.child(
                         div()
                             .debug_selector(move || format!("agenda-month-more-{date}"))
                             .text_size(px(12.))
                             .text_color(rgb(MUTED))
-                            .child(format!("另 {} 项", items.len() - item_limit)),
+                            .child(format!("另 {} 项", item_count - item_limit)),
                     );
                 }
                 cells.push(
@@ -402,10 +435,12 @@ impl ForceView {
             }
             weeks.push(div().flex_1().min_h_0().w_full().flex().children(cells));
         }
-        let content = div()
+        div()
             .debug_selector(|| "manager-content".into())
             .track_focus(&self.agenda.calendar_focus)
             .tab_stop(false)
+            .flex_1()
+            .min_h_0()
             .w_full()
             .max_w(px(976.))
             .mx_auto()
@@ -491,73 +526,42 @@ impl ForceView {
                                     this.select_session(id, window, cx);
                                 })),
                         )
-                    })
-                    .when(summary_height == 0. && !self.storage_failed, |header| {
-                        header.child(self.life_add_button(cx))
                     }),
             )
             .when(self.storage_failed, |body| {
                 body.child(self.storage_notice(cx))
             })
             .when(!self.storage_failed, |body| {
-                body.when_some(self.life_summary(cx), |body, summary| body.child(summary))
-                    .child(
-                        div()
-                            .debug_selector(|| "agenda-overview-grid".into())
-                            .h(px(28. + cell_height * week_count as f32))
-                            .flex_shrink_0()
-                            .flex()
-                            .flex_col()
-                            .child(div().h(px(28.)).flex_shrink_0().flex().children(
-                                ["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map(
-                                    |day| {
-                                        div()
-                                            .flex_1()
-                                            .pl(px(9.))
-                                            .text_size(px(12.))
-                                            .text_color(rgb(MUTED))
-                                            .child(day)
-                                    },
-                                ),
-                            ))
-                            .child(
+                body.child(
+                    div()
+                        .debug_selector(|| "agenda-overview-grid".into())
+                        .flex_1()
+                        .min_h_0()
+                        .flex()
+                        .flex_col()
+                        .child(div().h(px(28.)).flex_shrink_0().flex().children(
+                            ["周一", "周二", "周三", "周四", "周五", "周六", "周日"].map(|day| {
                                 div()
                                     .flex_1()
-                                    .min_h_0()
-                                    .flex()
-                                    .flex_col()
-                                    .border_t_1()
-                                    .border_l_1()
-                                    .border_color(rgb(LINE))
-                                    .children(weeks),
-                            ),
-                    )
-                    .when_some(self.life_statistics(cx), |body, stats| body.child(stats))
-            });
-        div()
-            .debug_selector(|| "manager-viewport".into())
-            .relative()
-            .flex_1()
-            .min_h_0()
-            .child(
-                div()
-                    .relative()
-                    .size_full()
-                    .child(
-                        div()
-                            .id("agenda-month-scroll")
-                            .size_full()
-                            .overflow_y_scroll()
-                            .track_scroll(&self.agenda.month_scroll)
-                            .on_scroll_wheel(cx.listener(|this, _, window, cx| {
-                                if this.agenda.popup_open && !this.agenda.editor_visible {
-                                    this.suspend_agenda_popup(window, cx);
-                                }
-                            }))
-                            .child(content),
-                    )
-                    .vertical_scrollbar(&self.agenda.month_scroll),
-            )
+                                    .pl(px(9.))
+                                    .text_size(px(12.))
+                                    .text_color(rgb(MUTED))
+                                    .child(day)
+                            }),
+                        ))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_h_0()
+                                .flex()
+                                .flex_col()
+                                .border_t_1()
+                                .border_l_1()
+                                .border_color(rgb(LINE))
+                                .children(weeks),
+                        ),
+                )
+            })
             .when(
                 self.agenda.popup_open && (self.agenda.editor_visible || !self.storage_failed),
                 |body| body.child(self.agenda_popover(window, cx)),

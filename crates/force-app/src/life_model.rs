@@ -14,29 +14,46 @@ gpui::actions!(life_editor, [NextField, PreviousField]);
 
 #[derive(Clone)]
 pub(crate) enum LifeEdit {
-    Add,
-    Record(LifeItem),
+    Add(Option<NaiveDate>),
+    Record(LifeItem, Option<NaiveDate>),
     Edit(LifeItem),
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum CheckInMetric {
+    #[default]
+    Count,
+    Duration,
 }
 
 impl LifeEdit {
     pub(crate) fn kind(&self, add_kind: LifeKind) -> LifeKind {
         match self {
-            Self::Add => add_kind,
-            Self::Record(item) | Self::Edit(item) => item.kind,
+            Self::Add(None) => add_kind,
+            Self::Add(Some(_)) => LifeKind::CheckIn,
+            Self::Record(item, _) | Self::Edit(item) => item.kind,
         }
     }
 
     fn initial_name(&self) -> &str {
         match self {
             Self::Edit(item) => &item.title,
-            Self::Add | Self::Record(_) => "",
+            Self::Add(_) | Self::Record(_, _) => "",
+        }
+    }
+
+    fn initial_fields(&self, at: LifeOccurrence) -> (String, String) {
+        let (date, time) = occurrence_fields(at);
+        match self {
+            Self::Record(_, Some(day)) => (day.to_string(), time),
+            _ => (date, time),
         }
     }
 }
 
 pub(crate) struct LifeState {
     pub(crate) board: Option<LifeBoard>,
+    pub(crate) metric: CheckInMetric,
     pub(crate) load_failed: bool,
     pub(crate) editor_visible: bool,
     pub(crate) edit: Option<LifeEdit>,
@@ -68,7 +85,7 @@ impl LifeState {
             .into_iter()
             .map(|field| {
                 cx.subscribe_in(field, window, |this, _, event, window, cx| {
-                    if this.page != Page::Agenda || !this.life.editor_visible {
+                    if !this.life_editor_active() {
                         return;
                     }
                     match event {
@@ -86,6 +103,7 @@ impl LifeState {
             .collect();
         Self {
             board: None,
+            metric: CheckInMetric::default(),
             load_failed: false,
             editor_visible: false,
             edit: None,
@@ -123,17 +141,21 @@ impl LifeState {
         let Some(edit) = &self.edit else {
             return false;
         };
-        let (date, time) = occurrence_fields(self.initial_at);
+        let (date, time) = edit.initial_fields(self.initial_at);
         self.name.read(cx).value().as_ref() != edit.initial_name()
             || self.date.read(cx).value().as_ref() != date
             || self.day_only != self.initial_at.is_day()
             || self.time.read(cx).value().as_ref() != time
             || !self.minutes.read(cx).value().is_empty()
-            || (matches!(edit, LifeEdit::Add) && self.add_kind != LifeKind::default())
+            || (matches!(edit, LifeEdit::Add(None)) && self.add_kind != LifeKind::default())
     }
 }
 
 impl ForceView {
+    pub(crate) fn life_editor_active(&self) -> bool {
+        self.life.editor_visible && matches!(self.page, Page::Agenda | Page::Analysis)
+    }
+
     pub(crate) fn refresh_life(&mut self, cx: &mut Context<Self>) {
         match self.store.as_ref().map(Store::life_board) {
             Some(Ok(board)) => {
@@ -181,7 +203,7 @@ impl ForceView {
     pub(crate) fn begin_life_change(
         &mut self,
         id: i64,
-        mode: fn(LifeItem) -> LifeEdit,
+        mode: impl FnOnce(LifeItem) -> LifeEdit,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -202,17 +224,19 @@ impl ForceView {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.suspend_agenda_popup(window, cx);
+        if self.page == Page::Agenda {
+            self.suspend_agenda_popup(window, cx);
+        }
         if self.life.edit.is_some() {
             self.resume_life_editor(window, cx);
             return;
         }
         let at = match &edit {
             LifeEdit::Edit(item) => item.last_occurrence(),
-            LifeEdit::Add | LifeEdit::Record(_) => None,
+            LifeEdit::Add(_) | LifeEdit::Record(_, _) => None,
         }
         .unwrap_or_else(|| LifeOccurrence::Exact(Local::now().timestamp()));
-        let (date, time) = occurrence_fields(at);
+        let (date, time) = edit.initial_fields(at);
         self.life.name.update(cx, |input, cx| {
             input.set_value(edit.initial_name().to_owned(), window, cx)
         });
@@ -244,7 +268,7 @@ impl ForceView {
     }
 
     pub(crate) fn focus_life_editor(&self, window: &mut Window, cx: &mut Context<Self>) {
-        let input = if matches!(self.life.edit, Some(LifeEdit::Record(_))) {
+        let input = if matches!(self.life.edit, Some(LifeEdit::Record(_, _))) {
             &self.life.date
         } else {
             &self.life.name
@@ -296,11 +320,10 @@ impl ForceView {
     }
 
     pub(crate) fn save_life_item(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if self.page != Page::Agenda
+        if !self.life_editor_active()
             || self.compact
             || self.storage_failed
             || self.life.load_failed
-            || !self.life.editor_visible
         {
             return;
         }
@@ -311,22 +334,31 @@ impl ForceView {
         let date = self.life.date.read(cx).value();
         let now = Local::now();
         let check_in = edit.kind(self.life.add_kind) == LifeKind::CheckIn;
-        let recorded = matches!(edit, LifeEdit::Record(_)) && check_in;
+        let recorded = matches!(edit, LifeEdit::Record(_, _)) && check_in;
+        let check_in_day = match &edit {
+            LifeEdit::Add(day) if check_in => *day,
+            _ => None,
+        };
         let result = if check_in {
             match edit {
-                LifeEdit::Add => {
-                    self.write_life(|store| store.create_life_habit(&name).map(|_| ()), cx)
+                LifeEdit::Add(_) => {
+                    self.write_life(|store| store.create_life_habit(&name).map(Some), cx)
                 }
-                LifeEdit::Edit(item) => {
-                    self.write_life(|store| store.rename_life_habit(&item, &name), cx)
-                }
-                LifeEdit::Record(item) => {
+                LifeEdit::Edit(item) => self.write_life(
+                    |store| store.rename_life_habit(&item, &name).map(|_| None),
+                    cx,
+                ),
+                LifeEdit::Record(item, _) => {
                     let minutes = self.life.minutes.read(cx).value();
                     let today = now.date_naive();
                     crate::moment_model::parse_daily_fields(&date, &minutes, today).and_then(
                         |(day, minutes)| {
                             self.write_life(
-                                |store| store.record_life_check_in(&item, day, minutes, today),
+                                |store| {
+                                    store
+                                        .record_life_check_in(&item, day, minutes, today)
+                                        .map(|_| None)
+                                },
                                 cx,
                             )
                         },
@@ -340,24 +372,33 @@ impl ForceView {
                 .and_then(|occurred_at| {
                     self.write_life(
                         |store| match edit {
-                            LifeEdit::Add => {
-                                store.create_life_item(&name, occurred_at, now).map(|_| ())
+                            LifeEdit::Add(_) => {
+                                store.create_life_item(&name, occurred_at, now).map(Some)
                             }
-                            LifeEdit::Record(item) => {
-                                store.record_life_occurrence(&item, occurred_at, now)
-                            }
-                            LifeEdit::Edit(item) => {
-                                store.edit_life_item(&item, &name, occurred_at, now)
-                            }
+                            LifeEdit::Record(item, _) => store
+                                .record_life_occurrence(&item, occurred_at, now)
+                                .map(|_| None),
+                            LifeEdit::Edit(item) => store
+                                .edit_life_item(&item, &name, occurred_at, now)
+                                .map(|_| None),
                         },
                         cx,
                     )
                 })
         };
         match result {
-            Ok(()) => {
+            Ok(created_id) => {
                 self.cancel_life_editor(window, cx);
-                if recorded {
+                if let (Some(id), Some(day)) = (created_id, check_in_day) {
+                    self.begin_life_change(
+                        id,
+                        |item| LifeEdit::Record(item, Some(day)),
+                        window,
+                        cx,
+                    );
+                } else if let Some(id) = created_id.filter(|_| self.page == Page::Analysis) {
+                    self.select_life_chart_item(id, cx);
+                } else if recorded {
                     self.notify("已打卡。", cx);
                 }
             }
@@ -391,7 +432,7 @@ impl ForceView {
                     if this.life.generation != generation || !this.life.editor_visible {
                         return;
                     }
-                    if !this.compact && this.page == Page::Agenda {
+                    if !this.compact && this.life_editor_active() {
                         window.activate_window();
                         this.focus_life_editor(window, cx);
                     }

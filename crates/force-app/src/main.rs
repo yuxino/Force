@@ -371,7 +371,7 @@ fn main() -> anyhow::Result<()> {
                             this.save_record_editor(window, cx);
                         } else if this.agenda.editor_visible {
                             this.save_plan(window, cx);
-                        } else if this.life.editor_visible && this.page == model::Page::Agenda {
+                        } else if this.life_editor_active() {
                             this.save_life_item(window, cx);
                         } else {
                             this.save_moment(window, cx);

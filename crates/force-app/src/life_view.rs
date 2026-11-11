@@ -11,7 +11,7 @@ use gpui_component::{
 use crate::{
     editor_dialog,
     label::single_line,
-    life_model::{LifeEdit, NextField, PreviousField},
+    life_model::{CheckInMetric, LifeEdit, NextField, PreviousField},
     model::{ForceView, Page},
     view::{
         ControlState, DESTRUCTIVE, INK, LINE, MUTED, PAPER, SURFACE, button, choice_button,
@@ -20,19 +20,16 @@ use crate::{
     },
 };
 
-const DISPLAY_MODULES: [(LifeModule, &str); 2] = [
-    (LifeModule::Trend, "趋势图"),
+const DISPLAY_MODULES: [(LifeModule, &str); 3] = [
     (LifeModule::Total, "累计统计"),
+    (LifeModule::Trend, "趋势图"),
+    (LifeModule::Table, "按日明细"),
 ];
-const SUMMARY_HEADER_HEIGHT: f32 = 32.;
-const SUMMARY_ROW_HEIGHT: f32 = 40.;
-const PROGRESS_WIDTH: f32 = 220.;
-const ACTION_WIDTH: f32 = 154.;
 const PLOT_HEIGHT: f32 = 120.;
 const SPANS_SHOWN: usize = 8;
 
 impl ForceView {
-    pub(crate) fn life_add_button(&self, cx: &mut Context<Self>) -> Button {
+    fn life_add_button(&self, cx: &mut Context<Self>) -> Button {
         let unavailable = self.storage_failed || self.life.load_failed || self.life.board.is_none();
         button("life-add")
             .debug_selector(|| "life-add".into())
@@ -51,119 +48,199 @@ impl ForceView {
                 INK,
             ))
             .on_click(cx.listener(|this, _, window, cx| {
-                this.begin_life_editor(LifeEdit::Add, window, cx);
+                this.begin_life_editor(LifeEdit::Add(None), window, cx);
             }))
     }
 
-    pub(crate) fn life_summary_height(&self) -> f32 {
-        if self.life.load_failed {
-            return SUMMARY_HEADER_HEIGHT;
-        }
-        self.life
-            .board
-            .as_ref()
-            .filter(|board| !board.items.is_empty())
-            .map_or(0., |board| {
-                SUMMARY_HEADER_HEIGHT + SUMMARY_ROW_HEIGHT * board.items.len() as f32
+    pub(crate) fn life_analysis(&self, cx: &mut Context<Self>) -> Div {
+        let panel = div()
+            .debug_selector(|| "life-analysis".into())
+            .w_full()
+            .flex()
+            .flex_col()
+            .gap(px(24.))
+            .when_some(self.timer_context(cx), |panel, context| {
+                panel.child(context)
+            });
+        let Some(board) = self.life.board.as_ref().filter(|_| !self.life.load_failed) else {
+            return panel.child(self.life_load_error(cx));
+        };
+        let Some(item) = board
+            .items
+            .iter()
+            .find(|item| Some(item.id) == board.chart_item)
+            .or_else(|| {
+                board
+                    .items
+                    .iter()
+                    .find(|item| item.kind == LifeKind::CheckIn)
+            })
+            .or_else(|| board.items.first())
+        else {
+            return panel.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .justify_between()
+                    .child(control_label("还没有坚持事项。", MUTED))
+                    .child(self.life_add_button(cx)),
+            );
+        };
+        let id = item.id;
+        let check_in = item.kind == LifeKind::CheckIn;
+        let mut options = DISPLAY_MODULES
+            .map(|(module, label)| (module, label, board.shows(module)))
+            .to_vec();
+        options.retain(|(module, _, _)| check_in || *module != LifeModule::Table);
+        let any_visible = options.iter().any(|(_, _, visible)| *visible);
+        let model = cx.entity().downgrade();
+        let draft = self.life.edit.is_some();
+        panel
+            .debug_selector(move || format!("life-analysis-item-{id}"))
+            .child(
+                div()
+                    .debug_selector(|| "life-analysis-toolbar".into())
+                    .flex()
+                    .items_center()
+                    .gap(px(8.))
+                    .child(field_label("事项").flex_shrink_0())
+                    .child(life_chart_picker(board, item, cx))
+                    .child(div().flex_1())
+                    .child(
+                        button("life-display")
+                            .debug_selector(|| "life-display".into())
+                            .custom(quiet_variant(cx))
+                            .h(px(32.))
+                            .flex_shrink_0()
+                            .icon(control_icon(IconName::Settings2, MUTED))
+                            .child(control_label("显示", MUTED))
+                            .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
+                                options.iter().fold(
+                                    menu.min_w(px(144.)),
+                                    |menu, &(module, label, visible)| {
+                                        let model = model.clone();
+                                        menu.item(
+                                            PopupMenuItem::new(label).checked(visible).on_click(
+                                                move |_, _, cx| {
+                                                    let _ = model.update(cx, |this, cx| {
+                                                        this.set_life_module(module, !visible, cx)
+                                                    });
+                                                },
+                                            ),
+                                        )
+                                    },
+                                )
+                            }),
+                    )
+                    .when(!check_in, |toolbar| {
+                        toolbar.child(
+                            button("life-occurrence")
+                                .debug_selector(|| "life-occurrence".into())
+                                .custom(quiet_variant(cx))
+                                .h(px(32.))
+                                .flex_shrink_0()
+                                .unavailable(draft)
+                                .child(control_label("记录发生", INK))
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    this.begin_life_change(
+                                        id,
+                                        |item| LifeEdit::Record(item, None),
+                                        window,
+                                        cx,
+                                    );
+                                })),
+                        )
+                    })
+                    .child(
+                        button("life-edit")
+                            .debug_selector(|| "life-edit".into())
+                            .custom(quiet_variant(cx))
+                            .h(px(32.))
+                            .flex_shrink_0()
+                            .unavailable(draft)
+                            .child(control_label("编辑", MUTED))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.begin_life_change(id, LifeEdit::Edit, window, cx);
+                            })),
+                    )
+                    .child(self.life_add_button(cx).flex_shrink_0()),
+            )
+            .when(!any_visible, |panel| {
+                panel.child(control_label("在「显示」中选择要看的内容。", MUTED))
+            })
+            .when(board.shows(LifeModule::Total), |panel| {
+                panel.child(self.life_total(item, cx))
+            })
+            .when(board.shows(LifeModule::Trend), |panel| {
+                panel.child(self.life_trend(item, cx))
+            })
+            .when(check_in && board.shows(LifeModule::Table), |panel| {
+                panel.child(self.life_analysis_log(item, cx))
             })
     }
 
-    pub(crate) fn life_summary(&self, cx: &mut Context<Self>) -> Option<Div> {
-        if self.life.load_failed {
-            return Some(
-                div()
-                    .h(px(SUMMARY_HEADER_HEIGHT))
-                    .flex_shrink_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(12.))
-                    .child(control_label("无法读取坚持事项。", MUTED))
-                    .child(
-                        button("life-retry")
-                            .custom(quiet_variant(cx))
-                            .h(px(30.))
-                            .child(control_label("重试", INK))
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh_life(cx))),
-                    ),
-            );
-        }
-        let board = self
-            .life
-            .board
-            .as_ref()
-            .filter(|board| !board.items.is_empty())?;
-        let options = DISPLAY_MODULES.map(|(module, label)| (module, label, board.shows(module)));
-        let model = cx.entity().downgrade();
-        Some(
-            div()
-                .debug_selector(|| "life-table".into())
-                .w_full()
-                .flex_shrink_0()
-                .flex()
-                .flex_col()
-                .child(
-                    div()
-                        .h(px(SUMMARY_HEADER_HEIGHT))
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap(px(8.))
-                        .child(section_heading("坚持"))
-                        .child(div().flex_1())
-                        .child(self.life_add_button(cx))
-                        .child(
-                            button("life-display")
-                                .debug_selector(|| "life-display".into())
-                                .custom(quiet_variant(cx))
-                                .h(px(30.))
-                                .icon(control_icon(IconName::Settings2, MUTED))
-                                .child(control_label("显示", MUTED))
-                                .dropdown_menu_with_anchor(Corner::TopRight, move |menu, _, _| {
-                                    options.into_iter().fold(
-                                        menu.min_w(px(144.)),
-                                        |menu, (module, label, visible)| {
-                                            let model = model.clone();
-                                            menu.item(
-                                                PopupMenuItem::new(label)
-                                                    .checked(visible)
-                                                    .on_click(move |_, _, cx| {
-                                                        let _ = model.update(cx, |this, cx| {
-                                                            this.set_life_module(
-                                                                module, !visible, cx,
-                                                            )
-                                                        });
-                                                    }),
-                                            )
-                                        },
-                                    )
-                                }),
-                        ),
-                )
-                .children(board.items.iter().map(|item| self.life_row(item, cx))),
-        )
+    fn life_load_error(&self, cx: &mut Context<Self>) -> Div {
+        div()
+            .flex()
+            .items_center()
+            .gap(px(12.))
+            .child(control_label("无法读取坚持事项。", MUTED))
+            .child(
+                button("life-retry")
+                    .custom(quiet_variant(cx))
+                    .h(px(30.))
+                    .child(control_label("重试", INK))
+                    .on_click(cx.listener(|this, _, _, cx| this.refresh_life(cx))),
+            )
     }
 
-    pub(crate) fn life_statistics(&self, cx: &mut Context<Self>) -> Option<Div> {
-        let board = self
-            .life
-            .board
-            .as_ref()
-            .filter(|board| !self.life.load_failed && !board.items.is_empty())?;
-        let trend = board.shows(LifeModule::Trend);
-        let total = board.shows(LifeModule::Total);
-        (trend || total).then(|| {
-            div()
-                .w_full()
-                .flex_shrink_0()
-                .pt(px(20.))
-                .border_t_1()
-                .border_color(rgb(LINE))
-                .flex()
-                .items_start()
-                .gap(px(32.))
-                .when(trend, |row| row.child(self.life_trend(board, cx)))
-                .when(total, |row| row.child(self.life_total(board, trend, cx)))
-        })
+    pub(crate) fn life_day_picker(&self, day: NaiveDate, cx: &mut Context<Self>) -> Div {
+        let Some(board) = self.life.board.as_ref().filter(|_| !self.life.load_failed) else {
+            return self.life_load_error(cx);
+        };
+        div()
+            .debug_selector(|| "agenda-check-in-picker".into())
+            .flex()
+            .flex_col()
+            .gap(px(4.))
+            .child(section_heading("选一个事项"))
+            .children(
+                board
+                    .items
+                    .iter()
+                    .filter(|item| item.kind == LifeKind::CheckIn)
+                    .map(|item| {
+                        let id = item.id;
+                        button(("agenda-check-in-item", id as u64))
+                            .debug_selector(move || format!("agenda-check-in-item-{id}"))
+                            .custom(quiet_variant(cx))
+                            .h(px(34.))
+                            .w_full()
+                            .justify_start()
+                            .child(single_line(item.title.clone(), 14.).w(px(260.)))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.begin_life_change(
+                                    id,
+                                    |item| LifeEdit::Record(item, Some(day)),
+                                    window,
+                                    cx,
+                                );
+                            }))
+                    }),
+            )
+            .child(
+                button("agenda-check-in-add")
+                    .debug_selector(|| "agenda-check-in-add".into())
+                    .custom(quiet_variant(cx))
+                    .h(px(34.))
+                    .w_full()
+                    .justify_start()
+                    .icon(control_icon(IconName::Plus, MUTED))
+                    .child(control_label("添加打卡事项", INK))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        this.begin_life_editor(LifeEdit::Add(Some(day)), window, cx);
+                    })),
+            )
     }
 
     pub(crate) fn life_day_records(&self, day: NaiveDate, cx: &mut Context<Self>) -> Option<Div> {
@@ -210,98 +287,7 @@ impl ForceView {
         )
     }
 
-    fn life_row(&self, item: &LifeItem, cx: &mut Context<Self>) -> Div {
-        let id = item.id;
-        let check_in = item.kind == LifeKind::CheckIn;
-        let (label, detail) = if let Some(last) = item.last_occurrence() {
-            let elapsed = item.elapsed_at(self.now);
-            let label = if last.is_day() {
-                estimated_interval(last, None, self.now)
-            } else if elapsed < 86_400 {
-                "未满 1 天".to_owned()
-            } else {
-                format!("{} 天", elapsed / 86_400)
-            };
-            let detail = format!("上次发生：{}", occurrence_timestamp(last));
-            (label, detail)
-        } else {
-            let summary = item.check_in_summary(Local::now().date_naive());
-            (
-                format!(
-                    "连续 {} 天 · 打卡 {} 次",
-                    summary.streak_days, summary.count
-                ),
-                "今天还没打卡时，连续天数保留到今天结束。".to_owned(),
-            )
-        };
-        table_row()
-            .debug_selector(move || format!("life-row-{id}"))
-            .h(px(SUMMARY_ROW_HEIGHT))
-            .flex_shrink_0()
-            .child(
-                div()
-                    .flex_1()
-                    .min_w_0()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.))
-                    .child(life_name(item, "life-table-name").min_w_0())
-                    .when(!check_in, |row| {
-                        row.child(field_label("坚持不做").flex_shrink_0())
-                    }),
-            )
-            .child(
-                single_line(label, 14.)
-                    .id(("life-streak", id as u64))
-                    .w(px(PROGRESS_WIDTH))
-                    .flex_shrink_0()
-                    .font_weight(FontWeight::MEDIUM)
-                    .tooltip(move |window, cx| Tooltip::new(detail.clone()).build(window, cx)),
-            )
-            .child(
-                div()
-                    .w(px(ACTION_WIDTH))
-                    .flex_shrink_0()
-                    .flex()
-                    .justify_end()
-                    .gap(px(6.))
-                    .child(
-                        outlined_button(("life-record", id as u64))
-                            .debug_selector(move || format!("life-record-{id}"))
-                            .h(px(32.))
-                            .child(control_label(
-                                if check_in { "打卡" } else { "记录发生" },
-                                INK,
-                            ))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.begin_life_change(id, LifeEdit::Record, window, cx);
-                            })),
-                    )
-                    .child(
-                        button(("life-edit", id as u64))
-                            .debug_selector(move || format!("life-edit-{id}"))
-                            .custom(quiet_variant(cx))
-                            .h(px(32.))
-                            .child(control_label("编辑", MUTED))
-                            .on_click(cx.listener(move |this, _, window, cx| {
-                                this.begin_life_change(id, LifeEdit::Edit, window, cx);
-                            })),
-                    ),
-            )
-    }
-
-    fn life_trend(&self, board: &LifeBoard, cx: &mut Context<Self>) -> Div {
-        let item = board
-            .items
-            .iter()
-            .find(|item| Some(item.id) == board.chart_item)
-            .or_else(|| {
-                board
-                    .items
-                    .iter()
-                    .find(|item| item.kind == LifeKind::CheckIn)
-            })
-            .unwrap_or(&board.items[0]);
+    fn life_trend(&self, item: &LifeItem, cx: &mut Context<Self>) -> Div {
         let check_in = item.kind == LifeKind::CheckIn;
         let panel = div()
             .debug_selector(|| "life-trend".into())
@@ -324,10 +310,39 @@ impl ForceView {
                         })
                         .flex_shrink_0(),
                     )
-                    .child(life_chart_picker(board, item, cx)),
+                    .when(check_in, |header| {
+                        header.child(
+                            div().flex().gap(px(4.)).children(
+                                [
+                                    (CheckInMetric::Count, "次数", "life-metric-count"),
+                                    (CheckInMetric::Duration, "时长", "life-metric-duration"),
+                                ]
+                                .into_iter()
+                                .map(|(metric, label, id)| {
+                                    let selected = self.life.metric == metric;
+                                    choice_button(id, selected, SURFACE, cx)
+                                        .debug_selector(move || id.into())
+                                        .h(px(30.))
+                                        .px(px(12.))
+                                        .child(control_label(
+                                            label,
+                                            if selected { INK } else { MUTED },
+                                        ))
+                                        .on_click(cx.listener(move |this, _, _, cx| {
+                                            this.life.metric = metric;
+                                            cx.notify();
+                                        }))
+                                }),
+                            ),
+                        )
+                    }),
             );
         if check_in {
-            return panel.child(check_in_plot(item, Local::now().date_naive()));
+            return panel.child(check_in_plot(
+                item,
+                Local::now().date_naive(),
+                self.life.metric,
+            ));
         }
         let spans = item.recent_spans(self.now, SPANS_SHOWN);
         let peak = spans
@@ -403,84 +418,109 @@ impl ForceView {
         )
     }
 
-    fn life_total(&self, board: &LifeBoard, beside_trend: bool, cx: &App) -> Div {
+    fn life_total(&self, item: &LifeItem, cx: &App) -> Div {
+        let values = if let Some(last) = item.last_occurrence() {
+            let streak = if last.is_day() {
+                estimated_interval(last, None, self.now)
+            } else {
+                life_duration(item.elapsed_at(self.now), false)
+            };
+            let prefix = if item.has_date_only_entries() {
+                "至少 "
+            } else {
+                ""
+            };
+            vec![
+                ("当前坚持", streak),
+                (
+                    "累计天数",
+                    format!("{prefix}{} 天", item.cumulative_days(self.now)),
+                ),
+                ("上次发生", occurrence_timestamp(last)),
+            ]
+        } else {
+            let summary = item.check_in_summary(Local::now().date_naive());
+            vec![
+                ("连续坚持", format!("{} 天", summary.streak_days)),
+                ("累计打卡", format!("{} 次", summary.count)),
+                ("累计天数", format!("{} 天", summary.total_days)),
+                (
+                    "累计时长",
+                    summary
+                        .minutes
+                        .map(check_in_duration)
+                        .unwrap_or_else(|| "—".to_owned()),
+                ),
+            ]
+        };
         div()
             .debug_selector(|| "life-total".into())
-            .w(px(if beside_trend { 218. } else { 360. }))
-            .flex_shrink_0()
+            .flex()
+            .gap(px(16.))
+            .py(px(14.))
+            .border_t_1()
+            .border_b_1()
+            .border_color(rgb(LINE))
+            .children(values.into_iter().map(|(label, value)| {
+                div()
+                    .flex_1()
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(4.))
+                    .child(field_label(label))
+                    .child(
+                        single_line(value, 18.)
+                            .font(timer_font(cx))
+                            .font_weight(FontWeight::MEDIUM),
+                    )
+            }))
+    }
+
+    fn life_analysis_log(&self, item: &LifeItem, cx: &mut Context<Self>) -> Div {
+        let today = Local::now().date_naive();
+        let days: Vec<_> = item
+            .check_in_days()
+            .iter()
+            .rev()
+            .copied()
+            .filter(|entry| (0..7).contains(&today.signed_duration_since(entry.day).num_days()))
+            .collect();
+        div()
+            .debug_selector(|| "life-analysis-log".into())
             .flex()
             .flex_col()
-            .gap(px(12.))
-            .child(
-                div()
-                    .h(px(32.))
-                    .flex()
-                    .items_center()
-                    .gap(px(4.))
-                    .child(section_heading("累计"))
+            .gap(px(8.))
+            .child(section_heading("近 7 天明细"))
+            .when(days.is_empty(), |body| {
+                body.child(control_label("这段时间没有打卡。", MUTED))
+            })
+            .child(div().children(days.into_iter().map(|entry| {
+                let day = entry.day;
+                let duration = entry.minutes.map(check_in_duration);
+                table_row()
+                    .min_h(px(38.))
                     .child(
-                        button("life-total-help")
+                        div()
+                            .flex_1()
+                            .child(control_label(day.format("%Y/%m/%d").to_string(), INK)),
+                    )
+                    .child(control_label(format!("{} 次", entry.count), MUTED))
+                    .child(div().w(px(132.)).child(control_label(
+                        duration.unwrap_or_else(|| "—".to_owned()),
+                        MUTED,
+                    )))
+                    .child(
+                        button(SharedString::from(format!("life-log-day-{day}")))
                             .custom(quiet_variant(cx))
-                            .size(px(24.))
-                            .icon(control_icon(IconName::Info, MUTED))
-                            .tooltip("打卡天数按日期去重。戒除事项按各段能确认的满 24 小时累计。"),
-                    ),
-            )
-            .child(
-                div()
-                    .border_t_1()
-                    .border_color(rgb(LINE))
-                    .children(board.items.iter().map(|item| {
-                        let (total, duration) = if item.kind == LifeKind::CheckIn {
-                            let summary = item.check_in_summary(Local::now().date_naive());
-                            (
-                                format!("{} 天 · {} 次", summary.total_days, summary.count),
-                                summary.minutes.map(check_in_duration),
-                            )
-                        } else {
-                            let prefix = if item.has_date_only_entries() {
-                                "至少 "
-                            } else {
-                                ""
-                            };
-                            (
-                                format!("{prefix}{} 天", item.cumulative_days(self.now)),
-                                None,
-                            )
-                        };
-                        table_row()
-                            .min_h(px(52.))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .child(life_name(item, "life-total-name")),
-                            )
-                            .child(
-                                div()
-                                    .flex_shrink_0()
-                                    .flex()
-                                    .flex_col()
-                                    .items_end()
-                                    .gap(px(3.))
-                                    .child(
-                                        div()
-                                            .font(timer_font(cx))
-                                            .text_size(px(15.))
-                                            .font_weight(FontWeight::MEDIUM)
-                                            .child(total),
-                                    )
-                                    .when_some(duration, |row, duration| {
-                                        row.child(
-                                            div()
-                                                .text_size(px(13.))
-                                                .text_color(rgb(MUTED))
-                                                .child(duration),
-                                        )
-                                    }),
-                            )
-                    })),
-            )
+                            .h(px(30.))
+                            .child(control_label("查看记录", MUTED))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.select_record_date(day, cx);
+                                this.navigate(Page::Records, window, cx);
+                            })),
+                    )
+            })))
     }
 
     pub(crate) fn life_editor(
@@ -491,11 +531,11 @@ impl ForceView {
     ) -> AnyElement {
         let unavailable = self.storage_failed || self.life.load_failed;
         let check_in = edit.kind(self.life.add_kind) == LifeKind::CheckIn;
-        let recording = matches!(edit, LifeEdit::Record(_));
+        let recording = matches!(edit, LifeEdit::Record(_, _));
         let title = match edit {
-            LifeEdit::Add => "添加事项".to_owned(),
+            LifeEdit::Add(_) => "添加事项".to_owned(),
             LifeEdit::Edit(_) => "编辑事项".to_owned(),
-            LifeEdit::Record(item) => format!(
+            LifeEdit::Record(item, _) => format!(
                 "{} · {}",
                 if check_in { "打卡" } else { "记录发生" },
                 item.title
@@ -520,7 +560,7 @@ impl ForceView {
                         .child(field(&self.life.name)),
                 )
             })
-            .when(matches!(edit, LifeEdit::Add), |fields| {
+            .when(matches!(edit, LifeEdit::Add(None)), |fields| {
                 fields.child(
                     div().flex().gap(px(6.)).children(
                         [
@@ -544,7 +584,7 @@ impl ForceView {
                     ),
                 )
             })
-            .when(matches!(edit, LifeEdit::Add) && check_in, |fields| {
+            .when(matches!(edit, LifeEdit::Add(_)) && check_in, |fields| {
                 fields.child(field_label("同名的按日记录会计入这项打卡。"))
             })
             .when(!check_in, |fields| {
@@ -687,7 +727,7 @@ impl ForceView {
     }
 }
 
-fn check_in_plot(item: &LifeItem, today: NaiveDate) -> Div {
+fn check_in_plot(item: &LifeItem, today: NaiveDate, metric: CheckInMetric) -> Div {
     let days: Vec<_> = (0..7)
         .rev()
         .filter_map(|age| today.checked_sub_days(Days::new(age)))
@@ -704,9 +744,13 @@ fn check_in_plot(item: &LifeItem, today: NaiveDate) -> Div {
             )
         })
         .collect();
+    let value = |count: u64, minutes: Option<u64>| match metric {
+        CheckInMetric::Count => count,
+        CheckInMetric::Duration => minutes.unwrap_or_default(),
+    };
     let peak = days
         .iter()
-        .map(|(_, count, _)| *count)
+        .map(|(_, count, minutes)| value(*count, *minutes))
         .max()
         .unwrap_or(1)
         .max(1);
@@ -715,7 +759,7 @@ fn check_in_plot(item: &LifeItem, today: NaiveDate) -> Div {
         .gap(px(10.))
         .child(
             div()
-                .w(px(38.))
+                .w(px(84.))
                 .flex_shrink_0()
                 .h(px(PLOT_HEIGHT))
                 .flex()
@@ -724,7 +768,10 @@ fn check_in_plot(item: &LifeItem, today: NaiveDate) -> Div {
                 .text_right()
                 .text_size(px(12.))
                 .text_color(rgb(MUTED))
-                .child(format!("{peak} 次"))
+                .child(match metric {
+                    CheckInMetric::Count => format!("{peak} 次"),
+                    CheckInMetric::Duration => check_in_duration(peak),
+                })
                 .child("0"),
         )
         .child(
@@ -752,7 +799,11 @@ fn check_in_plot(item: &LifeItem, today: NaiveDate) -> Div {
                                             check_in_duration(*minutes)
                                         ));
                                     }
-                                    let height = (*count as f32 / peak as f32) * (PLOT_HEIGHT - 2.);
+                                    if *count > 0 && minutes.is_none() {
+                                        detail.push_str(" · 未记时长");
+                                    }
+                                    let height = (value(*count, *minutes) as f32 / peak as f32)
+                                        * (PLOT_HEIGHT - 2.);
                                     div()
                                         .id(("life-check-in-bar", index as u64))
                                         .flex_1()
@@ -785,7 +836,7 @@ fn check_in_plot(item: &LifeItem, today: NaiveDate) -> Div {
         )
 }
 
-fn check_in_duration(minutes: u64) -> String {
+pub(crate) fn check_in_duration(minutes: u64) -> String {
     match (minutes / 60, minutes % 60) {
         (0, minutes) => format!("{minutes} 分钟"),
         (hours, 0) => format!("{hours} 小时"),
